@@ -47,7 +47,7 @@ func RunApply(rc RunContext) error {
 
 	// 3. =========== BUILD THE PLAN ===========
 	fmt.Println("[3/6] 📝 Building execution plan...")
-	plan, commitMessage, err := buildPlan(m, rc)
+	plan, commitMessage, err := buildPlan(m, rc) // Pass rc
 	if err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func RunApply(rc RunContext) error {
 	if rc.DryRun {
 		fmt.Println("DRY RUN: No changes will be made.")
 		fmt.Println("Plan contains the following tasks:")
-		return Execute(plan, tc)
+		return Execute(plan, tc) // Execute is in its own file
 	}
 
 	// 4. =========== CREATE SAVEPOINT ===========
@@ -126,7 +126,8 @@ func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, error) {
 			return nil, "", err
 		}
 
-		langTasks, err := handler.GetTasks() // We'll refactor this next
+		// --- THIS IS THE CHANGE ---
+		langTasks, err := handler.GetTasks(rc.TargetPath)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to get tasks for lang '%s': %w", rc.LangFlag, err)
 		}
@@ -153,7 +154,8 @@ func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, error) {
 			if err != nil {
 				return nil, "", err
 			}
-			tmplTasks, err := handler.GetTasks() // We'll refactor this next
+			// --- THIS IS THE CHANGE ---
+			tmplTasks, err := handler.GetTasks(rc.TargetPath)
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to get tasks for template '%s': %w", tmplName, err)
 			}

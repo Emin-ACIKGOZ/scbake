@@ -9,11 +9,10 @@ import (
 //go:embed makefile.tpl
 var templates embed.FS
 
-// Handler implements the logic for scaffolding a Makefile.
 type Handler struct{}
 
-// GetTasks returns the list of tasks required to set up a Makefile.
-func (h *Handler) GetTasks() ([]types.Task, error) {
+// GetTasks signature updated, but logic is path-independent.
+func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
 	plan = append(plan, &tasks.CreateTemplateTask{
@@ -21,7 +20,7 @@ func (h *Handler) GetTasks() ([]types.Task, error) {
 		TemplatePath: "makefile.tpl",
 		OutputPath:   "Makefile",
 		Desc:         "Create smart Makefile",
-		TaskPrio:     400, // Synthesis tasks run late
+		TaskPrio:     400,
 	})
 
 	return plan, nil

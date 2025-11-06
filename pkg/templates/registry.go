@@ -8,16 +8,16 @@ import (
 
 // Handler is the interface all tooling template handlers must implement.
 type Handler interface {
-	GetTasks() ([]types.Task, error)
+	// GetTasks now takes a targetPath to be context-aware
+	GetTasks(targetPath string) ([]types.Task, error)
 }
 
 // GetHandler returns the correct template handler for the given string.
 func GetHandler(tmplName string) (Handler, error) {
+	// ... switch case unchanged ...
 	switch tmplName {
 	case "makefile":
 		return &makefile.Handler{}, nil
-	// case "devcontainer":
-	// 	return &devcontainer.Handler{}, nil
 	default:
 		return nil, fmt.Errorf("unknown template: %s", tmplName)
 	}
