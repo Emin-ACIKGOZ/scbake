@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"scbake/internal/core"
 	"scbake/internal/git"
 	"scbake/internal/manifest"
@@ -11,22 +12,21 @@ import (
 	"scbake/internal/types"
 	"scbake/pkg/lang"
 	"scbake/pkg/tasks"
-	"scbake/pkg/templates" // Import the new template registry
+	"scbake/pkg/templates"
 
 	"github.com/spf13/cobra"
 )
 
-// Define flags
 var (
 	langFlag string
-	withFlag []string // Slice to accept multiple --with flags
+	withFlag []string
 )
 
-// applyCmd represents the apply command
 var applyCmd = &cobra.Command{
 	Use:   "apply [--lang <lang>] [--with <template...>] [<path>]",
 	Short: "Apply a language pack or tooling template to a project",
-	Long:  `...`, // (description unchanged)
+	Long:  `...`,
+	Args:  cobra.MaximumNArgs(1), // Allow zero or one argument for the path
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := runApply(cmd, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -37,7 +37,7 @@ var applyCmd = &cobra.Command{
 }
 
 // buildPlan constructs the list of tasks based on CLI flags.
-func buildPlan(m *types.Manifest) (*types.Plan, string, error) {
+func buildPlan(m *types.Manifest, targetPath string) (*types.Plan, string, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
 	commitMessage := "scbake: Apply templates"
 	didSomething := false
@@ -62,17 +62,18 @@ func buildPlan(m *types.Manifest) (*types.Plan, string, error) {
 		}
 		plan.Tasks = append(plan.Tasks, langTasks...)
 
+		// Use the targetPath for the manifest
 		newProject := &types.Project{
-			Name:     langFlag,
-			Path:     ".", // We'll fix this in the next commit
+			Name:     filepath.Base(targetPath), // e.g., "backend"
+			Path:     targetPath,
 			Language: langFlag,
 		}
 		plan.Tasks = append(plan.Tasks, &tasks.UpdateManifestTask{
 			NewProject: newProject,
-			Desc:       "Update scbake.toml with new project",
+			Desc:       fmt.Sprintf("Update scbake.toml with new project: %s", targetPath),
 			TaskPrio:   998,
 		})
-		commitMessage = fmt.Sprintf("scbake: Apply '%s' language pack", langFlag)
+		commitMessage = fmt.Sprintf("scbake: Apply '%s' to %s", langFlag, targetPath)
 	}
 
 	// --- Tooling Templates (e.g., --with) ---
@@ -93,16 +94,14 @@ func buildPlan(m *types.Manifest) (*types.Plan, string, error) {
 			appliedTemplates = append(appliedTemplates, tmplName)
 		}
 
-		// Add a task to update the manifest with the applied templates
-		// This assumes we are applying to the root.
+		// This manifest logic is still simple, assuming root-level templates
 		plan.Tasks = append(plan.Tasks, &tasks.UpdateManifestTask{
-			NewTemplate: &types.Template{Name: "root-templates", Path: "."}, // This is a bit of a hack for now
+			NewTemplate: &types.Template{Name: "root-templates", Path: targetPath},
 			Desc:        "Update scbake.toml with new templates",
 			TaskPrio:    998,
 		})
 
-		// We'll improve this message logic later
-		commitMessage = fmt.Sprintf("scbake: Apply templates (%v)", withFlag)
+		commitMessage = fmt.Sprintf("scbake: Apply templates (%v) to %s", withFlag, targetPath)
 	}
 
 	if !didSomething {
@@ -113,10 +112,18 @@ func buildPlan(m *types.Manifest) (*types.Plan, string, error) {
 }
 
 func runApply(cmd *cobra.Command, args []string) error {
-	// (This function's content is identical to Commit 15)
+	// --- DETERMINE TARGET PATH ---
+	targetPath := "."
+	if len(args) > 0 {
+		targetPath = args[0]
+	}
+	// Clean the path (e.g., "backend/" -> "backend")
+	targetPath = filepath.Clean(targetPath)
+
 	// 1. =========== PRE-FLIGHT & SAFETY CHECKS ===========
 	if !dryRun {
 		fmt.Println("[1/6] 🔎 Running Git pre-flight checks...")
+		// (Checks are identical to Commit 15)
 		if err := git.CheckGitInstalled(); err != nil {
 			return err
 		}
@@ -137,17 +144,17 @@ func runApply(cmd *cobra.Command, args []string) error {
 
 	// 3. =========== BUILD THE PLAN ===========
 	fmt.Println("[3/6] 📝 Building execution plan...")
-	plan, commitMessage, err := buildPlan(m)
+	plan, commitMessage, err := buildPlan(m, targetPath)
 	if err != nil {
 		return err
 	}
 
-	// Build the Task Context, NOW WITH THE MANIFEST
+	// Build the Task Context, NOW WITH THE MANIFEST AND TARGET PATH
 	tc := types.TaskContext{
-		Ctx:      context.Background(),
-		DryRun:   dryRun,
-		Manifest: m, // Pass the loaded manifest
-		// TargetPath logic will be added in Commit 19
+		Ctx:        context.Background(),
+		DryRun:     dryRun,
+		Manifest:   m,
+		TargetPath: targetPath, // Pass the correct path
 	}
 
 	// If dry-run, just execute the plan (which will just print) and exit
@@ -200,6 +207,5 @@ func init() {
 	rootCmd.AddCommand(applyCmd)
 
 	applyCmd.PersistentFlags().StringVar(&langFlag, "lang", "", "Language project pack to apply (e.g., 'go')")
-	// Add the --with flag, allowing it to be used multiple times
 	applyCmd.PersistentFlags().StringSliceVar(&withFlag, "with", []string{}, "Tooling template to apply (e.g., 'makefile')")
 }
