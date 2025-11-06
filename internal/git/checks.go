@@ -16,7 +16,11 @@ func runGitCommand(args ...string) (*bytes.Buffer, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return nil, errors.New(stderr.String())
+		// Use stderr for the error message if available
+		if stderr.Len() > 0 {
+			return nil, errors.New(stderr.String())
+		}
+		return nil, err
 	}
 	return &stdout, nil
 }
@@ -49,4 +53,14 @@ func CheckIsClean() error {
 		return errors.New("uncommitted changes in Git working tree. Please commit or stash your changes before running 'scbake apply'")
 	}
 	return nil
+}
+
+// CheckHasHEAD checks if HEAD is a valid ref (i.e., if there is at least one commit).
+func CheckHasHEAD() (bool, error) {
+	_, err := runGitCommand("rev-parse", "HEAD")
+	if err != nil {
+		// "fatal: Failed to resolve 'HEAD' as a valid ref" will trigger this
+		return false, nil
+	}
+	return true, nil
 }

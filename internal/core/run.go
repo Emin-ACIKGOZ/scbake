@@ -54,8 +54,8 @@ type manifestChanges struct {
 
 // RunApply is the main logic for the 'apply' command, extracted.
 func RunApply(rc RunContext) error {
-	// We have 8 steps in the apply logic
-	logger := NewStepLogger(8, rc.DryRun)
+	// We have 9 steps in the apply logic
+	logger := NewStepLogger(9, rc.DryRun)
 
 	// 1. =========== PRE-FLIGHT & SAFETY CHECKS ===========
 	if !rc.DryRun {
@@ -80,8 +80,6 @@ func RunApply(rc RunContext) error {
 
 	// 3. =========== BUILD THE PLAN ===========
 	logger.Log("📝", "Building execution plan...")
-	// --- THIS IS THE CHANGE ---
-	// 'm' is no longer passed to buildPlan
 	plan, commitMessage, changes, err := buildPlan(rc)
 	if err != nil {
 		return err
@@ -91,7 +89,7 @@ func RunApply(rc RunContext) error {
 	tc := types.TaskContext{
 		Ctx:        context.Background(),
 		DryRun:     rc.DryRun,
-		Manifest:   m, // The manifest is still needed in the context for tasks
+		Manifest:   m, // This is still the *original* manifest
 		TargetPath: rc.TargetPath,
 		Force:      rc.Force,
 	}
@@ -103,17 +101,30 @@ func RunApply(rc RunContext) error {
 		return Execute(plan, tc)
 	}
 
-	// 4. =========== CREATE SAVEPOINT ===========
+	// 4. =========== FIX "HEAD REF" BUG ===========
+	// Check if HEAD is valid. If not, create an initial commit.
+	hasHEAD, err := git.CheckHasHEAD()
+	if err != nil {
+		return fmt.Errorf("failed to check for HEAD: %w", err)
+	}
+	if !hasHEAD {
+		logger.Log("GIT", "Creating initial commit...")
+		if err := git.InitialCommit("scbake: Initial commit"); err != nil {
+			return err
+		}
+	}
+
+	// 5. =========== CREATE SAVEPOINT ===========
 	logger.Log("🛡️", "Creating Git savepoint...")
 	savepointTag, err := git.CreateSavepoint()
 	if err != nil {
 		return fmt.Errorf("failed to create savepoint: %w", err)
 	}
 
-	// 5. =========== EXECUTE THE PLAN ===========
+	// 6. =========== EXECUTE THE PLAN ===========
 	logger.Log("🚀", "Executing plan...")
 	if err := Execute(plan, tc); err != nil {
-		// 5a. ROLLBACK ON FAILURE
+		// 6a. ROLLBACK ON FAILURE
 		fmt.Fprintf(os.Stderr, "⚠️ Task execution failed: %v\n", err)
 		fmt.Println("Rolling back changes...")
 		if rollbackErr := git.RollbackToSavepoint(savepointTag); rollbackErr != nil {
@@ -122,7 +133,7 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("operation rolled back")
 	}
 
-	// 6. =========== UPDATE & SAVE MANIFEST ===========
+	// 7. =========== UPDATE & SAVE MANIFEST ===========
 	logger.Log("✍️", "Updating manifest...")
 	// Apply changes *after* tasks succeed
 	m.Projects = append(m.Projects, changes.Projects...)
@@ -137,7 +148,7 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("manifest save failed, operation rolled back")
 	}
 
-	// 7. =========== COMMIT ON SUCCESS ===========
+	// 8. =========== COMMIT ON SUCCESS ===========
 	logger.Log("💾", "Committing changes...")
 	if err := git.CommitChanges(commitMessage); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Commit failed: %v\n", err)
@@ -148,7 +159,8 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("commit failed, operation rolled back")
 	}
 
-	// 8. =========== CLEANUP ===========
+	// 9. =========== CLEANUP ===========
+	logger.totalSteps = 9 // This is still unexported, so we're just updating it here
 	logger.Log("🧹", "Cleaning up savepoint...")
 	if err := git.DeleteSavepoint(savepointTag); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to delete savepoint tag '%s'. You may want to remove it manually.\n", savepointTag)
@@ -158,8 +170,6 @@ func RunApply(rc RunContext) error {
 }
 
 // buildPlan constructs the list of tasks based on CLI flags.
-// --- THIS IS THE CHANGE ---
-// 'm *types.Manifest' parameter removed
 func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
 	changes := &manifestChanges{}
