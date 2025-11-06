@@ -14,6 +14,25 @@ import (
 	"scbake/pkg/templates"
 )
 
+// StepLogger helps print consistent step messages
+type StepLogger struct {
+	currentStep int
+	totalSteps  int
+	DryRun      bool
+}
+
+func NewStepLogger(totalSteps int, dryRun bool) *StepLogger {
+	return &StepLogger{totalSteps: totalSteps, DryRun: dryRun}
+}
+
+func (l *StepLogger) Log(emoji, message string) {
+	l.currentStep++
+	if l.DryRun && l.currentStep > 2 { // Only log first few steps in dry run
+		return
+	}
+	fmt.Printf("[%d/%d] %s %s\n", l.currentStep, l.totalSteps, emoji, message)
+}
+
 // RunContext holds all the flags and args for a run.
 type RunContext struct {
 	LangFlag   string
@@ -24,9 +43,12 @@ type RunContext struct {
 
 // RunApply is the main logic for the 'apply' command, extracted.
 func RunApply(rc RunContext) error {
+	// We have 7 steps in the apply logic
+	logger := NewStepLogger(7, rc.DryRun)
+
 	// 1. =========== PRE-FLIGHT & SAFETY CHECKS ===========
 	if !rc.DryRun {
-		fmt.Println("[1/6] 🔎 Running Git pre-flight checks...")
+		logger.Log("🔎", "Running Git pre-flight checks...")
 		if err := git.CheckGitInstalled(); err != nil {
 			return err
 		}
@@ -39,15 +61,15 @@ func RunApply(rc RunContext) error {
 	}
 
 	// 2. =========== LOAD MANIFEST ===========
-	fmt.Println("[2/6] 📖 Loading manifest (scbake.toml)...")
+	logger.Log("📖", "Loading manifest (scbake.toml)...")
 	m, err := manifest.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load %s: %w", manifest.ManifestFileName, err)
 	}
 
 	// 3. =========== BUILD THE PLAN ===========
-	fmt.Println("[3/6] 📝 Building execution plan...")
-	plan, commitMessage, err := buildPlan(m, rc) // Pass rc
+	logger.Log("📝", "Building execution plan...")
+	plan, commitMessage, err := buildPlan(m, rc)
 	if err != nil {
 		return err
 	}
@@ -60,22 +82,22 @@ func RunApply(rc RunContext) error {
 		TargetPath: rc.TargetPath,
 	}
 
-	// If dry-run, just execute the plan (which will just print) and exit
+	// If dry-run, just execute the plan and exit
 	if rc.DryRun {
 		fmt.Println("DRY RUN: No changes will be made.")
 		fmt.Println("Plan contains the following tasks:")
-		return Execute(plan, tc) // Execute is in its own file
+		return Execute(plan, tc)
 	}
 
 	// 4. =========== CREATE SAVEPOINT ===========
-	fmt.Println("[4/6] 🛡️  Creating Git savepoint...")
+	logger.Log("🛡️", "Creating Git savepoint...")
 	savepointTag, err := git.CreateSavepoint()
 	if err != nil {
 		return fmt.Errorf("failed to create savepoint: %w", err)
 	}
 
 	// 5. =========== EXECUTE THE PLAN ===========
-	fmt.Println("[5/6] 🚀 Executing plan...")
+	logger.Log("🚀", "Executing plan...")
 	if err := Execute(plan, tc); err != nil {
 		// 5a. ROLLBACK ON FAILURE
 		fmt.Fprintf(os.Stderr, "⚠️ Task execution failed: %v\n", err)
@@ -87,7 +109,7 @@ func RunApply(rc RunContext) error {
 	}
 
 	// 6. =========== COMMIT ON SUCCESS ===========
-	fmt.Println("[6/6] 💾 Committing changes...")
+	logger.Log("💾", "Committing changes...")
 	if err := git.CommitChanges(commitMessage); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Commit failed: %v\n", err)
 		fmt.Println("Rolling back changes...")
@@ -98,7 +120,7 @@ func RunApply(rc RunContext) error {
 	}
 
 	// 7. =========== CLEANUP ===========
-	fmt.Println("[7/7] 🧹 Cleaning up savepoint...")
+	logger.Log("🧹", "Cleaning up savepoint...")
 	if err := git.DeleteSavepoint(savepointTag); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to delete savepoint tag '%s'. You may want to remove it manually.\n", savepointTag)
 	}
@@ -106,13 +128,12 @@ func RunApply(rc RunContext) error {
 	return nil
 }
 
-// buildPlan constructs the list of tasks based on CLI flags.
+// buildPlan (unchanged from previous commit)
 func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
 	commitMessage := "scbake: Apply templates"
 	didSomething := false
 
-	// --- Language Handler ---
 	if rc.LangFlag != "" {
 		didSomething = true
 		if rc.LangFlag == "go" {
@@ -120,13 +141,10 @@ func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, error) {
 				return nil, "", err
 			}
 		}
-
 		handler, err := lang.GetHandler(rc.LangFlag)
 		if err != nil {
 			return nil, "", err
 		}
-
-		// --- THIS IS THE CHANGE ---
 		langTasks, err := handler.GetTasks(rc.TargetPath)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to get tasks for lang '%s': %w", rc.LangFlag, err)
@@ -146,7 +164,6 @@ func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, error) {
 		commitMessage = fmt.Sprintf("scbake: Apply '%s' to %s", rc.LangFlag, rc.TargetPath)
 	}
 
-	// --- Tooling Templates (e.g., --with) ---
 	if len(rc.WithFlag) > 0 {
 		didSomething = true
 		for _, tmplName := range rc.WithFlag {
@@ -154,7 +171,6 @@ func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, error) {
 			if err != nil {
 				return nil, "", err
 			}
-			// --- THIS IS THE CHANGE ---
 			tmplTasks, err := handler.GetTasks(rc.TargetPath)
 			if err != nil {
 				return nil, "", fmt.Errorf("failed to get tasks for template '%s': %w", tmplName, err)
@@ -167,7 +183,6 @@ func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, error) {
 			Desc:        "Update scbake.toml with new templates",
 			TaskPrio:    998,
 		})
-
 		commitMessage = fmt.Sprintf("scbake: Apply templates (%v) to %s", rc.WithFlag, rc.TargetPath)
 	}
 
