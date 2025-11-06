@@ -10,7 +10,6 @@ import (
 	"scbake/internal/preflight"
 	"scbake/internal/types"
 	"scbake/pkg/lang"
-	"scbake/pkg/tasks"
 	"scbake/pkg/templates"
 )
 
@@ -39,7 +38,13 @@ type RunContext struct {
 	WithFlag   []string
 	TargetPath string
 	DryRun     bool
-	Force      bool // Add this field
+	Force      bool
+}
+
+// A struct to hold all proposed manifest changes
+type manifestChanges struct {
+	Projects  []types.Project
+	Templates []types.Template
 }
 
 // RunApply is the main logic for the 'apply' command, extracted.
@@ -70,7 +75,7 @@ func RunApply(rc RunContext) error {
 
 	// 3. =========== BUILD THE PLAN ===========
 	logger.Log("📝", "Building execution plan...")
-	plan, commitMessage, err := buildPlan(m, rc)
+	plan, commitMessage, changes, err := buildPlan(m, rc)
 	if err != nil {
 		return err
 	}
@@ -81,7 +86,7 @@ func RunApply(rc RunContext) error {
 		DryRun:     rc.DryRun,
 		Manifest:   m,
 		TargetPath: rc.TargetPath,
-		Force:      rc.Force, // Pass the Force flag
+		Force:      rc.Force,
 	}
 
 	// If dry-run, just execute the plan and exit
@@ -110,7 +115,22 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("operation rolled back")
 	}
 
-	// 6. =========== COMMIT ON SUCCESS ===========
+	// 6. =========== UPDATE & SAVE MANIFEST ===========
+	logger.Log("✍️", "Updating manifest...")
+	// Apply changes *after* tasks succeed
+	m.Projects = append(m.Projects, changes.Projects...)
+	m.Templates = append(m.Templates, changes.Templates...)
+
+	if err := manifest.Save(m); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Manifest save failed: %v\n", err)
+		fmt.Println("Rolling back changes...")
+		if rollbackErr := git.RollbackToSavepoint(savepointTag); rollbackErr != nil {
+			return fmt.Errorf("CRITICAL: Manifest save failed AND rollback failed: %w. Git tag '%s' must be manually removed", rollbackErr, savepointTag)
+		}
+		return fmt.Errorf("manifest save failed, operation rolled back")
+	}
+
+	// 7. =========== COMMIT ON SUCCESS ===========
 	logger.Log("💾", "Committing changes...")
 	if err := git.CommitChanges(commitMessage); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Commit failed: %v\n", err)
@@ -121,7 +141,9 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("commit failed, operation rolled back")
 	}
 
-	// 7. =========== CLEANUP ===========
+	// 8. =========== CLEANUP ===========
+	// We now have 8 steps
+	logger.totalSteps = 8
 	logger.Log("🧹", "Cleaning up savepoint...")
 	if err := git.DeleteSavepoint(savepointTag); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to delete savepoint tag '%s'. You may want to remove it manually.\n", savepointTag)
@@ -130,9 +152,10 @@ func RunApply(rc RunContext) error {
 	return nil
 }
 
-// buildPlan (unchanged from previous commit)
-func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, error) {
+// buildPlan constructs the list of tasks based on CLI flags.
+func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
+	changes := &manifestChanges{}
 	commitMessage := "scbake: Apply templates"
 	didSomething := false
 
@@ -140,28 +163,24 @@ func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, error) {
 		didSomething = true
 		if rc.LangFlag == "go" {
 			if err := preflight.CheckBinaries("go"); err != nil {
-				return nil, "", err
+				return nil, "", nil, err
 			}
 		}
 		handler, err := lang.GetHandler(rc.LangFlag)
 		if err != nil {
-			return nil, "", err
+			return nil, "", nil, err
 		}
 		langTasks, err := handler.GetTasks(rc.TargetPath)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to get tasks for lang '%s': %w", rc.LangFlag, err)
+			return nil, "", nil, fmt.Errorf("failed to get tasks for lang '%s': %w", rc.LangFlag, err)
 		}
 		plan.Tasks = append(plan.Tasks, langTasks...)
 
-		newProject := &types.Project{
+		// Add to the list of changes, don't add a task
+		changes.Projects = append(changes.Projects, types.Project{
 			Name:     filepath.Base(rc.TargetPath),
 			Path:     rc.TargetPath,
 			Language: rc.LangFlag,
-		}
-		plan.Tasks = append(plan.Tasks, &tasks.UpdateManifestTask{
-			NewProject: newProject,
-			Desc:       fmt.Sprintf("Update scbake.toml with new project: %s", rc.TargetPath),
-			TaskPrio:   998,
 		})
 		commitMessage = fmt.Sprintf("scbake: Apply '%s' to %s", rc.LangFlag, rc.TargetPath)
 	}
@@ -171,26 +190,26 @@ func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, error) {
 		for _, tmplName := range rc.WithFlag {
 			handler, err := templates.GetHandler(tmplName)
 			if err != nil {
-				return nil, "", err
+				return nil, "", nil, err
 			}
 			tmplTasks, err := handler.GetTasks(rc.TargetPath)
 			if err != nil {
-				return nil, "", fmt.Errorf("failed to get tasks for template '%s': %w", tmplName, err)
+				return nil, "", nil, fmt.Errorf("failed to get tasks for template '%s': %w", tmplName, err)
 			}
 			plan.Tasks = append(plan.Tasks, tmplTasks...)
 		}
 
-		plan.Tasks = append(plan.Tasks, &tasks.UpdateManifestTask{
-			NewTemplate: &types.Template{Name: "root-templates", Path: rc.TargetPath},
-			Desc:        "Update scbake.toml with new templates",
-			TaskPrio:    998,
+		// Add to the list of changes, don't add a task
+		changes.Templates = append(changes.Templates, types.Template{
+			Name: "root-templates", // This logic can be improved later
+			Path: rc.TargetPath,
 		})
 		commitMessage = fmt.Sprintf("scbake: Apply templates (%v) to %s", rc.WithFlag, rc.TargetPath)
 	}
 
 	if !didSomething {
-		return nil, "", fmt.Errorf("no language or templates specified. Use --lang or --with")
+		return nil, "", nil, fmt.Errorf("no language or templates specified. Use --lang or --with")
 	}
 
-	return plan, commitMessage, nil
+	return plan, commitMessage, changes, nil
 }
