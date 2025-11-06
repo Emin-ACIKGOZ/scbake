@@ -12,6 +12,8 @@ type TaskContext struct {
 	Manifest *Manifest
 	// DryRun indicates if we are in dry-run mode.
 	DryRun bool
+	// Force indicates if we should overwrite existing files.
+	Force bool
 }
 
 // Task is the interface for all atomic operations (e.g., create file, exec command).

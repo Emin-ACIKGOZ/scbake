@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"embed"
+	"errors" // Import
 	"fmt"
 	"io/fs"
 	"os"
@@ -62,16 +63,26 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	// 5. Create the output file
+	// 5. --- THIS IS THE FIX ---
+	// Check if the file exists *before* creating it.
+	if !tc.Force {
+		if _, err := os.Stat(finalPath); err == nil {
+			// File exists and Force is false.
+			return fmt.Errorf("file already exists: %s. Use --force to overwrite", finalPath)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			// Some other error occurred (e.g., permissions).
+			return err
+		}
+	}
+
+	// 6. Create the output file (now we know it's safe to do so)
 	f, err := os.Create(finalPath)
 	if err != nil {
-		// We'll add --force logic here in a later commit
-		return fmt.Errorf("file already exists: %s. Use --force to overwrite", finalPath)
+		return fmt.Errorf("failed to create file %s: %w", finalPath, err)
 	}
 	defer f.Close()
 
-	// 6. Execute the template, passing the *entire manifest* as data.
-	// This makes our templates "smart".
+	// 7. Execute the template and write to the file
 	if err := tpl.Execute(f, tc.Manifest); err != nil {
 		return fmt.Errorf("failed to render template %s: %w", t.TemplatePath, err)
 	}

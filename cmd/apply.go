@@ -31,6 +31,7 @@ This command is atomic and requires a clean Git working tree.`,
 			WithFlag:   withFlag,
 			TargetPath: filepath.Clean(targetPath),
 			DryRun:     dryRun, // dryRun is the global flag
+			Force:      force,  // force is the global flag
 		}
 
 		if err := core.RunApply(rc); err != nil {

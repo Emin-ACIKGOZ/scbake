@@ -39,6 +39,7 @@ type RunContext struct {
 	WithFlag   []string
 	TargetPath string
 	DryRun     bool
+	Force      bool // Add this field
 }
 
 // RunApply is the main logic for the 'apply' command, extracted.
@@ -80,6 +81,7 @@ func RunApply(rc RunContext) error {
 		DryRun:     rc.DryRun,
 		Manifest:   m,
 		TargetPath: rc.TargetPath,
+		Force:      rc.Force, // Pass the Force flag
 	}
 
 	// If dry-run, just execute the plan and exit

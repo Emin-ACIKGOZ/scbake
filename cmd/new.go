@@ -64,11 +64,9 @@ func runNew(projectName string) error {
 	if err := os.Chdir(projectName); err != nil {
 		return err
 	}
-	// Get the original CWD just in case os.Chdir fails in the Run func
-	// This is a safety net. The main logic is in the Run func.
+	// Get the CWD inside the new dir
 	cwd, _ := os.Getwd()
-	// Defer a function to return to the original CWD
-	// This ensures we leave this function in the same state we entered it.
+	// Defer a function to return to the original CWD (which is the parent)
 	defer os.Chdir(filepath.Dir(cwd))
 
 	// 4. Init Git
@@ -87,13 +85,14 @@ func runNew(projectName string) error {
 		WithFlag:   newWithFlag,
 		TargetPath: ".",
 		DryRun:     dryRun, // Use global flag
+		Force:      force,  // Use global flag
 	}
 
 	if err := core.RunApply(rc); err != nil {
 		return err
 	}
 
-	fmt.Println("[4/4] ✨ Finalizing project...")
+	fmt.Println("[44] ✨ Finalizing project...")
 	return nil
 }
 
