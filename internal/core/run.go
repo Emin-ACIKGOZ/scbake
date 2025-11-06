@@ -143,26 +143,21 @@ func RunApply(rc RunContext) error {
 	// 8. =========== UPDATE & SAVE MANIFEST ===========
 	logger.Log("✍️", "Updating manifest...")
 
-	// --- THIS IS THE FIX ---
-	// Create a map of existing project paths to prevent duplicates
+	// --- DUPLICATE PREVENTION FIX ---
 	existingProjects := make(map[string]bool)
 	for _, proj := range m.Projects {
 		existingProjects[proj.Path] = true
 	}
-	// Only append projects that are not already in the manifest
 	for _, newProj := range changes.Projects {
 		if !existingProjects[newProj.Path] {
 			m.Projects = append(m.Projects, newProj)
 		}
 	}
-
-	// Create a map of existing templates to prevent duplicates
 	existingTemplates := make(map[string]bool)
 	for _, tmpl := range m.Templates {
 		key := tmpl.Name + ":" + tmpl.Path
 		existingTemplates[key] = true
 	}
-	// Only append templates that are not already in the manifest
 	for _, newTmpl := range changes.Templates {
 		key := newTmpl.Name + ":" + newTmpl.Path
 		if !existingTemplates[key] {
@@ -225,9 +220,18 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 		}
 		plan.Tasks = append(plan.Tasks, langTasks...)
 
+		// --- THIS IS THE FIX ---
+		// Use the same logic as the 'go' handler to get the name
+		projectName := filepath.Base(rc.TargetPath)
+		if projectName == "." || projectName == "/" {
+			abs, _ := filepath.Abs(rc.TargetPath)
+			projectName = filepath.Base(abs)
+		}
+		// --- END FIX ---
+
 		// Add to the list of changes, don't add a task
 		changes.Projects = append(changes.Projects, types.Project{
-			Name:     filepath.Base(rc.TargetPath),
+			Name:     projectName, // Use corrected name
 			Path:     rc.TargetPath,
 			Language: rc.LangFlag,
 		})
