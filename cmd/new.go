@@ -49,13 +49,16 @@ and applies the specified language pack and templates.`,
 }
 
 func runNew(projectName string) error {
+	// Use the same logger as RunApply
+	logger := core.NewStepLogger(4, dryRun)
+
 	// 1. Check if directory exists
 	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
 		return fmt.Errorf("directory '%s' already exists", projectName)
 	}
 
 	// 2. Create directory
-	fmt.Printf("[1/4] 📁 Creating directory: %s\n", projectName)
+	logger.Log("📁", fmt.Sprintf("Creating directory: %s", projectName))
 	if err := os.Mkdir(projectName, 0755); err != nil {
 		return err
 	}
@@ -70,7 +73,7 @@ func runNew(projectName string) error {
 	defer os.Chdir(filepath.Dir(cwd))
 
 	// 4. Init Git
-	fmt.Println("[2/4] GIT Initializing Git repository...")
+	logger.Log("GIT", "Initializing Git repository...")
 	if err := git.CheckGitInstalled(); err != nil {
 		return err
 	}
@@ -79,7 +82,7 @@ func runNew(projectName string) error {
 	}
 
 	// 5. Run the 'apply' logic
-	fmt.Println("[3/4] 🚀 Applying templates...")
+	logger.Log("🚀", "Applying templates...")
 	rc := core.RunContext{
 		LangFlag:   newLangFlag,
 		WithFlag:   newWithFlag,
@@ -88,11 +91,12 @@ func runNew(projectName string) error {
 		Force:      force,  // Use global flag
 	}
 
+	// RunApply will print its own logs, which is fine.
 	if err := core.RunApply(rc); err != nil {
 		return err
 	}
 
-	fmt.Println("[44] ✨ Finalizing project...")
+	logger.Log("✨", "Finalizing project...")
 	return nil
 }
 
