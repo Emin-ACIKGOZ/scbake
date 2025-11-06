@@ -16,12 +16,12 @@ import (
 // StepLogger helps print consistent step messages
 type StepLogger struct {
 	currentStep int
-	totalSteps  int
+	totalSteps  int // Keep unexported
 	DryRun      bool
 }
 
 func NewStepLogger(totalSteps int, dryRun bool) *StepLogger {
-	return &StepLogger{totalSteps: totalSteps, DryRun: dryRun}
+	return &StepLogger{totalSteps: totalSteps, DryRun: dryRun} // Use unexported field
 }
 
 func (l *StepLogger) Log(emoji, message string) {
@@ -29,7 +29,12 @@ func (l *StepLogger) Log(emoji, message string) {
 	if l.DryRun && l.currentStep > 2 { // Only log first few steps in dry run
 		return
 	}
-	fmt.Printf("[%d/%d] %s %s\n", l.currentStep, l.totalSteps, emoji, message)
+	fmt.Printf("[%d/%d] %s %s\n", l.currentStep, l.totalSteps, emoji, message) // Use unexported field
+}
+
+// SetTotalSteps allows external callers to update the step count.
+func (l *StepLogger) SetTotalSteps(newTotal int) {
+	l.totalSteps = newTotal
 }
 
 // RunContext holds all the flags and args for a run.
@@ -49,8 +54,8 @@ type manifestChanges struct {
 
 // RunApply is the main logic for the 'apply' command, extracted.
 func RunApply(rc RunContext) error {
-	// We have 7 steps in the apply logic
-	logger := NewStepLogger(7, rc.DryRun)
+	// We have 8 steps in the apply logic
+	logger := NewStepLogger(8, rc.DryRun)
 
 	// 1. =========== PRE-FLIGHT & SAFETY CHECKS ===========
 	if !rc.DryRun {
@@ -142,8 +147,6 @@ func RunApply(rc RunContext) error {
 	}
 
 	// 8. =========== CLEANUP ===========
-	// We now have 8 steps
-	logger.totalSteps = 8
 	logger.Log("🧹", "Cleaning up savepoint...")
 	if err := git.DeleteSavepoint(savepointTag); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to delete savepoint tag '%s'. You may want to remove it manually.\n", savepointTag)
@@ -152,7 +155,7 @@ func RunApply(rc RunContext) error {
 	return nil
 }
 
-// buildPlan constructs the list of tasks based on CLI flags.
+// buildPlan (unchanged from commit 28)
 func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
 	changes := &manifestChanges{}

@@ -49,8 +49,8 @@ and applies the specified language pack and templates.`,
 }
 
 func runNew(projectName string) error {
-	// Use the same logger as RunApply
-	logger := core.NewStepLogger(4, dryRun)
+	// We now have 6 steps
+	logger := core.NewStepLogger(6, dryRun)
 
 	// 1. Check if directory exists
 	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
@@ -81,7 +81,13 @@ func runNew(projectName string) error {
 		return err
 	}
 
-	// 5. Run the 'apply' logic
+	// 5. Create initial empty commit to make HEAD valid
+	logger.Log("GIT", "Creating initial commit...")
+	if err := git.InitialCommit("scbake: Initial commit"); err != nil {
+		return err
+	}
+
+	// 6. Run the 'apply' logic
 	logger.Log("🚀", "Applying templates...")
 	rc := core.RunContext{
 		LangFlag:   newLangFlag,
@@ -96,6 +102,8 @@ func runNew(projectName string) error {
 		return err
 	}
 
+	// We update the total steps for the logger
+	logger.SetTotalSteps(6) // Use the exported method
 	logger.Log("✨", "Finalizing project...")
 	return nil
 }
