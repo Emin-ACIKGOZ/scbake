@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"scbake/internal/core"
 	"scbake/internal/git"
 
@@ -28,9 +29,17 @@ and applies the specified language pack and templates.`,
 			os.Exit(1)
 		}
 
+		// Get the original working directory *before* we do anything.
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
 		if err := runNew(projectName); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			// Attempt to clean up the failed directory
+			// Go back to the original directory *before* trying to clean up.
+			os.Chdir(cwd)
 			fmt.Fprintf(os.Stderr, "Cleaning up %s...\n", projectName)
 			os.RemoveAll(projectName)
 			os.Exit(1)
@@ -55,6 +64,12 @@ func runNew(projectName string) error {
 	if err := os.Chdir(projectName); err != nil {
 		return err
 	}
+	// Get the original CWD just in case os.Chdir fails in the Run func
+	// This is a safety net. The main logic is in the Run func.
+	cwd, _ := os.Getwd()
+	// Defer a function to return to the original CWD
+	// This ensures we leave this function in the same state we entered it.
+	defer os.Chdir(filepath.Dir(cwd))
 
 	// 4. Init Git
 	fmt.Println("[2/4] GIT Initializing Git repository...")
@@ -74,8 +89,6 @@ func runNew(projectName string) error {
 		DryRun:     dryRun, // Use global flag
 	}
 
-	// Note: We're not in an atomic transaction yet.
-	// The 'apply' logic will create its *first* commit.
 	if err := core.RunApply(rc); err != nil {
 		return err
 	}
