@@ -6,10 +6,11 @@ import (
 	"os"
 	"scbake/internal/core"
 	"scbake/internal/git"
+	"scbake/internal/manifest"
 	"scbake/internal/preflight"
 	"scbake/internal/types"
 	"scbake/pkg/lang"
-	"scbake/pkg/tasks" // We still need this for the test plan
+	"scbake/pkg/tasks"
 
 	"github.com/spf13/cobra"
 )
@@ -38,7 +39,7 @@ This command is atomic:
 }
 
 // buildPlan constructs the list of tasks based on CLI flags.
-func buildPlan() (*types.Plan, string, error) {
+func buildPlan(m *types.Manifest) (*types.Plan, string, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
 	commitMessage := "scbake: Apply templates"
 
@@ -63,6 +64,19 @@ func buildPlan() (*types.Plan, string, error) {
 			return nil, "", fmt.Errorf("failed to get tasks for lang '%s': %w", langFlag, err)
 		}
 		plan.Tasks = append(plan.Tasks, langTasks...)
+
+		// Add a task to update the manifest
+		newProject := &types.Project{
+			Name:     langFlag, // We'll use a better name later
+			Path:     ".",      // We'll use the <path> arg later
+			Language: langFlag,
+		}
+		plan.Tasks = append(plan.Tasks, &tasks.UpdateManifestTask{
+			NewProject: newProject,
+			Desc:       "Update scbake.toml with new project",
+			TaskPrio:   998, // Runs just before commit
+		})
+
 		commitMessage = fmt.Sprintf("scbake: Apply '%s' language pack", langFlag)
 
 	} else {
@@ -90,7 +104,7 @@ func buildPlan() (*types.Plan, string, error) {
 func runApply(cmd *cobra.Command, args []string) error {
 	// 1. =========== PRE-FLIGHT & SAFETY CHECKS ===========
 	if !dryRun {
-		fmt.Println("[1/5] 🔎 Running Git pre-flight checks...")
+		fmt.Println("[1/6] 🔎 Running Git pre-flight checks...")
 		if err := git.CheckGitInstalled(); err != nil {
 			return err
 		}
@@ -102,18 +116,25 @@ func runApply(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 2. =========== BUILD THE PLAN ===========
-	fmt.Println("[2/5] 📝 Building execution plan...")
-	plan, commitMessage, err := buildPlan()
+	// 2. =========== LOAD MANIFEST ===========
+	fmt.Println("[2/6] 📖 Loading manifest (scbake.toml)...")
+	m, err := manifest.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load %s: %w", manifest.ManifestFileName, err)
+	}
+
+	// 3. =========== BUILD THE PLAN ===========
+	fmt.Println("[3/6] 📝 Building execution plan...")
+	plan, commitMessage, err := buildPlan(m)
 	if err != nil {
 		return err
 	}
 
-	// Build the Task Context
+	// Build the Task Context, NOW WITH THE MANIFEST
 	tc := types.TaskContext{
 		Ctx:      context.Background(),
 		DryRun:   dryRun,
-		Manifest: &types.Manifest{}, // Empty manifest for now
+		Manifest: m, // Pass the loaded manifest
 		// TargetPath logic will be added in Commit 19
 	}
 
@@ -124,17 +145,17 @@ func runApply(cmd *cobra.Command, args []string) error {
 		return core.Execute(plan, tc)
 	}
 
-	// 3. =========== CREATE SAVEPOINT ===========
-	fmt.Println("[3/5] 🛡️  Creating Git savepoint...")
+	// 4. =========== CREATE SAVEPOINT ===========
+	fmt.Println("[4/6] 🛡️  Creating Git savepoint...")
 	savepointTag, err := git.CreateSavepoint()
 	if err != nil {
 		return fmt.Errorf("failed to create savepoint: %w", err)
 	}
 
-	// 4. =========== EXECUTE THE PLAN ===========
-	fmt.Println("[4/5] 🚀 Executing plan...")
+	// 5. =========== EXECUTE THE PLAN ===========
+	fmt.Println("[5/6] 🚀 Executing plan...")
 	if err := core.Execute(plan, tc); err != nil {
-		// 4a. ROLLBACK ON FAILURE
+		// 5a. ROLLBACK ON FAILURE
 		fmt.Fprintf(os.Stderr, "⚠️ Task execution failed: %v\n", err)
 		fmt.Println("Rolling back changes...")
 		if rollbackErr := git.RollbackToSavepoint(savepointTag); rollbackErr != nil {
@@ -143,8 +164,8 @@ func runApply(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("operation rolled back")
 	}
 
-	// 5. =========== COMMIT ON SUCCESS ===========
-	fmt.Println("[5/5] 💾 Committing changes...")
+	// 6. =========== COMMIT ON SUCCESS ===========
+	fmt.Println("[6/6] 💾 Committing changes...")
 	if err := git.CommitChanges(commitMessage); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Commit failed: %v\n", err)
 		fmt.Println("Rolling back changes...")
@@ -154,9 +175,8 @@ func runApply(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("commit failed, operation rolled back")
 	}
 
-	// 6. =========== CLEANUP ===========
-	// We now have 6 steps. Let's fix logging in a future UI commit.
-	fmt.Println("[6/6] 🧹 Cleaning up savepoint...")
+	// 7. =========== CLEANUP ===========
+	fmt.Println("[7/7] 🧹 Cleaning up savepoint...")
 	if err := git.DeleteSavepoint(savepointTag); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to delete savepoint tag '%s'. You may want to remove it manually.\n", savepointTag)
 	}
