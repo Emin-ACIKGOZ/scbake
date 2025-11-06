@@ -1,18 +1,10 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"scbake/internal/core"
-	"scbake/internal/git"
-	"scbake/internal/manifest"
-	"scbake/internal/preflight"
-	"scbake/internal/types"
-	"scbake/pkg/lang"
-	"scbake/pkg/tasks"
-	"scbake/pkg/templates"
 
 	"github.com/spf13/cobra"
 )
@@ -25,10 +17,23 @@ var (
 var applyCmd = &cobra.Command{
 	Use:   "apply [--lang <lang>] [--with <template...>] [<path>]",
 	Short: "Apply a language pack or tooling template to a project",
-	Long:  `...`,
-	Args:  cobra.MaximumNArgs(1), // Allow zero or one argument for the path
+	Long: `Applies language packs or tooling templates to a specified path.
+This command is atomic and requires a clean Git working tree.`,
+	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := runApply(cmd, args); err != nil {
+		targetPath := "."
+		if len(args) > 0 {
+			targetPath = args[0]
+		}
+
+		rc := core.RunContext{
+			LangFlag:   langFlag,
+			WithFlag:   withFlag,
+			TargetPath: filepath.Clean(targetPath),
+			DryRun:     dryRun, // dryRun is the global flag
+		}
+
+		if err := core.RunApply(rc); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -36,176 +41,8 @@ var applyCmd = &cobra.Command{
 	},
 }
 
-// buildPlan constructs the list of tasks based on CLI flags.
-func buildPlan(m *types.Manifest, targetPath string) (*types.Plan, string, error) {
-	plan := &types.Plan{Tasks: []types.Task{}}
-	commitMessage := "scbake: Apply templates"
-	didSomething := false
-
-	// --- Language Handler ---
-	if langFlag != "" {
-		didSomething = true
-		if langFlag == "go" {
-			if err := preflight.CheckBinaries("go"); err != nil {
-				return nil, "", err
-			}
-		}
-
-		handler, err := lang.GetHandler(langFlag)
-		if err != nil {
-			return nil, "", err
-		}
-
-		langTasks, err := handler.GetTasks()
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to get tasks for lang '%s': %w", langFlag, err)
-		}
-		plan.Tasks = append(plan.Tasks, langTasks...)
-
-		// Use the targetPath for the manifest
-		newProject := &types.Project{
-			Name:     filepath.Base(targetPath), // e.g., "backend"
-			Path:     targetPath,
-			Language: langFlag,
-		}
-		plan.Tasks = append(plan.Tasks, &tasks.UpdateManifestTask{
-			NewProject: newProject,
-			Desc:       fmt.Sprintf("Update scbake.toml with new project: %s", targetPath),
-			TaskPrio:   998,
-		})
-		commitMessage = fmt.Sprintf("scbake: Apply '%s' to %s", langFlag, targetPath)
-	}
-
-	// --- Tooling Templates (e.g., --with) ---
-	if len(withFlag) > 0 {
-		didSomething = true
-		var appliedTemplates []string
-
-		for _, tmplName := range withFlag {
-			handler, err := templates.GetHandler(tmplName)
-			if err != nil {
-				return nil, "", err
-			}
-			tmplTasks, err := handler.GetTasks()
-			if err != nil {
-				return nil, "", fmt.Errorf("failed to get tasks for template '%s': %w", tmplName, err)
-			}
-			plan.Tasks = append(plan.Tasks, tmplTasks...)
-			appliedTemplates = append(appliedTemplates, tmplName)
-		}
-
-		// This manifest logic is still simple, assuming root-level templates
-		plan.Tasks = append(plan.Tasks, &tasks.UpdateManifestTask{
-			NewTemplate: &types.Template{Name: "root-templates", Path: targetPath},
-			Desc:        "Update scbake.toml with new templates",
-			TaskPrio:    998,
-		})
-
-		commitMessage = fmt.Sprintf("scbake: Apply templates (%v) to %s", withFlag, targetPath)
-	}
-
-	if !didSomething {
-		return nil, "", fmt.Errorf("no language or templates specified. Use --lang or --with")
-	}
-
-	return plan, commitMessage, nil
-}
-
-func runApply(cmd *cobra.Command, args []string) error {
-	// --- DETERMINE TARGET PATH ---
-	targetPath := "."
-	if len(args) > 0 {
-		targetPath = args[0]
-	}
-	// Clean the path (e.g., "backend/" -> "backend")
-	targetPath = filepath.Clean(targetPath)
-
-	// 1. =========== PRE-FLIGHT & SAFETY CHECKS ===========
-	if !dryRun {
-		fmt.Println("[1/6] 🔎 Running Git pre-flight checks...")
-		// (Checks are identical to Commit 15)
-		if err := git.CheckGitInstalled(); err != nil {
-			return err
-		}
-		if err := git.CheckIsRepo(); err != nil {
-			return err
-		}
-		if err := git.CheckIsClean(); err != nil {
-			return err
-		}
-	}
-
-	// 2. =========== LOAD MANIFEST ===========
-	fmt.Println("[2/6] 📖 Loading manifest (scbake.toml)...")
-	m, err := manifest.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load %s: %w", manifest.ManifestFileName, err)
-	}
-
-	// 3. =========== BUILD THE PLAN ===========
-	fmt.Println("[3/6] 📝 Building execution plan...")
-	plan, commitMessage, err := buildPlan(m, targetPath)
-	if err != nil {
-		return err
-	}
-
-	// Build the Task Context, NOW WITH THE MANIFEST AND TARGET PATH
-	tc := types.TaskContext{
-		Ctx:        context.Background(),
-		DryRun:     dryRun,
-		Manifest:   m,
-		TargetPath: targetPath, // Pass the correct path
-	}
-
-	// If dry-run, just execute the plan (which will just print) and exit
-	if dryRun {
-		fmt.Println("DRY RUN: No changes will be made.")
-		fmt.Println("Plan contains the following tasks:")
-		return core.Execute(plan, tc)
-	}
-
-	// 4. =========== CREATE SAVEPOINT ===========
-	fmt.Println("[4/6] 🛡️  Creating Git savepoint...")
-	savepointTag, err := git.CreateSavepoint()
-	if err != nil {
-		return fmt.Errorf("failed to create savepoint: %w", err)
-	}
-
-	// 5. =========== EXECUTE THE PLAN ===========
-	fmt.Println("[5/6] 🚀 Executing plan...")
-	if err := core.Execute(plan, tc); err != nil {
-		// 5a. ROLLBACK ON FAILURE
-		fmt.Fprintf(os.Stderr, "⚠️ Task execution failed: %v\n", err)
-		fmt.Println("Rolling back changes...")
-		if rollbackErr := git.RollbackToSavepoint(savepointTag); rollbackErr != nil {
-			return fmt.Errorf("CRITICAL: Task failed AND rollback failed: %w. Git tag '%s' must be manually removed", rollbackErr, savepointTag)
-		}
-		return fmt.Errorf("operation rolled back")
-	}
-
-	// 6. =========== COMMIT ON SUCCESS ===========
-	fmt.Println("[6/6] 💾 Committing changes...")
-	if err := git.CommitChanges(commitMessage); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️ Commit failed: %v\n", err)
-		fmt.Println("Rolling back changes...")
-		if rollbackErr := git.RollbackToSavepoint(savepointTag); rollbackErr != nil {
-			return fmt.Errorf("CRITICAL: Commit failed AND rollback failed: %w. Git tag '%s' must be manually removed", rollbackErr, savepointTag)
-		}
-		return fmt.Errorf("commit failed, operation rolled back")
-	}
-
-	// 7. =========== CLEANUP ===========
-	fmt.Println("[7/7] 🧹 Cleaning up savepoint...")
-	if err := git.DeleteSavepoint(savepointTag); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to delete savepoint tag '%s'. You may want to remove it manually.\n", savepointTag)
-	}
-
-	return nil
-}
-
 func init() {
 	rootCmd.AddCommand(applyCmd)
-
 	applyCmd.PersistentFlags().StringVar(&langFlag, "lang", "", "Language project pack to apply (e.g., 'go')")
 	applyCmd.PersistentFlags().StringSliceVar(&withFlag, "with", []string{}, "Tooling template to apply (e.g., 'makefile')")
 }
