@@ -80,7 +80,9 @@ func RunApply(rc RunContext) error {
 
 	// 3. =========== BUILD THE PLAN ===========
 	logger.Log("📝", "Building execution plan...")
-	plan, commitMessage, changes, err := buildPlan(m, rc)
+	// --- THIS IS THE CHANGE ---
+	// 'm' is no longer passed to buildPlan
+	plan, commitMessage, changes, err := buildPlan(rc)
 	if err != nil {
 		return err
 	}
@@ -89,7 +91,7 @@ func RunApply(rc RunContext) error {
 	tc := types.TaskContext{
 		Ctx:        context.Background(),
 		DryRun:     rc.DryRun,
-		Manifest:   m,
+		Manifest:   m, // The manifest is still needed in the context for tasks
 		TargetPath: rc.TargetPath,
 		Force:      rc.Force,
 	}
@@ -155,8 +157,10 @@ func RunApply(rc RunContext) error {
 	return nil
 }
 
-// buildPlan (unchanged from commit 28)
-func buildPlan(m *types.Manifest, rc RunContext) (*types.Plan, string, *manifestChanges, error) {
+// buildPlan constructs the list of tasks based on CLI flags.
+// --- THIS IS THE CHANGE ---
+// 'm *types.Manifest' parameter removed
+func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
 	changes := &manifestChanges{}
 	commitMessage := "scbake: Apply templates"
