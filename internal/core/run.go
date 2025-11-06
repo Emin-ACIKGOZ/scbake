@@ -142,9 +142,34 @@ func RunApply(rc RunContext) error {
 
 	// 8. =========== UPDATE & SAVE MANIFEST ===========
 	logger.Log("✍️", "Updating manifest...")
-	// Apply changes to the *original* manifest struct
-	m.Projects = append(m.Projects, changes.Projects...)
-	m.Templates = append(m.Templates, changes.Templates...)
+
+	// --- THIS IS THE FIX ---
+	// Create a map of existing project paths to prevent duplicates
+	existingProjects := make(map[string]bool)
+	for _, proj := range m.Projects {
+		existingProjects[proj.Path] = true
+	}
+	// Only append projects that are not already in the manifest
+	for _, newProj := range changes.Projects {
+		if !existingProjects[newProj.Path] {
+			m.Projects = append(m.Projects, newProj)
+		}
+	}
+
+	// Create a map of existing templates to prevent duplicates
+	existingTemplates := make(map[string]bool)
+	for _, tmpl := range m.Templates {
+		key := tmpl.Name + ":" + tmpl.Path
+		existingTemplates[key] = true
+	}
+	// Only append templates that are not already in the manifest
+	for _, newTmpl := range changes.Templates {
+		key := newTmpl.Name + ":" + newTmpl.Path
+		if !existingTemplates[key] {
+			m.Templates = append(m.Templates, newTmpl)
+		}
+	}
+	// --- END FIX ---
 
 	if err := manifest.Save(m); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Manifest save failed: %v\n", err)
@@ -167,7 +192,7 @@ func RunApply(rc RunContext) error {
 	}
 
 	// 10. =========== CLEANUP ===========
-	logger.totalSteps = 10 // This is still unexported, so we're just updating it here
+	logger.SetTotalSteps(10) // Update total steps
 	logger.Log("🧹", "Cleaning up savepoint...")
 	if err := git.DeleteSavepoint(savepointTag); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to delete savepoint tag '%s'. You may want to remove it manually.\n", savepointTag)
