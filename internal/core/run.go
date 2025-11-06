@@ -4,16 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"scbake/internal/git"
 	"scbake/internal/manifest"
 	"scbake/internal/preflight"
 	"scbake/internal/types"
+	"scbake/internal/util" // Import new package
 	"scbake/pkg/lang"
 	"scbake/pkg/templates"
 )
 
-// StepLogger helps print consistent step messages
+// StepLogger (unchanged)
 type StepLogger struct {
 	currentStep int
 	totalSteps  int // Keep unexported
@@ -21,23 +21,20 @@ type StepLogger struct {
 }
 
 func NewStepLogger(totalSteps int, dryRun bool) *StepLogger {
-	return &StepLogger{totalSteps: totalSteps, DryRun: dryRun} // Use unexported field
+	return &StepLogger{totalSteps: totalSteps, DryRun: dryRun}
 }
-
 func (l *StepLogger) Log(emoji, message string) {
 	l.currentStep++
-	if l.DryRun && l.currentStep > 2 { // Only log first few steps in dry run
+	if l.DryRun && l.currentStep > 2 {
 		return
 	}
-	fmt.Printf("[%d/%d] %s %s\n", l.currentStep, l.totalSteps, emoji, message) // Use unexported field
+	fmt.Printf("[%d/%d] %s %s\n", l.currentStep, l.totalSteps, emoji, message)
 }
-
-// SetTotalSteps allows external callers to update the step count.
 func (l *StepLogger) SetTotalSteps(newTotal int) {
 	l.totalSteps = newTotal
 }
 
-// RunContext holds all the flags and args for a run.
+// RunContext (unchanged)
 type RunContext struct {
 	LangFlag   string
 	WithFlag   []string
@@ -46,18 +43,16 @@ type RunContext struct {
 	Force      bool
 }
 
-// A struct to hold all proposed manifest changes
+// manifestChanges (unchanged)
 type manifestChanges struct {
 	Projects  []types.Project
 	Templates []types.Template
 }
 
-// RunApply is the main logic for the 'apply' command, extracted.
+// RunApply (unchanged)
 func RunApply(rc RunContext) error {
-	// We have 9 steps in the apply logic
 	logger := NewStepLogger(9, rc.DryRun)
 
-	// 1. =========== PRE-FLIGHT & SAFETY CHECKS ===========
 	if !rc.DryRun {
 		logger.Log("🔎", "Running Git pre-flight checks...")
 		if err := git.CheckGitInstalled(); err != nil {
@@ -71,45 +66,36 @@ func RunApply(rc RunContext) error {
 		}
 	}
 
-	// 2. =========== LOAD MANIFEST ===========
 	logger.Log("📖", "Loading manifest (scbake.toml)...")
 	m, err := manifest.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load %s: %w", manifest.ManifestFileName, err)
 	}
 
-	// 3. =========== BUILD THE PLAN ===========
 	logger.Log("📝", "Building execution plan...")
 	plan, commitMessage, changes, err := buildPlan(rc)
 	if err != nil {
 		return err
 	}
 
-	// 4. =========== FIX "SMART TEMPLATE" BUG ===========
-	// Create a *copy* of the manifest and apply future changes
-	// This is what tasks will see.
 	futureManifest := *m
 	futureManifest.Projects = append(futureManifest.Projects, changes.Projects...)
 	futureManifest.Templates = append(futureManifest.Templates, changes.Templates...)
 
-	// Build the Task Context
 	tc := types.TaskContext{
 		Ctx:        context.Background(),
 		DryRun:     rc.DryRun,
-		Manifest:   &futureManifest, // Pass the future state
+		Manifest:   &futureManifest,
 		TargetPath: rc.TargetPath,
 		Force:      rc.Force,
 	}
 
-	// If dry-run, just execute the plan and exit
 	if rc.DryRun {
 		fmt.Println("DRY RUN: No changes will be made.")
 		fmt.Println("Plan contains the following tasks:")
 		return Execute(plan, tc)
 	}
 
-	// 5. =========== FIX "HEAD REF" BUG ===========
-	// Check if HEAD is valid. If not, create an initial commit.
 	hasHEAD, err := git.CheckHasHEAD()
 	if err != nil {
 		return fmt.Errorf("failed to check for HEAD: %w", err)
@@ -121,17 +107,14 @@ func RunApply(rc RunContext) error {
 		}
 	}
 
-	// 6. =========== CREATE SAVEPOINT ===========
 	logger.Log("🛡️", "Creating Git savepoint...")
 	savepointTag, err := git.CreateSavepoint()
 	if err != nil {
 		return fmt.Errorf("failed to create savepoint: %w", err)
 	}
 
-	// 7. =========== EXECUTE THE PLAN ===========
 	logger.Log("🚀", "Executing plan...")
 	if err := Execute(plan, tc); err != nil {
-		// 7a. ROLLBACK ON FAILURE
 		fmt.Fprintf(os.Stderr, "⚠️ Task execution failed: %v\n", err)
 		fmt.Println("Rolling back changes...")
 		if rollbackErr := git.RollbackToSavepoint(savepointTag); rollbackErr != nil {
@@ -140,10 +123,7 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("operation rolled back")
 	}
 
-	// 8. =========== UPDATE & SAVE MANIFEST ===========
 	logger.Log("✍️", "Updating manifest...")
-
-	// --- DUPLICATE PREVENTION FIX ---
 	existingProjects := make(map[string]bool)
 	for _, proj := range m.Projects {
 		existingProjects[proj.Path] = true
@@ -164,7 +144,6 @@ func RunApply(rc RunContext) error {
 			m.Templates = append(m.Templates, newTmpl)
 		}
 	}
-	// --- END FIX ---
 
 	if err := manifest.Save(m); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Manifest save failed: %v\n", err)
@@ -175,7 +154,6 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("manifest save failed, operation rolled back")
 	}
 
-	// 9. =========== COMMIT ON SUCCESS ===========
 	logger.Log("💾", "Committing changes...")
 	if err := git.CommitChanges(commitMessage); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Commit failed: %v\n", err)
@@ -186,8 +164,7 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("commit failed, operation rolled back")
 	}
 
-	// 10. =========== CLEANUP ===========
-	logger.SetTotalSteps(10) // Update total steps
+	logger.SetTotalSteps(10)
 	logger.Log("🧹", "Cleaning up savepoint...")
 	if err := git.DeleteSavepoint(savepointTag); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to delete savepoint tag '%s'. You may want to remove it manually.\n", savepointTag)
@@ -221,17 +198,15 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 		plan.Tasks = append(plan.Tasks, langTasks...)
 
 		// --- THIS IS THE FIX ---
-		// Use the same logic as the 'go' handler to get the name
-		projectName := filepath.Base(rc.TargetPath)
-		if projectName == "." || projectName == "/" {
-			abs, _ := filepath.Abs(rc.TargetPath)
-			projectName = filepath.Base(abs)
+		// Sanitize the project name for the manifest
+		projectName, err := util.SanitizeModuleName(rc.TargetPath)
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("could not determine project name: %w", err)
 		}
 		// --- END FIX ---
 
-		// Add to the list of changes, don't add a task
 		changes.Projects = append(changes.Projects, types.Project{
-			Name:     projectName, // Use corrected name
+			Name:     projectName, // Use sanitized name
 			Path:     rc.TargetPath,
 			Language: rc.LangFlag,
 		})
@@ -252,9 +227,8 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 			plan.Tasks = append(plan.Tasks, tmplTasks...)
 		}
 
-		// Add to the list of changes, don't add a task
 		changes.Templates = append(changes.Templates, types.Template{
-			Name: "root-templates", // This logic can be improved later
+			Name: "root-templates",
 			Path: rc.TargetPath,
 		})
 		commitMessage = fmt.Sprintf("scbake: Apply templates (%v) to %s", rc.WithFlag, rc.TargetPath)

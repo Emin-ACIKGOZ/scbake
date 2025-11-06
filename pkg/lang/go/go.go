@@ -3,9 +3,10 @@ package golang
 import (
 	"embed"
 	"fmt"
-	"os" // Import
+	"os"
 	"path/filepath"
 	"scbake/internal/types"
+	"scbake/internal/util" // Import new package
 	"scbake/pkg/tasks"
 )
 
@@ -14,7 +15,7 @@ var templates embed.FS
 
 type Handler struct{}
 
-// GetTasks now uses targetPath to create a dynamic module name.
+// GetTasks now uses the utility to sanitize the module name.
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
@@ -37,23 +38,23 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	})
 
 	// --- IDEMPOTENCY CHECK ---
-	// Check if go.mod already exists.
 	goModPath := filepath.Join(targetPath, "go.mod")
 	_, err := os.Stat(goModPath)
 
 	if err != nil && os.IsNotExist(err) {
 		// --- Path 1: go.mod does NOT exist ---
-		// We can safely run 'go mod init'.
-		moduleName := filepath.Base(targetPath)
-		if moduleName == "." || moduleName == "/" {
-			abs, _ := filepath.Abs(targetPath)
-			moduleName = filepath.Base(abs)
+
+		// --- THIS IS THE FIX ---
+		moduleName, err := util.SanitizeModuleName(targetPath)
+		if err != nil {
+			return nil, fmt.Errorf("could not determine module name: %w", err)
 		}
+		// --- END FIX ---
 
 		// Task 3: Run 'go mod init'
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "go",
-			Args:        []string{"mod", "init", moduleName},
+			Args:        []string{"mod", "init", moduleName}, // Use sanitized name
 			Desc:        fmt.Sprintf("Run go mod init %s", moduleName),
 			TaskPrio:    200,
 			RunInTarget: true,
@@ -70,8 +71,6 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 
 	} else if err == nil {
 		// --- Path 2: go.mod *does* exist ---
-		// This is a re-run or a --force run.
-		// We must NOT run 'go mod init'. We only run 'go mod tidy'.
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "go",
 			Args:        []string{"mod", "tidy"},
@@ -82,7 +81,6 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 
 	} else {
 		// --- Path 3: Some other error ---
-		// e.g., permissions error on os.Stat. We should fail.
 		return nil, fmt.Errorf("could not check for go.mod: %w", err)
 	}
 
