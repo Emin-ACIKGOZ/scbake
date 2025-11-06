@@ -85,11 +85,18 @@ func RunApply(rc RunContext) error {
 		return err
 	}
 
+	// 4. =========== FIX "SMART TEMPLATE" BUG ===========
+	// Create a *copy* of the manifest and apply future changes
+	// This is what tasks will see.
+	futureManifest := *m
+	futureManifest.Projects = append(futureManifest.Projects, changes.Projects...)
+	futureManifest.Templates = append(futureManifest.Templates, changes.Templates...)
+
 	// Build the Task Context
 	tc := types.TaskContext{
 		Ctx:        context.Background(),
 		DryRun:     rc.DryRun,
-		Manifest:   m, // This is still the *original* manifest
+		Manifest:   &futureManifest, // Pass the future state
 		TargetPath: rc.TargetPath,
 		Force:      rc.Force,
 	}
@@ -101,7 +108,7 @@ func RunApply(rc RunContext) error {
 		return Execute(plan, tc)
 	}
 
-	// 4. =========== FIX "HEAD REF" BUG ===========
+	// 5. =========== FIX "HEAD REF" BUG ===========
 	// Check if HEAD is valid. If not, create an initial commit.
 	hasHEAD, err := git.CheckHasHEAD()
 	if err != nil {
@@ -114,17 +121,17 @@ func RunApply(rc RunContext) error {
 		}
 	}
 
-	// 5. =========== CREATE SAVEPOINT ===========
+	// 6. =========== CREATE SAVEPOINT ===========
 	logger.Log("🛡️", "Creating Git savepoint...")
 	savepointTag, err := git.CreateSavepoint()
 	if err != nil {
 		return fmt.Errorf("failed to create savepoint: %w", err)
 	}
 
-	// 6. =========== EXECUTE THE PLAN ===========
+	// 7. =========== EXECUTE THE PLAN ===========
 	logger.Log("🚀", "Executing plan...")
 	if err := Execute(plan, tc); err != nil {
-		// 6a. ROLLBACK ON FAILURE
+		// 7a. ROLLBACK ON FAILURE
 		fmt.Fprintf(os.Stderr, "⚠️ Task execution failed: %v\n", err)
 		fmt.Println("Rolling back changes...")
 		if rollbackErr := git.RollbackToSavepoint(savepointTag); rollbackErr != nil {
@@ -133,9 +140,9 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("operation rolled back")
 	}
 
-	// 7. =========== UPDATE & SAVE MANIFEST ===========
+	// 8. =========== UPDATE & SAVE MANIFEST ===========
 	logger.Log("✍️", "Updating manifest...")
-	// Apply changes *after* tasks succeed
+	// Apply changes to the *original* manifest struct
 	m.Projects = append(m.Projects, changes.Projects...)
 	m.Templates = append(m.Templates, changes.Templates...)
 
@@ -148,7 +155,7 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("manifest save failed, operation rolled back")
 	}
 
-	// 8. =========== COMMIT ON SUCCESS ===========
+	// 9. =========== COMMIT ON SUCCESS ===========
 	logger.Log("💾", "Committing changes...")
 	if err := git.CommitChanges(commitMessage); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Commit failed: %v\n", err)
@@ -159,8 +166,8 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("commit failed, operation rolled back")
 	}
 
-	// 9. =========== CLEANUP ===========
-	logger.totalSteps = 9 // This is still unexported, so we're just updating it here
+	// 10. =========== CLEANUP ===========
+	logger.totalSteps = 10 // This is still unexported, so we're just updating it here
 	logger.Log("🧹", "Cleaning up savepoint...")
 	if err := git.DeleteSavepoint(savepointTag); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to delete savepoint tag '%s'. You may want to remove it manually.\n", savepointTag)
