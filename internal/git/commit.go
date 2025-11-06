@@ -6,12 +6,23 @@ import (
 
 // CommitChanges stages all changes and commits them with a given message.
 func CommitChanges(message string) error {
-	// Stage all changes
+	// 1. Stage all changes
 	if _, err := runGitCommand("add", "."); err != nil {
 		return fmt.Errorf("git add failed: %w", err)
 	}
 
-	// Commit
+	// 2. Check if there are any staged changes
+	// 'git diff --cached --quiet' exits 0 if no changes, 1 if changes
+	_, err := runGitCommand("diff", "--cached", "--quiet")
+	if err == nil {
+		// err is nil, which means 'git diff' exited 0: no changes.
+		// This is not an error, it just means we have nothing to commit.
+		return nil
+	}
+	// If err is not nil, 'git diff' exited 1, meaning there are
+	// staged changes, so we proceed to commit.
+
+	// 3. Commit
 	if _, err := runGitCommand("commit", "-m", message); err != nil {
 		return fmt.Errorf("git commit failed: %w", err)
 	}
