@@ -18,7 +18,9 @@ type CreateTemplateTask struct {
 	TemplatePath string
 	// OutputPath is the destination path relative to the TargetPath (e.g., "go.mod")
 	OutputPath string
-	// TemplateData is the data to pass to the template engine.
+
+	// TemplateData is DEPRECATED. We now pass the entire manifest.
+	// We leave this field here for now to avoid breaking handlers.
 	TemplateData any
 
 	Desc     string // Human-readable description
@@ -52,8 +54,6 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
 	}
 
 	// 3. Determine the final output path
-	// e.g., TargetPath = "./backend", OutputPath = "go.mod"
-	// finalPath = "backend/go.mod"
 	finalPath := filepath.Join(tc.TargetPath, t.OutputPath)
 
 	// 4. Ensure the directory exists
@@ -70,8 +70,9 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
 	}
 	defer f.Close()
 
-	// 6. Execute the template and write to the file
-	if err := tpl.Execute(f, t.TemplateData); err != nil {
+	// 6. Execute the template, passing the *entire manifest* as data.
+	// This makes our templates "smart".
+	if err := tpl.Execute(f, tc.Manifest); err != nil {
 		return fmt.Errorf("failed to render template %s: %w", t.TemplatePath, err)
 	}
 
