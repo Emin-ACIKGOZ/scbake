@@ -6,11 +6,16 @@ import (
 	"os"
 	"scbake/internal/core"
 	"scbake/internal/git"
+	"scbake/internal/preflight"
 	"scbake/internal/types"
-	"scbake/pkg/tasks"
+	"scbake/pkg/lang"
+	"scbake/pkg/tasks" // We still need this for the test plan
 
 	"github.com/spf13/cobra"
 )
+
+// Define flags
+var langFlag string
 
 // applyCmd represents the apply command
 var applyCmd = &cobra.Command{
@@ -24,7 +29,6 @@ This command is atomic:
 3. Executes the plan.
 4. Commits on success or rolls back on failure.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// This is the main application logic
 		if err := runApply(cmd, args); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -33,9 +37,58 @@ This command is atomic:
 	},
 }
 
+// buildPlan constructs the list of tasks based on CLI flags.
+func buildPlan() (*types.Plan, string, error) {
+	plan := &types.Plan{Tasks: []types.Task{}}
+	commitMessage := "scbake: Apply templates"
+
+	// --- Language Handler ---
+	if langFlag != "" {
+		// Run pre-flight check for the language
+		if langFlag == "go" {
+			if err := preflight.CheckBinaries("go"); err != nil {
+				return nil, "", err
+			}
+		}
+
+		// Get the handler
+		handler, err := lang.GetHandler(langFlag)
+		if err != nil {
+			return nil, "", err
+		}
+
+		// Get tasks from the handler
+		langTasks, err := handler.GetTasks()
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get tasks for lang '%s': %w", langFlag, err)
+		}
+		plan.Tasks = append(plan.Tasks, langTasks...)
+		commitMessage = fmt.Sprintf("scbake: Apply '%s' language pack", langFlag)
+
+	} else {
+		// This is the default test plan if no flags are given
+		// We'll remove this once the --with flag is implemented
+		plan.Tasks = append(plan.Tasks, &tasks.ExecCommandTask{
+			Cmd:      "echo",
+			Args:     []string{"'Hello from scbake test plan'"},
+			Desc:     "Run test echo command",
+			TaskPrio: 100,
+		})
+		commitMessage = "scbake: Apply test plan"
+	}
+
+	// --- Tooling Templates (e.g., --with) ---
+	// We will add this logic in a future commit.
+
+	if len(plan.Tasks) == 0 {
+		return nil, "", fmt.Errorf("no language or templates specified. Use --lang or --with")
+	}
+
+	return plan, commitMessage, nil
+}
+
 func runApply(cmd *cobra.Command, args []string) error {
 	// 1. =========== PRE-FLIGHT & SAFETY CHECKS ===========
-	// In dry-run, we skip safety checks to allow inspection
 	if !dryRun {
 		fmt.Println("[1/5] 🔎 Running Git pre-flight checks...")
 		if err := git.CheckGitInstalled(); err != nil {
@@ -50,19 +103,11 @@ func runApply(cmd *cobra.Command, args []string) error {
 	}
 
 	// 2. =========== BUILD THE PLAN ===========
-	// This is a temporary test plan.
-	// We'll replace this in future commits when we have handlers.
-	testPlan := &types.Plan{
-		Tasks: []types.Task{
-			&tasks.ExecCommandTask{
-				Cmd:      "echo",
-				Args:     []string{"'Hello from scbake test plan'"},
-				Desc:     "Run test echo command",
-				TaskPrio: 100,
-			},
-		},
+	fmt.Println("[2/5] 📝 Building execution plan...")
+	plan, commitMessage, err := buildPlan()
+	if err != nil {
+		return err
 	}
-	commitMessage := "scbake: Apply test plan"
 
 	// Build the Task Context
 	tc := types.TaskContext{
@@ -76,19 +121,19 @@ func runApply(cmd *cobra.Command, args []string) error {
 	if dryRun {
 		fmt.Println("DRY RUN: No changes will be made.")
 		fmt.Println("Plan contains the following tasks:")
-		return core.Execute(testPlan, tc)
+		return core.Execute(plan, tc)
 	}
 
 	// 3. =========== CREATE SAVEPOINT ===========
-	fmt.Println("[2/5] 🛡️  Creating Git savepoint...")
+	fmt.Println("[3/5] 🛡️  Creating Git savepoint...")
 	savepointTag, err := git.CreateSavepoint()
 	if err != nil {
 		return fmt.Errorf("failed to create savepoint: %w", err)
 	}
 
 	// 4. =========== EXECUTE THE PLAN ===========
-	fmt.Println("[3/5] 🚀 Executing plan...")
-	if err := core.Execute(testPlan, tc); err != nil {
+	fmt.Println("[4/5] 🚀 Executing plan...")
+	if err := core.Execute(plan, tc); err != nil {
 		// 4a. ROLLBACK ON FAILURE
 		fmt.Fprintf(os.Stderr, "⚠️ Task execution failed: %v\n", err)
 		fmt.Println("Rolling back changes...")
@@ -99,10 +144,8 @@ func runApply(cmd *cobra.Command, args []string) error {
 	}
 
 	// 5. =========== COMMIT ON SUCCESS ===========
-	fmt.Println("[4/5] 💾 Committing changes...")
+	fmt.Println("[5/5] 💾 Committing changes...")
 	if err := git.CommitChanges(commitMessage); err != nil {
-		// This is a tricky state. The plan worked, but commit failed.
-		// We should still roll back to maintain atomicity.
 		fmt.Fprintf(os.Stderr, "⚠️ Commit failed: %v\n", err)
 		fmt.Println("Rolling back changes...")
 		if rollbackErr := git.RollbackToSavepoint(savepointTag); rollbackErr != nil {
@@ -112,9 +155,9 @@ func runApply(cmd *cobra.Command, args []string) error {
 	}
 
 	// 6. =========== CLEANUP ===========
-	fmt.Println("[5/5] 🧹 Cleaning up savepoint...")
+	// We now have 6 steps. Let's fix logging in a future UI commit.
+	fmt.Println("[6/6] 🧹 Cleaning up savepoint...")
 	if err := git.DeleteSavepoint(savepointTag); err != nil {
-		// This is not a fatal error, just an annoyance.
 		fmt.Fprintf(os.Stderr, "Warning: Failed to delete savepoint tag '%s'. You may want to remove it manually.\n", savepointTag)
 	}
 
@@ -122,5 +165,10 @@ func runApply(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
-	// We'll add our flags like --lang and --with here later.
+	// This line was already present in the old `init()`
+	rootCmd.AddCommand(applyCmd)
+
+	// Add our new persistent flags
+	applyCmd.PersistentFlags().StringVar(&langFlag, "lang", "", "Language project pack to apply (e.g., 'go')")
+	// We'll add --with here later
 }
