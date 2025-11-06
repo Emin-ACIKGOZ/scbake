@@ -1,30 +1,35 @@
-/*
-Copyright © 2025 NAME HERE <EMAIL ADDRESS>
-
-*/
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 )
 
+// We'll set this with a linker flag during the build process later.
+var version = "v0.0.1-dev"
 
+var (
+	dryRun bool
+	force  bool
+)
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "scbake",
-	Short: "A brief description of your application",
-	Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+	Short: "A manifest-driven project scaffolder",
+	Long: `scbake is a single-binary CLI for scaffolding new projects
+and applying layered infrastructure templates.`,
+	// If the user just types 'scbake', show the version
+	Run: func(cmd *cobra.Command, args []string) {
+		v, _ := cmd.Flags().GetBool("version")
+		if v {
+			fmt.Println(version)
+			os.Exit(0)
+		}
+		cmd.Help()
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -37,15 +42,15 @@ func Execute() {
 }
 
 func init() {
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
+	// Add persistent flags, available to all subcommands
+	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Show what changes would be made without executing them")
+	rootCmd.PersistentFlags().BoolVar(&force, "force", false, "Override safety checks for file overwrites")
 
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.scbake.yaml)")
+	// Add a local version flag to the root command
+	rootCmd.Flags().BoolP("version", "v", false, "Show the scbake version")
 
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	// Add subcommands
+	rootCmd.AddCommand(newCmd)
+	rootCmd.AddCommand(applyCmd)
+	rootCmd.AddCommand(listCmd)
 }
-
-
