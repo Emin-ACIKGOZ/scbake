@@ -7,7 +7,7 @@ func Init() error {
 	if _, err := runGitCommand("init"); err != nil {
 		return fmt.Errorf("git init failed: %w", err)
 	}
-	// We can also set the default branch here if we want
+	// The default branch can be set here, if desired.
 	if _, err := runGitCommand("branch", "-M", "main"); err != nil {
 		return fmt.Errorf("failed to set default branch to 'main': %w", err)
 	}

@@ -8,15 +8,14 @@ import (
 	"scbake/internal/manifest"
 	"scbake/internal/preflight"
 	"scbake/internal/types"
-	"scbake/internal/util" // Import new package
+	"scbake/internal/util"
 	"scbake/pkg/lang"
 	"scbake/pkg/templates"
 )
 
-// StepLogger (unchanged)
 type StepLogger struct {
 	currentStep int
-	totalSteps  int // Keep unexported
+	totalSteps  int
 	DryRun      bool
 }
 
@@ -34,7 +33,6 @@ func (l *StepLogger) SetTotalSteps(newTotal int) {
 	l.totalSteps = newTotal
 }
 
-// RunContext (unchanged)
 type RunContext struct {
 	LangFlag   string
 	WithFlag   []string
@@ -43,36 +41,40 @@ type RunContext struct {
 	Force      bool
 }
 
-// manifestChanges (unchanged)
 type manifestChanges struct {
 	Projects  []types.Project
 	Templates []types.Template
 }
 
-// RunApply (unchanged)
 func RunApply(rc RunContext) error {
 	logger := NewStepLogger(9, rc.DryRun)
 
 	if !rc.DryRun {
 		logger.Log("🔎", "Running Git pre-flight checks...")
+
 		if err := git.CheckGitInstalled(); err != nil {
 			return err
 		}
+
 		if err := git.CheckIsRepo(); err != nil {
 			return err
 		}
+
 		if err := git.CheckIsClean(); err != nil {
 			return err
 		}
 	}
 
 	logger.Log("📖", "Loading manifest (scbake.toml)...")
+
 	m, err := manifest.Load()
+
 	if err != nil {
 		return fmt.Errorf("failed to load %s: %w", manifest.ManifestFileName, err)
 	}
 
 	logger.Log("📝", "Building execution plan...")
+
 	plan, commitMessage, changes, err := buildPlan(rc)
 	if err != nil {
 		return err
@@ -100,14 +102,17 @@ func RunApply(rc RunContext) error {
 	if err != nil {
 		return fmt.Errorf("failed to check for HEAD: %w", err)
 	}
+
 	if !hasHEAD {
 		logger.Log("GIT", "Creating initial commit...")
+
 		if err := git.InitialCommit("scbake: Initial commit"); err != nil {
 			return err
 		}
 	}
 
 	logger.Log("🛡️", "Creating Git savepoint...")
+
 	savepointTag, err := git.CreateSavepoint()
 	if err != nil {
 		return fmt.Errorf("failed to create savepoint: %w", err)
@@ -182,48 +187,54 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 
 	if rc.LangFlag != "" {
 		didSomething = true
+
 		if rc.LangFlag == "go" {
 			if err := preflight.CheckBinaries("go"); err != nil {
 				return nil, "", nil, err
 			}
 		}
+
 		handler, err := lang.GetHandler(rc.LangFlag)
 		if err != nil {
 			return nil, "", nil, err
 		}
+
 		langTasks, err := handler.GetTasks(rc.TargetPath)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("failed to get tasks for lang '%s': %w", rc.LangFlag, err)
 		}
+
 		plan.Tasks = append(plan.Tasks, langTasks...)
 
-		// --- THIS IS THE FIX ---
 		// Sanitize the project name for the manifest
 		projectName, err := util.SanitizeModuleName(rc.TargetPath)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("could not determine project name: %w", err)
 		}
-		// --- END FIX ---
 
 		changes.Projects = append(changes.Projects, types.Project{
 			Name:     projectName, // Use sanitized name
 			Path:     rc.TargetPath,
 			Language: rc.LangFlag,
 		})
+
 		commitMessage = fmt.Sprintf("scbake: Apply '%s' to %s", rc.LangFlag, rc.TargetPath)
 	}
 
 	if len(rc.WithFlag) > 0 {
 		didSomething = true
+
 		for _, tmplName := range rc.WithFlag {
 			handler, err := templates.GetHandler(tmplName)
 			if err != nil {
 				return nil, "", nil, err
 			}
+
 			tmplTasks, err := handler.GetTasks(rc.TargetPath)
 			if err != nil {
 				return nil, "", nil, fmt.Errorf("failed to get tasks for template '%s': %w", tmplName, err)
 			}
+
 			plan.Tasks = append(plan.Tasks, tmplTasks...)
 		}
 
@@ -231,6 +242,7 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 			Name: "root-templates",
 			Path: rc.TargetPath,
 		})
+
 		commitMessage = fmt.Sprintf("scbake: Apply templates (%v) to %s", rc.WithFlag, rc.TargetPath)
 	}
 

@@ -2,7 +2,7 @@ package tasks
 
 import (
 	"embed"
-	"errors" // Import
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -15,17 +15,18 @@ import (
 type CreateTemplateTask struct {
 	// TemplateFS is the embedded filesystem (e.g., lang.GoTemplates)
 	TemplateFS embed.FS
+
 	// TemplatePath is the path *within* the embed.FS (e.g., "go.mod.tpl")
 	TemplatePath string
+
 	// OutputPath is the destination path relative to the TargetPath (e.g., "go.mod")
 	OutputPath string
 
-	// TemplateData is DEPRECATED. We now pass the entire manifest.
-	// We leave this field here for now to avoid breaking handlers.
-	TemplateData any
+	// Human-readable description
+	Desc string
 
-	Desc     string // Human-readable description
-	TaskPrio int    // Execution priority
+	// Execution priority
+	TaskPrio int
 }
 
 func (t *CreateTemplateTask) Description() string {
@@ -63,8 +64,7 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	// 5. --- THIS IS THE FIX ---
-	// Check if the file exists *before* creating it.
+	// 5. Check if the file exists *before* creating it.
 	if !tc.Force {
 		if _, err := os.Stat(finalPath); err == nil {
 			// File exists and Force is false.
@@ -75,7 +75,7 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
 		}
 	}
 
-	// 6. Create the output file (now we know it's safe to do so)
+	// 6. Create the output file
 	f, err := os.Create(finalPath)
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", finalPath, err)

@@ -49,7 +49,6 @@ and applies the specified language pack and templates.`,
 }
 
 func runNew(projectName string) error {
-	// We now have 6 steps
 	logger := core.NewStepLogger(6, dryRun)
 
 	// 1. Check if directory exists
@@ -67,16 +66,20 @@ func runNew(projectName string) error {
 	if err := os.Chdir(projectName); err != nil {
 		return err
 	}
+
 	// Get the CWD inside the new dir
 	cwd, _ := os.Getwd()
+
 	// Defer a function to return to the original CWD (which is the parent)
 	defer os.Chdir(filepath.Dir(cwd))
 
 	// 4. Init Git
 	logger.Log("GIT", "Initializing Git repository...")
+
 	if err := git.CheckGitInstalled(); err != nil {
 		return err
 	}
+
 	if err := git.Init(); err != nil {
 		return err
 	}
@@ -97,13 +100,13 @@ func runNew(projectName string) error {
 		Force:      force,  // Use global flag
 	}
 
-	// RunApply will print its own logs, which is fine.
+	// RunApply prints its own logs.
 	if err := core.RunApply(rc); err != nil {
 		return err
 	}
 
-	// We update the total steps for the logger
-	logger.SetTotalSteps(6) // Use the exported method
+	// Update the total steps for the logger, using the exported method.
+	logger.SetTotalSteps(6)
 	logger.Log("✨", "Finalizing project...")
 	return nil
 }

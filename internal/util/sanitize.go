@@ -21,7 +21,7 @@ func SanitizeModuleName(path string) (string, error) {
 	// Sanitize the name
 	name = strings.ToLower(name)
 	name = strings.ReplaceAll(name, " ", "-")
-	// We could add more sanitization here (e.g., removing special chars)
+	// More sanitization can be added here (e.g., removing special chars)
 
 	return name, nil
 }

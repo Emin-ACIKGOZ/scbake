@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"scbake/internal/types"
-	"scbake/internal/util" // Import new package
+	"scbake/internal/util"
 	"scbake/pkg/tasks"
 )
 
@@ -15,7 +15,7 @@ var templates embed.FS
 
 type Handler struct{}
 
-// GetTasks now uses the utility to sanitize the module name.
+// GetTasks uses the sanitize utility to sanitize the module name.
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
@@ -37,19 +37,16 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		TaskPrio:     100,
 	})
 
-	// --- IDEMPOTENCY CHECK ---
+	// Idempotency Check
 	goModPath := filepath.Join(targetPath, "go.mod")
 	_, err := os.Stat(goModPath)
 
 	if err != nil && os.IsNotExist(err) {
 		// --- Path 1: go.mod does NOT exist ---
-
-		// --- THIS IS THE FIX ---
 		moduleName, err := util.SanitizeModuleName(targetPath)
 		if err != nil {
 			return nil, fmt.Errorf("could not determine module name: %w", err)
 		}
-		// --- END FIX ---
 
 		// Task 3: Run 'go mod init'
 		plan = append(plan, &tasks.ExecCommandTask{

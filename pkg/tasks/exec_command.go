@@ -9,11 +9,20 @@ import (
 
 // ExecCommandTask runs an external shell command.
 type ExecCommandTask struct {
-	Cmd         string   // The command to run (e.g., "go")
-	Args        []string // The arguments (e.g., "mod", "tidy")
-	Desc        string   // The human-readable description
-	TaskPrio    int      // The execution priority
-	RunInTarget bool     // If true, run in TaskContext.TargetPath, else run in "."
+	// The command to run (e.g., "go")
+	Cmd string
+
+	// The arguments (e.g., "mod", "tidy")
+	Args []string
+
+	// The human-readable description
+	Desc string
+
+	// The execution priority
+	TaskPrio int
+
+	// If true, run in TaskContext.TargetPath, else run in "."
+	RunInTarget bool
 }
 
 func (t *ExecCommandTask) Description() string {

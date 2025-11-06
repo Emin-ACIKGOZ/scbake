@@ -24,10 +24,12 @@ func RollbackToSavepoint(tagName string) error {
 	if _, err := runGitCommand("reset", "--hard", "HEAD"); err != nil {
 		return fmt.Errorf("git reset failed: %w", err)
 	}
+
 	// 2. Remove all untracked files and directories
 	if _, err := runGitCommand("clean", "-fd"); err != nil {
 		return fmt.Errorf("git clean failed: %w", err)
 	}
+
 	// 3. Delete the savepoint tag
 	if err := DeleteSavepoint(tagName); err != nil {
 		return fmt.Errorf("failed to delete savepoint tag during rollback: %w", err)

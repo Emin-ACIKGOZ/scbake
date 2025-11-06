@@ -16,9 +16,10 @@ func CommitChanges(message string) error {
 	_, err := runGitCommand("diff", "--cached", "--quiet")
 	if err == nil {
 		// err is nil, which means 'git diff' exited 0: no changes.
-		// This is not an error, it just means we have nothing to commit.
+		// This is not an error, it just means that there is nothing to commit.
 		return nil
 	}
+
 	// If err is not nil, 'git diff' exited 1, meaning there are
 	// staged changes, so we proceed to commit.
 

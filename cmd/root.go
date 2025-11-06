@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// We'll set this with a linker flag during the build process later.
+// Set this with a linker flag during the build process in the future.
 var version = "v0.0.1-dev"
 
 var (
@@ -17,10 +17,13 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "scbake",
+	Use: "scbake",
+
 	Short: "A manifest-driven project scaffolder",
+
 	Long: `scbake is a single-binary CLI for scaffolding new projects
 and applying layered infrastructure templates.`,
+
 	// If the user just types 'scbake', show the version
 	Run: func(cmd *cobra.Command, args []string) {
 		v, _ := cmd.Flags().GetBool("version")

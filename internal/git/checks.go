@@ -59,7 +59,7 @@ func CheckIsClean() error {
 func CheckHasHEAD() (bool, error) {
 	_, err := runGitCommand("rev-parse", "HEAD")
 	if err != nil {
-		// "fatal: Failed to resolve 'HEAD' as a valid ref" will trigger this
+		// "FATAL: Failed to resolve 'HEAD' as a valid ref" will trigger this
 		return false, nil
 	}
 	return true, nil

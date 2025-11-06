@@ -50,6 +50,4 @@ or the projects currently managed in this repository's scbake.toml.`,
 }
 
 func init() {
-	// This was already done in commit 1
-	// rootCmd.AddCommand(listCmd)
 }

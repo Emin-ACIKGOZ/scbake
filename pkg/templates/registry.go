@@ -14,7 +14,6 @@ type Handler interface {
 
 // GetHandler returns the correct template handler for the given string.
 func GetHandler(tmplName string) (Handler, error) {
-	// ... switch case unchanged ...
 	switch tmplName {
 	case "makefile":
 		return &makefile.Handler{}, nil
