@@ -1,40 +1,55 @@
-/*
-Copyright © 2025 NAME HERE <EMAIL ADDRESS>
-
-*/
 package cmd
 
 import (
 	"fmt"
+	"os"
+	"scbake/internal/manifest"
 
 	"github.com/spf13/cobra"
 )
 
-// listCmd represents the list command
 var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+	Use:   "list [langs|templates|projects]",
+	Short: "List available resources or projects",
+	Long: `Lists available language packs, tooling templates,
+or the projects currently managed in this repository's scbake.toml.`,
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("list called")
+		switch args[0] {
+		case "langs":
+			fmt.Println("Available Language Packs:")
+			fmt.Println("  go")
+			// Add more as they are implemented
+
+		case "templates":
+			fmt.Println("Available Tooling Templates:")
+			fmt.Println("  makefile")
+			// Add more as they are implemented
+
+		case "projects":
+			fmt.Println("Managed Projects (from scbake.toml):")
+			m, err := manifest.Load()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error loading scbake.toml: %v\n", err)
+				os.Exit(1)
+			}
+			if len(m.Projects) == 0 {
+				fmt.Println("  No projects found.")
+				return
+			}
+			for _, p := range m.Projects {
+				fmt.Printf("  - %s (lang: %s, path: %s)\n", p.Name, p.Language, p.Path)
+			}
+
+		default:
+			fmt.Fprintf(os.Stderr, "Error: Unknown resource type '%s'.\n", args[0])
+			fmt.Println("Must be one of: langs, templates, projects")
+			os.Exit(1)
+		}
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(listCmd)
-
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// listCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// listCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	// This was already done in commit 1
+	// rootCmd.AddCommand(listCmd)
 }
