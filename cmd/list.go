@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"scbake/internal/manifest"
+	"scbake/pkg/lang"
+	"scbake/pkg/templates"
 
 	"github.com/spf13/cobra"
 )
@@ -18,13 +20,15 @@ or the projects currently managed in this repository's scbake.toml.`,
 		switch args[0] {
 		case "langs":
 			fmt.Println("Available Language Packs:")
-			fmt.Println("  go")
-			// Add more as they are implemented
+			for _, l := range lang.ListLangs() {
+				fmt.Printf("  %s\n", l)
+			}
 
 		case "templates":
 			fmt.Println("Available Tooling Templates:")
-			fmt.Println("  makefile")
-			// Add more as they are implemented
+			for _, t := range templates.ListTemplates() {
+				fmt.Printf("  %s\n", t)
+			}
 
 		case "projects":
 			fmt.Println("Managed Projects (from scbake.toml):")

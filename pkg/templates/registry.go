@@ -12,12 +12,25 @@ type Handler interface {
 	GetTasks(targetPath string) ([]types.Task, error)
 }
 
+// Map of all available template handlers.
+var handlers = map[string]Handler{
+	"makefile": &makefile.Handler{},
+}
+
 // GetHandler returns the correct template handler for the given string.
 func GetHandler(tmplName string) (Handler, error) {
-	switch tmplName {
-	case "makefile":
-		return &makefile.Handler{}, nil
-	default:
+	handler, ok := handlers[tmplName]
+	if !ok {
 		return nil, fmt.Errorf("unknown template: %s", tmplName)
 	}
+	return handler, nil
+}
+
+// ListTemplates returns the names of all supported templates.
+func ListTemplates() []string {
+	keys := make([]string, 0, len(handlers))
+	for k := range handlers {
+		keys = append(keys, k)
+	}
+	return keys
 }

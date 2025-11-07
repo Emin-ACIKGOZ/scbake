@@ -14,16 +14,27 @@ type Handler interface {
 	GetTasks(targetPath string) ([]types.Task, error)
 }
 
+// Map of all available language handlers.
+var handlers = map[string]Handler{
+	"go":     &golang.Handler{},
+	"svelte": &svelte.Handler{},
+	"spring": &spring.Handler{},
+}
+
 // GetHandler returns the correct language handler for the given string.
 func GetHandler(lang string) (Handler, error) {
-	switch lang {
-	case "go":
-		return &golang.Handler{}, nil
-	case "svelte":
-		return &svelte.Handler{}, nil
-	case "spring":
-		return &spring.Handler{}, nil
-	default:
+	handler, ok := handlers[lang]
+	if !ok {
 		return nil, fmt.Errorf("unknown language: %s", lang)
 	}
+	return handler, nil
+}
+
+// ListLangs returns the names of all supported languages.
+func ListLangs() []string {
+	keys := make([]string, 0, len(handlers))
+	for k := range handlers {
+		keys = append(keys, k)
+	}
+	return keys
 }
