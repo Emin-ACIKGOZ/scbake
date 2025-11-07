@@ -5,6 +5,7 @@ import (
 	"scbake/internal/types"
 	cighub "scbake/pkg/templates/ci_github"
 	"scbake/pkg/templates/editorconfig"
+	golinter "scbake/pkg/templates/go_linter"
 	"scbake/pkg/templates/makefile"
 )
 
@@ -19,6 +20,7 @@ var handlers = map[string]Handler{
 	"makefile":     &makefile.Handler{},
 	"ci_github":    &cighub.Handler{},
 	"editorconfig": &editorconfig.Handler{},
+	"go_linter":    &golinter.Handler{},
 }
 
 // GetHandler returns the correct template handler for the given string.
