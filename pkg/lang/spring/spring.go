@@ -17,6 +17,7 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Determine project name from target path
+	// NOTE: This logic is redundant and will be addressed in a later commit (Code Smells).
 	projectName := filepath.Base(targetPath)
 	if projectName == "." || projectName == "/" {
 		abs, _ := filepath.Abs(targetPath)
@@ -47,16 +48,17 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		RunInTarget: false,
 	})
 
-	// Task 2: Extract the zip into the target directory
+	// Task 2: Extract the zip into the target directory, JUNK PATHS (-j) to ignore internal directory structure.
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd: "unzip",
 		Args: []string{
 			"-q",
 			"-o",
+			"-j", // Junk paths, extracting all files directly into targetPath
 			zipFile,
 			"-d", targetPath, // Extract into the target directory
 		},
-		Desc:        "Extract project files",
+		Desc:        "Extract project files (junking internal paths)",
 		TaskPrio:    101,
 		RunInTarget: false,
 	})
@@ -70,10 +72,11 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		RunInTarget: false,
 	})
 
-	// Task 4: Make Maven wrapper executable if present
+	// Task 4: Make Maven wrapper executable.
+	// Since we used -j, mvnw is guaranteed to be in the target directory (RunInTarget: true context).
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd:         "chmod",
-		Args:        []string{"+x", "mvnw"},
+		Args:        []string{"+x", filepath.Join(targetPath, "mvnw")}, // <-- Use targetPath in Args since RunInTarget is true
 		Desc:        "Make Maven wrapper executable",
 		TaskPrio:    103,
 		RunInTarget: true,
