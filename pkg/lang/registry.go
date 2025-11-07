@@ -1,11 +1,11 @@
 package lang
 
 import (
-	golang "scbake/pkg/lang/go"
-	"scbake/pkg/lang/svelte" // Import
-
 	"fmt"
 	"scbake/internal/types"
+	golang "scbake/pkg/lang/go"
+	"scbake/pkg/lang/spring"
+	"scbake/pkg/lang/svelte"
 )
 
 // Handler is the interface all language handlers must implement.
@@ -19,8 +19,10 @@ func GetHandler(lang string) (Handler, error) {
 	switch lang {
 	case "go":
 		return &golang.Handler{}, nil
-	case "svelte": // Add registration
+	case "svelte":
 		return &svelte.Handler{}, nil
+	case "spring":
+		return &spring.Handler{}, nil
 	default:
 		return nil, fmt.Errorf("unknown language: %s", lang)
 	}

@@ -201,6 +201,10 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 			if err := preflight.CheckBinaries("npm"); err != nil {
 				return nil, "", nil, err
 			}
+		case "spring":
+			if err := preflight.CheckBinaries("curl", "unzip", "java"); err != nil {
+				return nil, "", nil, err
+			}
 		}
 
 		handler, err := lang.GetHandler(rc.LangFlag)
