@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"scbake/internal/types"
 	cighub "scbake/pkg/templates/ci_github"
+	"scbake/pkg/templates/editorconfig"
 	"scbake/pkg/templates/makefile"
 )
 
@@ -15,8 +16,9 @@ type Handler interface {
 
 // Map of all available template handlers.
 var handlers = map[string]Handler{
-	"makefile":  &makefile.Handler{},
-	"ci_github": &cighub.Handler{},
+	"makefile":     &makefile.Handler{},
+	"ci_github":    &cighub.Handler{},
+	"editorconfig": &editorconfig.Handler{},
 }
 
 // GetHandler returns the correct template handler for the given string.
