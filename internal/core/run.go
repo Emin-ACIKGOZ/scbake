@@ -13,9 +13,10 @@ import (
 	"scbake/pkg/templates"
 )
 
+// StepLogger helps print consistent step messages
 type StepLogger struct {
 	currentStep int
-	totalSteps  int
+	totalSteps  int // Keep unexported
 	DryRun      bool
 }
 
@@ -33,6 +34,7 @@ func (l *StepLogger) SetTotalSteps(newTotal int) {
 	l.totalSteps = newTotal
 }
 
+// RunContext holds all the flags and args for a run.
 type RunContext struct {
 	LangFlag   string
 	WithFlag   []string
@@ -41,11 +43,13 @@ type RunContext struct {
 	Force      bool
 }
 
+// A struct to hold all proposed manifest changes
 type manifestChanges struct {
 	Projects  []types.Project
 	Templates []types.Template
 }
 
+// RunApply is the main logic for the 'apply' command, extracted.
 func RunApply(rc RunContext) error {
 	logger := NewStepLogger(9, rc.DryRun)
 
@@ -188,8 +192,13 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 	if rc.LangFlag != "" {
 		didSomething = true
 
-		if rc.LangFlag == "go" {
+		switch rc.LangFlag {
+		case "go":
 			if err := preflight.CheckBinaries("go"); err != nil {
+				return nil, "", nil, err
+			}
+		case "svelte":
+			if err := preflight.CheckBinaries("npm"); err != nil {
 				return nil, "", nil, err
 			}
 		}
@@ -213,7 +222,7 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 		}
 
 		changes.Projects = append(changes.Projects, types.Project{
-			Name:     projectName, // Use sanitized name
+			Name:     projectName,
 			Path:     rc.TargetPath,
 			Language: rc.LangFlag,
 		})
