@@ -19,16 +19,15 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		projectName = filepath.Base(abs)
 	}
 
-	// Construct URL (unchanged)
+	// Construct URL
 	url := fmt.Sprintf(
-		"https://start.spring.io/starter.zip?type=maven-project&language=java&bootVersion=3.2.3&baseDir=.&groupId=com.example&artifactId=%s&name=%s&packageName=com.example.%s&packaging=jar&javaVersion=17&dependencies=web,lombok,actuator",
+		"https://start.spring.io/starter.zip?type=maven-project&language=java&groupId=com.example&artifactId=%s&name=%s&packageName=com.example.%s&packaging=jar&javaVersion=17&dependencies=web,lombok,actuator",
 		projectName, projectName, projectName,
 	)
 
 	zipFile := "spring-init.zip"
 
 	// Task 1: Download the zip
-	// CHANGED: RunInTarget: false (run in root)
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd:         "curl",
 		Args:        []string{"-f", "-sS", "-o", zipFile, url},
@@ -38,8 +37,6 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	})
 
 	// Task 2: Unzip it
-	// CHANGED: RunInTarget: false (run in root)
-	// CHANGED: Added "-d", targetPath to extract INTO the target directory
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd: "unzip",
 		Args: []string{
@@ -54,7 +51,6 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	})
 
 	// Task 3: Cleanup zip
-	// CHANGED: RunInTarget: false (run in root, where we downloaded it)
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd:         "rm",
 		Args:        []string{zipFile},
@@ -64,7 +60,6 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	})
 
 	// Task 4: Make mvnw executable
-	// This DOES run in the target directory, which now exists.
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd:         "chmod",
 		Args:        []string{"+x", "mvnw"},
