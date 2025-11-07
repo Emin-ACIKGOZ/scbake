@@ -1,7 +1,7 @@
 package svelte
 
 import (
-	"path/filepath"
+	"fmt"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
@@ -12,49 +12,32 @@ type Handler struct{}
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
-	// npm create vite expects just the name if creating in the current dir,
-	// or a path if creating a sub-dir.
-	// Since we want atomic rollback, we prefer letting Vite create the directory.
-	// If targetPath is ".", we need a name.
-	projectName := filepath.Base(targetPath)
-	if projectName == "." || projectName == "/" {
-		abs, _ := filepath.Abs(targetPath)
-		projectName = filepath.Base(abs)
-	}
-
-	// Task 1: Run 'npm create vite@latest'
-	// We run this in the *parent* of the target path so Vite can create the directory.
-	// If targetPath is ".", it runs in ".." and creates current dir name.
-	// This is a bit tricky with our current ExecCommandTask which only supports "." or targetPath.
-	//
-	// SIMPLIFICATION for v1: We assume the user wants to create the project IN the target path.
-	// But Vite wants to CREATE the directory.
-	//
-	// Best approach for scbake standard: We let scbake create the dir (done in 'new' or by user before 'apply').
-	// We then run vite inside it with '.' as the target name.
-
+	// Task 1: Run 'npm create vite@latest <targetPath>'
+	// We run this from the repository root (RunInTarget: false) and let
+	// Vite handle creating the directory if it doesn't exist.
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd: "npm",
 		Args: []string{
 			"create",
 			"vite@latest",
-			".",  // Create in current directory (targetPath)
-			"--", // Bypasses prompts
+			targetPath, // e.g., "./frontend" or "."
+			"--",       // Bypasses prompts
 			"--template",
 			"svelte",
 		},
-		Desc:        "Run npm create vite@latest . -- --template svelte",
+		Desc:        fmt.Sprintf("Run npm create vite@latest %s", targetPath),
 		TaskPrio:    200,
-		RunInTarget: true, // Run INSIDE targetPath
+		RunInTarget: false, // CHANGED: Run from root
 	})
 
 	// Task 2: Run 'npm install'
+	// This must run *inside* the newly created project directory.
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd:         "npm",
 		Args:        []string{"install"},
 		Desc:        "Run npm install",
 		TaskPrio:    300,
-		RunInTarget: true,
+		RunInTarget: true, // Runs IN the targetPath
 	})
 
 	return plan, nil
