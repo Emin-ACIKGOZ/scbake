@@ -7,6 +7,7 @@ import (
 	"scbake/pkg/templates/editorconfig"
 	golinter "scbake/pkg/templates/go_linter"
 	"scbake/pkg/templates/makefile"
+	mavenlinter "scbake/pkg/templates/maven_linter"
 )
 
 // Handler is the interface all tooling template handlers must implement.
@@ -21,6 +22,7 @@ var handlers = map[string]Handler{
 	"ci_github":    &cighub.Handler{},
 	"editorconfig": &editorconfig.Handler{},
 	"go_linter":    &golinter.Handler{},
+	"maven_linter": &mavenlinter.Handler{},
 }
 
 // GetHandler returns the correct template handler for the given string.

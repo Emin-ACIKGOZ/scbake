@@ -1,0 +1,15 @@
+<plugin>
+    <groupId>org.apache.maven.plugins</groupId>
+    <artifactId>maven-checkstyle-plugin</artifactId>
+    <version>3.3.1</version>
+    <dependencies>
+        <dependency>
+            <groupId>com.puppycrawl.tools</groupId>
+            <artifactId>checkstyle</artifactId>
+            <version>10.12.5</version>
+        </dependency>
+    </dependencies>
+    <configuration>
+        <configLocation>checkstyle.xml</configLocation>
+    </configuration>
+</plugin>
