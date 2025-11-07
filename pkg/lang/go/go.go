@@ -43,6 +43,7 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 
 	if err != nil && os.IsNotExist(err) {
 		// --- Path 1: go.mod does NOT exist ---
+		// Module name is now determined only by util.SanitizeModuleName(targetPath)
 		moduleName, err := util.SanitizeModuleName(targetPath)
 		if err != nil {
 			return nil, fmt.Errorf("could not determine module name: %w", err)
