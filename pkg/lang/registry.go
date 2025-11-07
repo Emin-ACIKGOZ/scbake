@@ -1,7 +1,8 @@
 package lang
 
 import (
-	golang "scbake/pkg/lang/go" // aliasing to avoid collision
+	golang "scbake/pkg/lang/go"
+	"scbake/pkg/lang/svelte" // Import
 
 	"fmt"
 	"scbake/internal/types"
@@ -18,6 +19,8 @@ func GetHandler(lang string) (Handler, error) {
 	switch lang {
 	case "go":
 		return &golang.Handler{}, nil
+	case "svelte": // Add registration
+		return &svelte.Handler{}, nil
 	default:
 		return nil, fmt.Errorf("unknown language: %s", lang)
 	}
