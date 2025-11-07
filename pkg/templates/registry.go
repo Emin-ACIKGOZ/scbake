@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"scbake/internal/types"
 	cighub "scbake/pkg/templates/ci_github"
+	devcontainer "scbake/pkg/templates/devcontainer" // NEW: Import devcontainer
 	"scbake/pkg/templates/editorconfig"
 	golinter "scbake/pkg/templates/go_linter"
 	"scbake/pkg/templates/makefile"
@@ -25,6 +26,7 @@ var handlers = map[string]Handler{
 	"go_linter":     &golinter.Handler{},
 	"maven_linter":  &mavenlinter.Handler{},
 	"svelte_linter": &sveltelinter.Handler{},
+	"devcontainer":  &devcontainer.Handler{},
 }
 
 // GetHandler returns the correct template handler for the given string.
