@@ -16,19 +16,17 @@ type Handler struct{}
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
-	// Determine project name from target path (simplification from previous version)
-	// NOTE: If util.SanitizeModuleName were available and suitable for Spring's needs, it would be preferred.
-	// We'll rely on a basic filepath.Base here as the Spring Initializr API uses this name directly.
+	// Determine project name from target path.
 	projectName := filepath.Base(targetPath)
 
-	// URL-encode project name for query parameters
+	// URL-encode project name for query parameters.
 	encodedName := url.QueryEscape(projectName)
 
-	// Sanitize package name: remove spaces and hyphens for Java package conventions
+	// Sanitize package name for Java conventions.
 	sanitizedPackage := strings.ReplaceAll(projectName, "-", "")
 	sanitizedPackage = strings.ReplaceAll(sanitizedPackage, " ", "")
 
-	// Construct Spring Initializr URL
+	// Construct Spring Initializr URL.
 	zipURL := fmt.Sprintf(
 		"https://start.spring.io/starter.zip?type=maven-project&language=java&groupId=com.example&artifactId=%s&name=%s&packageName=com.example.%s&packaging=jar&javaVersion=17&dependencies=web,lombok,actuator",
 		encodedName, encodedName, sanitizedPackage,
@@ -36,35 +34,37 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 
 	const zipFile = "spring-init.zip"
 
-	// All subsequent tasks will run inside the target path.
+	//  Task 0: Ensure target directory exists
+
+	plan = append(plan, &tasks.CreateDirTask{
+		Path:     targetPath,
+		Desc:     fmt.Sprintf("Create project directory '%s'", targetPath),
+		TaskPrio: 50,
+	})
 
 	// Task 1: Download Spring Boot starter zip
-	// Download happens inside the target directory (RunInTarget: true)
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd:         "curl",
 		Args:        []string{"-f", "-sS", "-o", zipFile, zipURL},
 		Desc:        fmt.Sprintf("Download Spring Boot starter for '%s'", projectName),
 		TaskPrio:    100,
-		RunInTarget: true, // All tasks run in targetPath for consistency
+		RunInTarget: true,
 	})
 
-	// Task 2: Extract the zip.
-	// Since we are already inside targetPath (RunInTarget: true),
-	// we extract in place and use the -j flag.
+	// Task 2: Extract the zip, preserving directory structure
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd: "unzip",
 		Args: []string{
 			"-q",
 			"-o",
-			"-j", // Junk paths
 			zipFile,
 		},
-		Desc:        "Extract project files (junking internal paths)",
+		Desc:        "Extract project files",
 		TaskPrio:    101,
 		RunInTarget: true,
 	})
 
-	// Task 3: Remove the zip file after extraction. Runs in targetPath.
+	// Task 3: Remove the zip file after extraction.
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd:         "rm",
 		Args:        []string{zipFile},
@@ -73,11 +73,10 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		RunInTarget: true,
 	})
 
-	// Task 4: Make Maven wrapper executable.
-	// Runs in targetPath, 'mvnw' is local.
+	// Task 4: Make Maven wrapper executable
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd:         "chmod",
-		Args:        []string{"+x", "mvnw"}, // Simplified path: just "mvnw"
+		Args:        []string{"+x", "mvnw"},
 		Desc:        "Make Maven wrapper executable",
 		TaskPrio:    103,
 		RunInTarget: true,
