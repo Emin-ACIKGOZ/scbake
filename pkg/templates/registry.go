@@ -1,10 +1,11 @@
+// Package templates provides the registry and interface for tooling template handlers.
 package templates
 
 import (
 	"fmt"
 	"scbake/internal/types"
 	cighub "scbake/pkg/templates/ci_github"
-	devcontainer "scbake/pkg/templates/devcontainer" // NEW: Import devcontainer
+	devcontainer "scbake/pkg/templates/devcontainer"
 	"scbake/pkg/templates/editorconfig"
 	golinter "scbake/pkg/templates/go_linter"
 	"scbake/pkg/templates/makefile"
@@ -14,7 +15,7 @@ import (
 
 // Handler is the interface all tooling template handlers must implement.
 type Handler interface {
-	// GetTasks now takes a targetPath to be context-aware
+	// GetTasks takes a targetPath to be context-aware
 	GetTasks(targetPath string) ([]types.Task, error)
 }
 
