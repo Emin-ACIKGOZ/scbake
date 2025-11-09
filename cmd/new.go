@@ -16,7 +16,7 @@ var (
 )
 
 var newCmd = &cobra.Command{
-	Use:   "new <project-name> --lang <lang> [--with <template...>]",
+	Use:   "new <project-name> [--lang <lang>] [--with <template...>]",
 	Short: "Create a new standalone project",
 	Long: `Creates a new directory, initializes a Git repository,
 and applies the specified language pack and templates.`,
@@ -24,10 +24,8 @@ and applies the specified language pack and templates.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		projectName := args[0]
 
-		if newLangFlag == "" {
-			fmt.Fprintln(os.Stderr, "Error: the --lang flag is required for 'new'")
-			os.Exit(1)
-		}
+		// Flag to track directory creation
+		dirCreated := false
 
 		// Get the original working directory *before* we do anything.
 		cwd, err := os.Getwd()
@@ -36,19 +34,26 @@ and applies the specified language pack and templates.`,
 			os.Exit(1)
 		}
 
-		if err := runNew(projectName); err != nil {
+		// runNew takes a pointer to dirCreated to track creation status
+		if err := runNew(projectName, &dirCreated); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			// Go back to the original directory *before* trying to clean up.
+
+			// Go back to the original directory
 			os.Chdir(cwd)
-			fmt.Fprintf(os.Stderr, "Cleaning up %s...\n", projectName)
-			os.RemoveAll(projectName)
+
+			// SAFETY CHECK: Only clean up the directory if we created it during this command.
+			if dirCreated {
+				fmt.Fprintf(os.Stderr, "Cleaning up %s...\n", projectName)
+				os.RemoveAll(projectName)
+			}
 			os.Exit(1)
 		}
 		fmt.Printf("✅ Success! New project '%s' created.\n", projectName)
 	},
 }
 
-func runNew(projectName string) error {
+// runNew takes a pointer to dirCreated to track creation status.
+func runNew(projectName string, dirCreated *bool) error {
 	logger := core.NewStepLogger(6, dryRun)
 
 	// 1. Check if directory exists
@@ -61,6 +66,7 @@ func runNew(projectName string) error {
 	if err := os.Mkdir(projectName, 0755); err != nil {
 		return err
 	}
+	*dirCreated = true // Set flag: successfully created directory
 
 	// 3. CD into directory
 	if err := os.Chdir(projectName); err != nil {
@@ -112,7 +118,7 @@ func runNew(projectName string) error {
 }
 
 func init() {
-	rootCmd.AddCommand(newCmd)
-	newCmd.Flags().StringVar(&newLangFlag, "lang", "", "Language project pack to apply (required)")
+	// The rootCmd registration is handled in cmd/root.go init()
+	newCmd.Flags().StringVar(&newLangFlag, "lang", "", "Language project pack to apply (e.g., 'go')")
 	newCmd.Flags().StringSliceVar(&newWithFlag, "with", []string{}, "Tooling template(s) to apply")
 }
