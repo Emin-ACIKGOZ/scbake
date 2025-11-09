@@ -1,3 +1,4 @@
+// Package cmd implements the command-line commands for scbake.
 package cmd
 
 import (
@@ -10,6 +11,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Steps in the new command run
+const newCmdTotalSteps = 6
+
+// Directory permissions for os.Mkdir, 0750 is recommended by gosec
+const dirPerms os.FileMode = 0750
+
 var (
 	newLangFlag string
 	newWithFlag []string
@@ -21,7 +28,7 @@ var newCmd = &cobra.Command{
 	Long: `Creates a new directory, initializes a Git repository,
 and applies the specified language pack and templates.`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, args []string) {
 		projectName := args[0]
 
 		// Flag to track directory creation
@@ -39,12 +46,16 @@ and applies the specified language pack and templates.`,
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 
 			// Go back to the original directory
-			os.Chdir(cwd)
+			if err := os.Chdir(cwd); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Failed to change back to original directory: %v\n", err)
+			}
 
 			// SAFETY CHECK: Only clean up the directory if we created it during this command.
 			if dirCreated {
 				fmt.Fprintf(os.Stderr, "Cleaning up %s...\n", projectName)
-				os.RemoveAll(projectName)
+				if err := os.RemoveAll(projectName); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: Failed to clean up project directory: %v\n", err)
+				}
 			}
 			os.Exit(1)
 		}
@@ -54,7 +65,7 @@ and applies the specified language pack and templates.`,
 
 // runNew takes a pointer to dirCreated to track creation status.
 func runNew(projectName string, dirCreated *bool) error {
-	logger := core.NewStepLogger(6, dryRun)
+	logger := core.NewStepLogger(newCmdTotalSteps, dryRun)
 
 	// 1. Check if directory exists
 	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
@@ -63,7 +74,7 @@ func runNew(projectName string, dirCreated *bool) error {
 
 	// 2. Create directory
 	logger.Log("📁", "Creating directory: "+projectName)
-	if err := os.Mkdir(projectName, 0755); err != nil {
+	if err := os.Mkdir(projectName, dirPerms); err != nil {
 		return err
 	}
 	*dirCreated = true // Set flag: successfully created directory
@@ -77,7 +88,12 @@ func runNew(projectName string, dirCreated *bool) error {
 	cwd, _ := os.Getwd()
 
 	// Defer a function to return to the original CWD (which is the parent)
-	defer os.Chdir(filepath.Dir(cwd))
+	defer func() {
+		if err := os.Chdir(filepath.Dir(cwd)); err != nil {
+			// This is a deferred function; log the error if it occurs.
+			fmt.Fprintf(os.Stderr, "Warning: Failed to change back from project directory: %v\n", err)
+		}
+	}()
 
 	// 4. Init Git
 	logger.Log("GIT", "Initializing Git repository...")
@@ -112,7 +128,7 @@ func runNew(projectName string, dirCreated *bool) error {
 	}
 
 	// Update the total steps for the logger, using the exported method.
-	logger.SetTotalSteps(6)
+	logger.SetTotalSteps(newCmdTotalSteps)
 	logger.Log("✨", "Finalizing project...")
 	return nil
 }
