@@ -8,7 +8,7 @@ import (
 )
 
 // Braille spinner characters
-var spinnerChars = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+var spinnerChars = []string{"⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾"}
 
 // Execute runs the plan.
 func Execute(plan *types.Plan, tc types.TaskContext) error {
