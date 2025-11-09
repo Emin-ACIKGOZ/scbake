@@ -41,9 +41,8 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	goModPath := filepath.Join(targetPath, "go.mod")
 	_, err := os.Stat(goModPath)
 
-	if err != nil && os.IsNotExist(err) {
-		// --- Path 1: go.mod does NOT exist ---
-		// Module name is now determined only by util.SanitizeModuleName(targetPath)
+	if os.IsNotExist(err) {
+		// --- Path 1: go.mod does NOT exist (Initialization) ---
 		moduleName, err := util.SanitizeModuleName(targetPath)
 		if err != nil {
 			return nil, fmt.Errorf("could not determine module name: %w", err)
@@ -68,7 +67,8 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		})
 
 	} else if err == nil {
-		// --- Path 2: go.mod *does* exist ---
+		// --- Path 2: go.mod *does* exist (Maintenance) ---
+		// We only run 'go mod tidy' to update dependencies if files were modified.
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "go",
 			Args:        []string{"mod", "tidy"},
