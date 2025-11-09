@@ -21,17 +21,28 @@ var applyCmd = &cobra.Command{
 This command is atomic and requires a clean Git working tree.`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		// Store the original argument for the manifest, which must be relative.
+		manifestPathArg := "."
 		targetPath := "."
 		if len(args) > 0 {
+			manifestPathArg = args[0]
 			targetPath = args[0]
 		}
 
+		// Convert to absolute path for robust execution (npm, go build).
+		absPath, err := filepath.Abs(targetPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving path %s: %v\n", targetPath, err)
+			os.Exit(1)
+		}
+
 		rc := core.RunContext{
-			LangFlag:   langFlag,
-			WithFlag:   withFlag,
-			TargetPath: filepath.Clean(targetPath),
-			DryRun:     dryRun, // dryRun is the global flag
-			Force:      force,  // force is the global flag
+			LangFlag:        langFlag,
+			WithFlag:        withFlag,
+			TargetPath:      absPath,         // Pass absolute path for execution stability.
+			ManifestPathArg: manifestPathArg, //  Pass Arg for manifest portability
+			DryRun:          dryRun,          // dryRun is the global flag
+			Force:           force,           // force is the global flag
 		}
 
 		if err := core.RunApply(rc); err != nil {

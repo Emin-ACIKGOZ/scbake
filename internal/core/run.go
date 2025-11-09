@@ -36,11 +36,12 @@ func (l *StepLogger) SetTotalSteps(newTotal int) {
 
 // RunContext holds all the flags and args for a run.
 type RunContext struct {
-	LangFlag   string
-	WithFlag   []string
-	TargetPath string
-	DryRun     bool
-	Force      bool
+	LangFlag        string
+	WithFlag        []string
+	TargetPath      string // Used for execution (absolute path)
+	ManifestPathArg string // Used for manifest/template rendering (relative path)
+	DryRun          bool
+	Force           bool
 }
 
 // A struct to hold all proposed manifest changes
@@ -92,7 +93,7 @@ func RunApply(rc RunContext) error {
 		Ctx:        context.Background(),
 		DryRun:     rc.DryRun,
 		Manifest:   &futureManifest,
-		TargetPath: rc.TargetPath,
+		TargetPath: rc.TargetPath, // Use absolute path for execution
 		Force:      rc.Force,
 	}
 
@@ -102,6 +103,7 @@ func RunApply(rc RunContext) error {
 		return Execute(plan, tc)
 	}
 
+	// Logic to handle initial commit if HEAD is invalid (freshly initialized repo via `new`)
 	hasHEAD, err := git.CheckHasHEAD()
 	if err != nil {
 		return fmt.Errorf("failed to check for HEAD: %w", err)
@@ -110,6 +112,7 @@ func RunApply(rc RunContext) error {
 	if !hasHEAD {
 		logger.Log("GIT", "Creating initial commit...")
 
+		// Note: This relies on InitialCommit being called only once when starting from a fresh git init.
 		if err := git.InitialCommit("scbake: Initial commit"); err != nil {
 			return err
 		}
@@ -187,11 +190,12 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
 	changes := &manifestChanges{}
 	commitMessage := "scbake: Apply templates"
-	didSomething := false
+	didSomething := false // Flag to ensure at least one action is requested
 
 	if rc.LangFlag != "" {
 		didSomething = true
 
+		// Binary check placed here for consistency, but logic proceeds if checks fail or pass
 		switch rc.LangFlag {
 		case "go":
 			if err := preflight.CheckBinaries("go"); err != nil {
@@ -220,18 +224,18 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 		plan.Tasks = append(plan.Tasks, langTasks...)
 
 		// Sanitize the project name for the manifest
-		projectName, err := util.SanitizeModuleName(rc.TargetPath)
+		projectName, err := util.SanitizeModuleName(rc.ManifestPathArg)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("could not determine project name: %w", err)
 		}
 
 		changes.Projects = append(changes.Projects, types.Project{
 			Name:     projectName,
-			Path:     rc.TargetPath,
+			Path:     rc.ManifestPathArg,
 			Language: rc.LangFlag,
 		})
 
-		commitMessage = fmt.Sprintf("scbake: Apply '%s' to %s", rc.LangFlag, rc.TargetPath)
+		commitMessage = fmt.Sprintf("scbake: Apply '%s' to %s", rc.LangFlag, rc.ManifestPathArg)
 	}
 
 	if len(rc.WithFlag) > 0 {
@@ -251,14 +255,19 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 			plan.Tasks = append(plan.Tasks, tmplTasks...)
 		}
 
+		// Update commit message based on what was done
+		if rc.LangFlag == "" {
+			commitMessage = fmt.Sprintf("scbake: Apply templates (%v) to %s", rc.WithFlag, rc.ManifestPathArg)
+		}
+
+		// Simplified change tracking for root templates:
 		changes.Templates = append(changes.Templates, types.Template{
 			Name: "root-templates",
-			Path: rc.TargetPath,
+			Path: rc.ManifestPathArg,
 		})
-
-		commitMessage = fmt.Sprintf("scbake: Apply templates (%v) to %s", rc.WithFlag, rc.TargetPath)
 	}
 
+	// Only fail if neither a language nor tooling was specified.
 	if !didSomething {
 		return nil, "", nil, fmt.Errorf("no language or templates specified. Use --lang or --with")
 	}
