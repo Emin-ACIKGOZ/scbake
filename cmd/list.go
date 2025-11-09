@@ -1,3 +1,4 @@
+// Package cmd implements the command-line commands for scbake.
 package cmd
 
 import (
@@ -16,7 +17,7 @@ var listCmd = &cobra.Command{
 	Long: `Lists available language packs, tooling templates,
 or the projects currently managed in this repository's scbake.toml.`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, args []string) {
 		switch args[0] {
 		case "langs":
 			fmt.Println("Available Language Packs:")
