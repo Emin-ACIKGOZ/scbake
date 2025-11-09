@@ -1,3 +1,4 @@
+// Package types holds the core data structures for the scbake manifest and tasks.
 package types
 
 import (
@@ -59,24 +60,36 @@ const (
 	PrioCI Priority = 1100
 
 	// PrioLinter is for linter configuration tasks.
-	PrioLinter Priority = 1200 // FIXED: Added comment
+	PrioLinter Priority = 1200
 
 	// PrioBuildSystem is for build system configuration tasks (e.g., Makefiles).
-	PrioBuildSystem Priority = 1400 // FIXED: Added comment
+	PrioBuildSystem Priority = 1400
 
 	// PrioDevEnv is for environment setup tasks (e.g., Dev Containers).
-	PrioDevEnv Priority = 1500 // FIXED: Added comment
+	PrioDevEnv Priority = 1500
 
 	// --- Max Values ---
 
 	// Inclusive ceiling for each band.
 	// Defined explicitly using the next base value minus one.
 
-	MaxDirCreate       Priority = PrioLangSetup - 1       // 99
-	MaxLangSetup       Priority = PrioConfigUniversal - 1 // 999
-	MaxConfigUniversal Priority = PrioCI - 1              // 1099
-	MaxCI              Priority = PrioLinter - 1          // 1199
-	MaxLinter          Priority = PrioBuildSystem - 1     // 1399
-	MaxBuildSystem     Priority = PrioDevEnv - 1          // 1499
+	// MaxDirCreate is the inclusive ceiling for the directory creation priority band (PrioDirCreate).
+	MaxDirCreate Priority = PrioLangSetup - 1 // 99
+
+	// MaxLangSetup is the inclusive ceiling for the language setup priority band (PrioLangSetup).
+	MaxLangSetup Priority = PrioConfigUniversal - 1 // 999
+
+	// MaxConfigUniversal is the inclusive ceiling for the universal config priority band (PrioConfigUniversal).
+	MaxConfigUniversal Priority = PrioCI - 1 // 1099
+
+	// MaxCI is the inclusive ceiling for the CI priority band (PrioCI).
+	MaxCI Priority = PrioLinter - 1 // 1199
+
+	// MaxLinter is the inclusive ceiling for the linter priority band (PrioLinter).
+	MaxLinter Priority = PrioBuildSystem - 1 // 1399
+
+	// MaxBuildSystem is the inclusive ceiling for the build system priority band (PrioBuildSystem).
+	MaxBuildSystem Priority = PrioDevEnv - 1 // 1499
+
 	// PrioDevEnv has no defined max; it runs last and is unlimited (max=0).
 )
