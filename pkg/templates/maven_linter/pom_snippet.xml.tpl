@@ -10,6 +10,6 @@
         </dependency>
     </dependencies>
     <configuration>
-        <configLocation>checkstyle.xml</configLocation>
+        <configLocation>${project.basedir}/checkstyle.xml</configLocation>
     </configuration>
 </plugin>
