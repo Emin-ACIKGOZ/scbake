@@ -20,7 +20,7 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		TemplatePath: ".golangci.yml.tpl",
 		OutputPath:   ".golangci.yml",
 		Desc:         "Create Go linter configuration (.golangci.yml)",
-		TaskPrio:     15, // Same priority as universal editorconfig
+		TaskPrio:     1015, // Same priority as universal editorconfig
 	})
 
 	return plan, nil

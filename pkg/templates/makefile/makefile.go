@@ -20,7 +20,7 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		TemplatePath: "makefile.tpl",
 		OutputPath:   "Makefile",
 		Desc:         "Create smart Makefile",
-		TaskPrio:     400,
+		TaskPrio:     1400,
 	})
 
 	return plan, nil

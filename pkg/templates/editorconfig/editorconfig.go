@@ -20,7 +20,7 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		TemplatePath: ".editorconfig.tpl",
 		OutputPath:   ".editorconfig",
 		Desc:         "Create standardized .editorconfig",
-		TaskPrio:     15, // Run early, universal config
+		TaskPrio:     1010, // Run early, universal config
 	})
 
 	return plan, nil

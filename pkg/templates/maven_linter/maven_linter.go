@@ -21,16 +21,16 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		TemplatePath: "checkstyle.xml.tpl",
 		OutputPath:   "checkstyle.xml",
 		Desc:         "Create Maven Checkstyle configuration",
-		TaskPrio:     30,
+		TaskPrio:     1030,
 	})
 
 	// Task 2: Create the placeholder for the Checkstyle plugin snippet
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
 		TemplatePath: "pom_snippet.xml.tpl",
-		OutputPath:   "maven-checkstyle-plugin.xml", // FIXED: Renamed output for clarity
+		OutputPath:   "maven-checkstyle-plugin.xml",
 		Desc:         "Create Maven pom.xml snippet (Checkstyle)",
-		TaskPrio:     31,
+		TaskPrio:     1031,
 	})
 
 	return plan, nil

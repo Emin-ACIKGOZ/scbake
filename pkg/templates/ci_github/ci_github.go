@@ -23,7 +23,7 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		TemplatePath: "main.yml.tpl",
 		OutputPath:   ".github/workflows/main.yml",
 		Desc:         "Create GitHub Actions CI workflow",
-		TaskPrio:     20, // Run early
+		TaskPrio:     1020, // Run early
 	})
 
 	return plan, nil

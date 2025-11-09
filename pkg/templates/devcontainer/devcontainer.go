@@ -16,24 +16,22 @@ type Handler struct{}
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
-	// Task 1: Create the supporting Dockerfile
+	// Task 1: Create the lightweight, smart Dockerfile
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
 		TemplatePath: "Dockerfile.tpl",
 		OutputPath:   ".devcontainer/Dockerfile",
 		Desc:         "Create .devcontainer/Dockerfile",
-		TaskPrio:     40,
+		TaskPrio:     1500, // Runs after all project scaffolding
 	})
 
-	// Task 2: Create the main devcontainer.json file
-	// Since no TemplateData is explicitly provided, the *full manifest* is passed
-	// as context, allowing the JSON template to use conditional logic.
+	// Task 2: Create the devcontainer.json file
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
 		TemplatePath: "devcontainer.json.tpl",
 		OutputPath:   ".devcontainer/devcontainer.json",
 		Desc:         "Create .devcontainer/devcontainer.json",
-		TaskPrio:     41,
+		TaskPrio:     1501,
 	})
 
 	return plan, nil
