@@ -1,5 +1,5 @@
-// Package util provides general utility functions used across the scbake project.
-package util
+// Package fileutil provides general utility functions related to file system operations.
+package fileutil
 
 import "os"
 
