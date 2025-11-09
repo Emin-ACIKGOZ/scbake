@@ -1,3 +1,4 @@
+// Package cmd implements the command-line commands for scbake.
 package cmd
 
 import (
@@ -17,21 +18,23 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use: "scbake",
-
+	Use:   "scbake",
 	Short: "A manifest-driven project scaffolder",
-
 	Long: `scbake is a single-binary CLI for scaffolding new projects
 and applying layered infrastructure templates.`,
 
 	// If the user just types 'scbake', show the version
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(cmd *cobra.Command, _ []string) {
 		v, _ := cmd.Flags().GetBool("version")
 		if v {
 			fmt.Println(version)
 			os.Exit(0)
 		}
-		cmd.Help()
+		if err := cmd.Help(); err != nil {
+			// This typically shouldn't fail, but check it for robustness.
+			fmt.Fprintf(os.Stderr, "Error showing help: %v\n", err)
+			os.Exit(1)
+		}
 	},
 }
 
