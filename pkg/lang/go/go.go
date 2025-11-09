@@ -19,29 +19,40 @@ type Handler struct{}
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
+	// Use a single sequence for all language setup tasks (100-999)
+	langSeq := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
+
 	// Task 1: Create .gitignore
+	p, err := langSeq.Next()
+	if err != nil {
+		return nil, err
+	}
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
 		TemplatePath: "gitignore.tpl",
 		OutputPath:   ".gitignore",
 		Desc:         "Create .gitignore",
-		TaskPrio:     100,
+		TaskPrio:     int(p),
 	})
 
 	// Task 2: Create main.go
+	p, err = langSeq.Next()
+	if err != nil {
+		return nil, err
+	}
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
 		TemplatePath: "main.go.tpl",
 		OutputPath:   "main.go",
 		Desc:         "Create main.go",
-		TaskPrio:     100,
+		TaskPrio:     int(p),
 	})
 
 	// Idempotency Check
 	goModPath := filepath.Join(targetPath, "go.mod")
-	_, err := os.Stat(goModPath)
+	_, checkErr := os.Stat(goModPath)
 
-	if os.IsNotExist(err) {
+	if os.IsNotExist(checkErr) {
 		// --- Path 1: go.mod does NOT exist (Initialization) ---
 		moduleName, err := util.SanitizeModuleName(targetPath)
 		if err != nil {
@@ -49,35 +60,47 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		}
 
 		// Task 3: Run 'go mod init'
+		p, err = langSeq.Next()
+		if err != nil {
+			return nil, err
+		}
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "go",
 			Args:        []string{"mod", "init", moduleName}, // Use sanitized name
 			Desc:        "Run go mod init " + moduleName,
-			TaskPrio:    200,
+			TaskPrio:    int(p),
 			RunInTarget: true,
 		})
 
 		// Task 4: Run 'go mod tidy'
+		p, err = langSeq.Next()
+		if err != nil {
+			return nil, err
+		}
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "go",
 			Args:        []string{"mod", "tidy"},
 			Desc:        "Run go mod tidy",
-			TaskPrio:    300,
+			TaskPrio:    int(p),
 			RunInTarget: true,
 		})
-	} else if err == nil {
+	} else if checkErr == nil {
 		// --- Path 2: go.mod *does* exist (Maintenance) ---
 		// We only run 'go mod tidy' to update dependencies if files were modified.
+		p, err := langSeq.Next()
+		if err != nil {
+			return nil, err
+		}
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "go",
 			Args:        []string{"mod", "tidy"},
 			Desc:        "Run go mod tidy (project exists)",
-			TaskPrio:    300,
+			TaskPrio:    int(p),
 			RunInTarget: true,
 		})
 	} else {
 		// --- Path 3: Some other error ---
-		return nil, fmt.Errorf("could not check for go.mod: %w", err)
+		return nil, fmt.Errorf("could not check for go.mod: %w", checkErr)
 	}
 
 	return plan, nil

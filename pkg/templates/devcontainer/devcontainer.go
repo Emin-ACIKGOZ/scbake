@@ -16,22 +16,34 @@ type Handler struct{}
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
+	// Initialize sequence for the Dev Environment band (1500+)
+	// Max is set to 0, indicating unlimited steps within this final band.
+	seq := types.NewPrioritySequence(types.PrioDevEnv, 0)
+
 	// Task 1: Create the lightweight, smart Dockerfile
+	p, err := seq.Next()
+	if err != nil {
+		return nil, err
+	}
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
 		TemplatePath: "Dockerfile.tpl",
 		OutputPath:   ".devcontainer/Dockerfile",
 		Desc:         "Create .devcontainer/Dockerfile",
-		TaskPrio:     1500, // Runs after all project scaffolding
+		TaskPrio:     int(p), // Now 1500
 	})
 
 	// Task 2: Create the devcontainer.json file
+	p, err = seq.Next()
+	if err != nil {
+		return nil, err
+	}
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
 		TemplatePath: "devcontainer.json.tpl",
 		OutputPath:   ".devcontainer/devcontainer.json",
 		Desc:         "Create .devcontainer/devcontainer.json",
-		TaskPrio:     1501,
+		TaskPrio:     int(p), // Now 1501
 	})
 
 	return plan, nil

@@ -17,18 +17,26 @@ type Handler struct{}
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
+	// Initialize sequence for setup band
+	dirSeq := types.NewPrioritySequence(types.PrioDirCreate, types.MaxDirCreate)
+	langSeq := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
+
 	// Task 0: Ensure target directory exists (always needed)
+	p, err := dirSeq.Next()
+	if err != nil {
+		return nil, err
+	}
 	plan = append(plan, &tasks.CreateDirTask{
 		Path:     targetPath,
 		Desc:     fmt.Sprintf("Create project directory '%s'", targetPath),
-		TaskPrio: 50,
+		TaskPrio: int(p), // Now 50
 	})
 
 	// Idempotency Check: Check for existence of pom.xml
 	pomXMLPath := filepath.Join(targetPath, "pom.xml")
-	_, err := os.Stat(pomXMLPath)
+	_, checkErr := os.Stat(pomXMLPath)
 
-	if os.IsNotExist(err) {
+	if os.IsNotExist(checkErr) {
 		// --- Path 1: pom.xml does NOT exist (Initialization) ---
 
 		// Determine project name from target path.
@@ -50,15 +58,23 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		const zipFile = "spring-init.zip"
 
 		// Task 1: Download Spring Boot starter zip
+		p, err := langSeq.Next()
+		if err != nil {
+			return nil, err
+		}
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "curl",
 			Args:        []string{"-f", "-sS", "-o", zipFile, zipURL},
 			Desc:        fmt.Sprintf("Download Spring Boot starter for '%s'", projectName),
-			TaskPrio:    100,
+			TaskPrio:    int(p), // Now 100
 			RunInTarget: true,
 		})
 
 		// Task 2: Extract the zip, preserving directory structure
+		p, err = langSeq.Next()
+		if err != nil {
+			return nil, err
+		}
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd: "unzip",
 			Args: []string{
@@ -67,33 +83,41 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 				zipFile,
 			},
 			Desc:        "Extract project files",
-			TaskPrio:    101,
+			TaskPrio:    int(p), // Now 101
 			RunInTarget: true,
 		})
 
 		// Task 3: Remove the zip file after extraction.
+		p, err = langSeq.Next()
+		if err != nil {
+			return nil, err
+		}
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "rm",
 			Args:        []string{zipFile},
 			Desc:        "Cleanup initialization artifacts",
-			TaskPrio:    102,
+			TaskPrio:    int(p), // Now 102
 			RunInTarget: true,
 		})
 
 		// Task 4: Make Maven wrapper executable
+		p, err = langSeq.Next()
+		if err != nil {
+			return nil, err
+		}
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "chmod",
 			Args:        []string{"+x", "mvnw"},
 			Desc:        "Make Maven wrapper executable",
-			TaskPrio:    103,
+			TaskPrio:    int(p), // Now 103
 			RunInTarget: true,
 		})
-	} else if err == nil {
+	} else if checkErr == nil {
 		// --- Path 2: pom.xml *does* exist (Maintenance) ---
 		// No maintenance tasks are defined here for now
 	} else {
 		// --- Path 3: Some other error ---
-		return nil, fmt.Errorf("could not check for pom.xml: %w", err)
+		return nil, fmt.Errorf("could not check for pom.xml: %w", checkErr)
 	}
 
 	return plan, nil

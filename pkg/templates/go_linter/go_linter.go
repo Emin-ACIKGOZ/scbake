@@ -15,12 +15,19 @@ type Handler struct{}
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
+	// Initialize sequence for the Linter band (1200-1399)
+	seq := types.NewPrioritySequence(types.PrioLinter, types.MaxLinter)
+
+	p, err := seq.Next()
+	if err != nil {
+		return nil, err
+	}
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
 		TemplatePath: ".golangci.yml.tpl",
 		OutputPath:   ".golangci.yml",
 		Desc:         "Create Go linter configuration (.golangci.yml)",
-		TaskPrio:     1015, // Same priority as universal editorconfig
+		TaskPrio:     int(p), // Now 1200
 	})
 
 	return plan, nil

@@ -15,16 +15,27 @@ type Handler struct{}
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
+	// Initialize sequence for the Linter band (1200-1399)
+	seq := types.NewPrioritySequence(types.PrioLinter, types.MaxLinter)
+
 	// Task 1: Create the ESLint config file (eslint.config.js)
+	p, err := seq.Next()
+	if err != nil {
+		return nil, err
+	}
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
 		TemplatePath: "eslint.config.js.tpl",
 		OutputPath:   "eslint.config.js",
 		Desc:         "Create Svelte ESLint 9 configuration",
-		TaskPrio:     1030,
+		TaskPrio:     int(p), // Now 1200
 	})
 
 	// Task 2: Install necessary ESLint dependencies
+	p, err = seq.Next()
+	if err != nil {
+		return nil, err
+	}
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd: "npm",
 		Args: []string{
@@ -38,22 +49,25 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 			"eslint-config-prettier",
 		},
 		Desc:        "Install Svelte ESLint dependencies",
-		TaskPrio:    1031,
+		TaskPrio:    int(p), // Now 1201
 		RunInTarget: true,
 	})
 
 	// Task 3: Add robust 'lint' and 'lint:fix' scripts to package.json
+	p, err = seq.Next()
+	if err != nil {
+		return nil, err
+	}
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd: "npm",
 		Args: []string{
 			"pkg",
 			"set",
-			// Use 'npx' to guarantee finding the local binary in all shells
 			"scripts.lint=npx eslint .",
 			"scripts.lint:fix=npx eslint . --fix",
 		},
 		Desc:        "Add standard lint scripts to package.json",
-		TaskPrio:    1032,
+		TaskPrio:    int(p), // Now 1202
 		RunInTarget: true,
 	})
 
