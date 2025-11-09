@@ -3,6 +3,7 @@ package spring
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -16,71 +17,85 @@ type Handler struct{}
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
-	// Determine project name from target path.
-	projectName := filepath.Base(targetPath)
-
-	// URL-encode project name for query parameters.
-	encodedName := url.QueryEscape(projectName)
-
-	// Sanitize package name for Java conventions.
-	sanitizedPackage := strings.ReplaceAll(projectName, "-", "")
-	sanitizedPackage = strings.ReplaceAll(sanitizedPackage, " ", "")
-
-	// Construct Spring Initializr URL.
-	zipURL := fmt.Sprintf(
-		"https://start.spring.io/starter.zip?type=maven-project&language=java&groupId=com.example&artifactId=%s&name=%s&packageName=com.example.%s&packaging=jar&javaVersion=17&dependencies=web,lombok,actuator",
-		encodedName, encodedName, sanitizedPackage,
-	)
-
-	const zipFile = "spring-init.zip"
-
-	//  Task 0: Ensure target directory exists
-
+	// Task 0: Ensure target directory exists (always needed)
 	plan = append(plan, &tasks.CreateDirTask{
 		Path:     targetPath,
 		Desc:     fmt.Sprintf("Create project directory '%s'", targetPath),
 		TaskPrio: 50,
 	})
 
-	// Task 1: Download Spring Boot starter zip
-	plan = append(plan, &tasks.ExecCommandTask{
-		Cmd:         "curl",
-		Args:        []string{"-f", "-sS", "-o", zipFile, zipURL},
-		Desc:        fmt.Sprintf("Download Spring Boot starter for '%s'", projectName),
-		TaskPrio:    100,
-		RunInTarget: true,
-	})
+	// Idempotency Check: Check for existence of pom.xml
+	pomXMLPath := filepath.Join(targetPath, "pom.xml")
+	_, err := os.Stat(pomXMLPath)
 
-	// Task 2: Extract the zip, preserving directory structure
-	plan = append(plan, &tasks.ExecCommandTask{
-		Cmd: "unzip",
-		Args: []string{
-			"-q",
-			"-o",
-			zipFile,
-		},
-		Desc:        "Extract project files",
-		TaskPrio:    101,
-		RunInTarget: true,
-	})
+	if os.IsNotExist(err) {
+		// --- Path 1: pom.xml does NOT exist (Initialization) ---
 
-	// Task 3: Remove the zip file after extraction.
-	plan = append(plan, &tasks.ExecCommandTask{
-		Cmd:         "rm",
-		Args:        []string{zipFile},
-		Desc:        "Cleanup initialization artifacts",
-		TaskPrio:    102,
-		RunInTarget: true,
-	})
+		// Determine project name from target path.
+		projectName := filepath.Base(targetPath)
 
-	// Task 4: Make Maven wrapper executable
-	plan = append(plan, &tasks.ExecCommandTask{
-		Cmd:         "chmod",
-		Args:        []string{"+x", "mvnw"},
-		Desc:        "Make Maven wrapper executable",
-		TaskPrio:    103,
-		RunInTarget: true,
-	})
+		// URL-encode project name for query parameters.
+		encodedName := url.QueryEscape(projectName)
+
+		// Sanitize package name for Java conventions.
+		sanitizedPackage := strings.ReplaceAll(projectName, "-", "")
+		sanitizedPackage = strings.ReplaceAll(sanitizedPackage, " ", "")
+
+		// Construct Spring Initializr URL.
+		zipURL := fmt.Sprintf(
+			"https://start.spring.io/starter.zip?type=maven-project&language=java&groupId=com.example&artifactId=%s&name=%s&packageName=com.example.%s&packaging=jar&javaVersion=17&dependencies=web,lombok,actuator",
+			encodedName, encodedName, sanitizedPackage,
+		)
+
+		const zipFile = "spring-init.zip"
+
+		// Task 1: Download Spring Boot starter zip
+		plan = append(plan, &tasks.ExecCommandTask{
+			Cmd:         "curl",
+			Args:        []string{"-f", "-sS", "-o", zipFile, zipURL},
+			Desc:        fmt.Sprintf("Download Spring Boot starter for '%s'", projectName),
+			TaskPrio:    100,
+			RunInTarget: true,
+		})
+
+		// Task 2: Extract the zip, preserving directory structure
+		plan = append(plan, &tasks.ExecCommandTask{
+			Cmd: "unzip",
+			Args: []string{
+				"-q",
+				"-o",
+				zipFile,
+			},
+			Desc:        "Extract project files",
+			TaskPrio:    101,
+			RunInTarget: true,
+		})
+
+		// Task 3: Remove the zip file after extraction.
+		plan = append(plan, &tasks.ExecCommandTask{
+			Cmd:         "rm",
+			Args:        []string{zipFile},
+			Desc:        "Cleanup initialization artifacts",
+			TaskPrio:    102,
+			RunInTarget: true,
+		})
+
+		// Task 4: Make Maven wrapper executable
+		plan = append(plan, &tasks.ExecCommandTask{
+			Cmd:         "chmod",
+			Args:        []string{"+x", "mvnw"},
+			Desc:        "Make Maven wrapper executable",
+			TaskPrio:    103,
+			RunInTarget: true,
+		})
+
+	} else if err == nil {
+		// --- Path 2: pom.xml *does* exist (Maintenance) ---
+		// No maintenance tasks are defined here for now
+	} else {
+		// --- Path 3: Some other error ---
+		return nil, fmt.Errorf("could not check for pom.xml: %w", err)
+	}
 
 	return plan, nil
 }
