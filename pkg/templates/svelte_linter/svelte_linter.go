@@ -6,7 +6,7 @@ import (
 	"scbake/pkg/tasks"
 )
 
-//go:embed .eslintrc.js.tpl
+//go:embed eslint.config.js.tpl
 var templates embed.FS
 
 type Handler struct{}
@@ -15,28 +15,46 @@ type Handler struct{}
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
-	// Task 1: Create the ESLint config file (.eslintrc.js)
+	// Task 1: Create the ESLint config file (eslint.config.js)
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
-		TemplatePath: ".eslintrc.js.tpl",
-		OutputPath:   ".eslintrc.js",
-		Desc:         "Create Svelte ESLint configuration",
-		TaskPrio:     30,
+		TemplatePath: "eslint.config.js.tpl",
+		OutputPath:   "eslint.config.js",
+		Desc:         "Create Svelte ESLint 9 configuration",
+		TaskPrio:     1030,
 	})
 
-	// Task 2: Install necessary ESLint dependencies into the project
+	// Task 2: Install necessary ESLint dependencies
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd: "npm",
 		Args: []string{
 			"install",
 			"--save-dev",
 			"eslint",
-			"@sveltejs/eslint-config",
+			"eslint-plugin-svelte",
+			"globals",
+			"@eslint/js",
 			"prettier",
+			"eslint-config-prettier",
 		},
 		Desc:        "Install Svelte ESLint dependencies",
-		TaskPrio:    31,
-		RunInTarget: true, // Must run inside the project directory
+		TaskPrio:    1031,
+		RunInTarget: true,
+	})
+
+	// Task 3: Add robust 'lint' and 'lint:fix' scripts to package.json
+	plan = append(plan, &tasks.ExecCommandTask{
+		Cmd: "npm",
+		Args: []string{
+			"pkg",
+			"set",
+			// Use 'npx' to guarantee finding the local binary in all shells
+			"scripts.lint=npx eslint .",
+			"scripts.lint:fix=npx eslint . --fix",
+		},
+		Desc:        "Add standard lint scripts to package.json",
+		TaskPrio:    1032,
+		RunInTarget: true,
 	})
 
 	return plan, nil
