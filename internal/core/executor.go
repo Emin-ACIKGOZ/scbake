@@ -1,3 +1,4 @@
+// Package core contains the execution logic for running a scaffold plan.
 package core
 
 import (
@@ -9,6 +10,9 @@ import (
 
 // Braille spinner characters
 var spinnerChars = []string{"⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾"}
+
+// spinnerDelay defines the interval for spinner character updates.
+const spinnerDelay = 100 * time.Millisecond
 
 // Execute runs the plan.
 func Execute(plan *types.Plan, tc types.TaskContext) error {
@@ -38,7 +42,7 @@ func Execute(plan *types.Plan, tc types.TaskContext) error {
 					line := fmt.Sprintf("\r%s %s %s", prefix, spinnerChars[j%len(spinnerChars)], task.Description())
 					fmt.Print(line)
 					j++
-					time.Sleep(100 * time.Millisecond)
+					time.Sleep(spinnerDelay)
 				}
 			}
 		}()
