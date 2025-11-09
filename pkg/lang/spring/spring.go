@@ -88,7 +88,6 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 			TaskPrio:    103,
 			RunInTarget: true,
 		})
-
 	} else if err == nil {
 		// --- Path 2: pom.xml *does* exist (Maintenance) ---
 		// No maintenance tasks are defined here for now

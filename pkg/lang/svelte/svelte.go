@@ -70,7 +70,6 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 			TaskPrio:    301,
 			RunInTarget: true,
 		})
-
 	} else if err != nil {
 		return nil, fmt.Errorf("failed to check for existing Svelte project: %w", err)
 	}

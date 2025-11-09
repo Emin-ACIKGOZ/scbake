@@ -62,7 +62,7 @@ func runNew(projectName string, dirCreated *bool) error {
 	}
 
 	// 2. Create directory
-	logger.Log("📁", fmt.Sprintf("Creating directory: %s", projectName))
+	logger.Log("📁", "Creating directory: "+projectName)
 	if err := os.Mkdir(projectName, 0755); err != nil {
 		return err
 	}

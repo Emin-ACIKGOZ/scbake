@@ -52,7 +52,7 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "go",
 			Args:        []string{"mod", "init", moduleName}, // Use sanitized name
-			Desc:        fmt.Sprintf("Run go mod init %s", moduleName),
+			Desc:        "Run go mod init " + moduleName,
 			TaskPrio:    200,
 			RunInTarget: true,
 		})
@@ -65,7 +65,6 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 			TaskPrio:    300,
 			RunInTarget: true,
 		})
-
 	} else if err == nil {
 		// --- Path 2: go.mod *does* exist (Maintenance) ---
 		// We only run 'go mod tidy' to update dependencies if files were modified.
@@ -76,7 +75,6 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 			TaskPrio:    300,
 			RunInTarget: true,
 		})
-
 	} else {
 		// --- Path 3: Some other error ---
 		return nil, fmt.Errorf("could not check for go.mod: %w", err)

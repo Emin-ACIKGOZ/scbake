@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"scbake/internal/git"
@@ -132,7 +133,7 @@ func RunApply(rc RunContext) error {
 		if rollbackErr := git.RollbackToSavepoint(savepointTag); rollbackErr != nil {
 			return fmt.Errorf("CRITICAL: Task failed AND rollback failed: %w. Git tag '%s' must be manually removed", rollbackErr, savepointTag)
 		}
-		return fmt.Errorf("operation rolled back")
+		return errors.New("operation rolled back")
 	}
 
 	logger.Log("✍️", "Updating manifest...")
@@ -163,7 +164,7 @@ func RunApply(rc RunContext) error {
 		if rollbackErr := git.RollbackToSavepoint(savepointTag); rollbackErr != nil {
 			return fmt.Errorf("CRITICAL: Manifest save failed AND rollback failed: %w. Git tag '%s' must be manually removed", rollbackErr, savepointTag)
 		}
-		return fmt.Errorf("manifest save failed, operation rolled back")
+		return errors.New("manifest save failed, operation rolled back")
 	}
 
 	logger.Log("💾", "Committing changes...")
@@ -173,7 +174,7 @@ func RunApply(rc RunContext) error {
 		if rollbackErr := git.RollbackToSavepoint(savepointTag); rollbackErr != nil {
 			return fmt.Errorf("CRITICAL: Commit failed AND rollback failed: %w. Git tag '%s' must be manually removed", rollbackErr, savepointTag)
 		}
-		return fmt.Errorf("commit failed, operation rolled back")
+		return errors.New("commit failed, operation rolled back")
 	}
 
 	logger.SetTotalSteps(10)
@@ -269,7 +270,7 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 
 	// Only fail if neither a language nor tooling was specified.
 	if !didSomething {
-		return nil, "", nil, fmt.Errorf("no language or templates specified. Use --lang or --with")
+		return nil, "", nil, errors.New("no language or templates specified. Use --lang or --with")
 	}
 
 	return plan, commitMessage, changes, nil

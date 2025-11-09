@@ -12,14 +12,12 @@ var spinnerChars = []string{"⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "�
 
 // Execute runs the plan.
 func Execute(plan *types.Plan, tc types.TaskContext) error {
-
 	// Sort tasks by priority
 	sort.SliceStable(plan.Tasks, func(i, j int) bool {
 		return plan.Tasks[i].Priority() < plan.Tasks[j].Priority()
 	})
 
 	for i, task := range plan.Tasks {
-
 		// If we're in a dry run, just print the description
 		if tc.DryRun {
 			fmt.Printf("  [DRY RUN] %s\n", task.Description())
