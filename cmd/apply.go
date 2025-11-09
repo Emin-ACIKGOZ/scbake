@@ -1,3 +1,4 @@
+// Package cmd implements the command-line commands for scbake.
 package cmd
 
 import (
@@ -20,7 +21,7 @@ var applyCmd = &cobra.Command{
 	Long: `Applies language packs or tooling templates to a specified path.
 This command is atomic and requires a clean Git working tree.`,
 	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	Run: func(_ *cobra.Command, args []string) {
 		// Store the original argument for the manifest, which must be relative.
 		manifestPathArg := "."
 		targetPath := "."
@@ -40,9 +41,9 @@ This command is atomic and requires a clean Git working tree.`,
 			LangFlag:        langFlag,
 			WithFlag:        withFlag,
 			TargetPath:      absPath,         // Pass absolute path for execution stability.
-			ManifestPathArg: manifestPathArg, //  Pass Arg for manifest portability
-			DryRun:          dryRun,          // dryRun is the global flag
-			Force:           force,           // force is the global flag
+			ManifestPathArg: manifestPathArg, // Pass Arg for manifest portability.
+			DryRun:          dryRun,          // dryRun is the global flag.
+			Force:           force,           // force is the global flag.
 		}
 
 		if err := core.RunApply(rc); err != nil {
