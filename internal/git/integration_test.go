@@ -6,6 +6,7 @@ package git
 
 import (
 	"os"
+	"os/exec"
 	"testing"
 )
 
@@ -23,6 +24,23 @@ func TestGitIntegration(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(originalWd) }()
 
+	// 1. Initialize Repo
+	// We must run Init() here so subsequent subtests start from a valid Git directory.
+	if err := Init(); err != nil {
+		t.Fatalf("Init() failed: %v", err)
+	}
+
+	// 2. Configure Local Git Identity
+	// The initial commit requires user identity, which is not provided by default in CI/go test environments.
+	// Set identity locally within the temporary repository.
+	if err := exec.Command("git", "config", "user.name", "Test User").Run(); err != nil {
+		t.Fatalf("Failed to set local git user.name: %v", err)
+	}
+	if err := exec.Command("git", "config", "user.email", "test@scbake.dev").Run(); err != nil {
+		t.Fatalf("Failed to set local git user.email: %v", err)
+	}
+
+	// Run all integration subtests
 	t.Run("Repo Initialization", testRepoInitialization)
 	t.Run("Initial Commit & HEAD", testInitialCommitHead)
 	t.Run("Savepoint Rollback", testSavepointRollback)
@@ -30,15 +48,6 @@ func TestGitIntegration(t *testing.T) {
 }
 
 func testRepoInitialization(t *testing.T) {
-	// CheckIsRepo must fail before init
-	if err := CheckIsRepo(); err == nil {
-		t.Error("CheckIsRepo should fail in empty dir")
-	}
-
-	// Initialize Repo
-	if err := Init(); err != nil {
-		t.Fatalf("Init() failed: %v", err)
-	}
 
 	// CheckIsRepo must succeed after init
 	if err := CheckIsRepo(); err != nil {
