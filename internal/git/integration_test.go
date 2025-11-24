@@ -48,7 +48,6 @@ func TestGitIntegration(t *testing.T) {
 }
 
 func testRepoInitialization(t *testing.T) {
-
 	// CheckIsRepo must succeed after init
 	if err := CheckIsRepo(); err != nil {
 		t.Error("CheckIsRepo should succeed after Init")
