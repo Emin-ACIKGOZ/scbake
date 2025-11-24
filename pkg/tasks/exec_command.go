@@ -1,3 +1,6 @@
+// Copyright 2025 Emin Salih Açıkgöz
+// SPDX-License-Identifier: gpl3-or-later
+
 // Package tasks defines the executable units of work used in a scaffolding plan.
 package tasks
 
