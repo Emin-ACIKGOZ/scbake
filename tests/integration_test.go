@@ -38,7 +38,6 @@ func TestMain(m *testing.M) {
 	binaryPath = filepath.Join(tmpDir, binName)
 
 	// Build the project (targeting the root directory "../")
-	// -tags test ensures we don't accidentally pull in dev dependencies if you had any
 	//nolint:gosec // Test runner needs to build the binary using variable paths
 	buildCmd := exec.CommandContext(context.Background(), "go", "build", "-o", binaryPath, "../")
 	if out, err := buildCmd.CombinedOutput(); err != nil {
@@ -49,12 +48,14 @@ func TestMain(m *testing.M) {
 	fmt.Println("[Setup] Configuring Git identity for tests...")
 
 	// Set a dummy user name globally
-	// The .Run() is used here to execute the command and discard the error,
-	// as failure to set a global git config shouldn't fail TestMain entirely.
-	exec.Command("git", "config", "--global", "user.name", "Test Runner").Run()
+	if err := exec.Command("git", "config", "--global", "user.name", "Test Runner").Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to set git user.name: %v\n", err)
+	}
 
 	// Set a dummy email globally
-	exec.Command("git", "config", "--global", "user.email", "runner@test.com").Run()
+	if err := exec.Command("git", "config", "--global", "user.email", "runner@test.com").Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to set git user.email: %v\n", err)
+	}
 
 	// 2. Execution: Run the tests
 	exitCode := m.Run()
@@ -151,7 +152,6 @@ func TestNewCommand(t *testing.T) {
 	// This should create the dir, init git, and run 'go mod init'
 	output, err := runCLI("new", projectName, "--lang", "go")
 	if err != nil {
-		// This fatal error message is expected to change now that Git is configured.
 		t.Fatalf("scbake new failed: %v\nOutput:\n%s", err, output)
 	}
 
