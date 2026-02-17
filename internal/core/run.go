@@ -21,7 +21,7 @@ import (
 
 // Define constants for step logging and cyclomatic complexity reduction
 const (
-	runApplyTotalSteps  = 5 // Reduced from 9 since we removed git steps
+	runApplyTotalSteps  = 5 // Now 5 steps, as git steps are part of template logic
 	langApplyTotalSteps = 5
 )
 
@@ -40,6 +40,9 @@ func NewStepLogger(totalSteps int, dryRun bool) *StepLogger {
 // Log prints the current step message.
 func (l *StepLogger) Log(emoji, message string) {
 	l.currentStep++
+	if l.DryRun && l.currentStep > 2 {
+		return
+	}
 	fmt.Printf("[%d/%d] %s %s\n", l.currentStep, l.totalSteps, emoji, message)
 }
 
@@ -100,11 +103,13 @@ func RunApply(rc RunContext) error {
 
 	logger.Log("📝", "Building execution plan...")
 
-	plan, commitMessage, changes, err := buildPlan(rc)
+	// Deduplicate requested templates to ensure idempotency
+	rc.WithFlag = deduplicateTemplates(rc.WithFlag)
+
+	plan, _, changes, err := buildPlan(rc)
 	if err != nil {
 		return err
 	}
-	_ = commitMessage // We no longer use git commit messages, but keeping var for logging/history if needed
 
 	// Prepare task context
 	// NOTE: shallow copy of manifest. Ideally safe as we append to slices creating new backing arrays
@@ -118,7 +123,7 @@ func RunApply(rc RunContext) error {
 		Manifest:   &futureManifest,
 		TargetPath: rc.TargetPath,
 		Force:      rc.Force,
-		Tx:         tx, // Inject the transaction manager
+		Tx:         tx,
 	}
 
 	if rc.DryRun {
@@ -129,11 +134,7 @@ func RunApply(rc RunContext) error {
 
 	// 3. Execute and Finalize
 	// We pass the transaction and paths down.
-	if err := executeAndFinalize(logger, plan, tc, m, changes, rootPath, tx); err != nil {
-		return err
-	}
-
-	return nil
+	return executeAndFinalize(logger, plan, tc, m, changes, rootPath, tx)
 }
 
 // executeAndFinalize runs the plan, updates manifest, and commits the transaction.
@@ -203,8 +204,20 @@ func updateManifest(m *types.Manifest, changes *manifestChanges) {
 	}
 }
 
+func deduplicateTemplates(requested []string) []string {
+	seen := make(map[string]bool)
+	var result []string
+	for _, t := range requested {
+		if !seen[t] {
+			seen[t] = true
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
 // buildPlan constructs the list of tasks based on CLI flags.
-func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) { // FIXED: cyclop (Reduced complexity)
+func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
 	changes := &manifestChanges{}
 	commitMessage := "scbake: Apply templates"
@@ -239,7 +252,7 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) { /
 }
 
 // handleLangFlag processes the --lang flag, adding language tasks and project info.
-func handleLangFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) (string, error) { // Extracted for cyclop reduction
+func handleLangFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) (string, error) {
 	// Binary check
 	switch rc.LangFlag {
 	case "go":
@@ -284,7 +297,7 @@ func handleLangFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) (
 }
 
 // handleWithFlag processes the --with flag, adding template tasks.
-func handleWithFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) error { // Extracted for cyclop reduction
+func handleWithFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) error {
 	for _, tmplName := range rc.WithFlag {
 		handler, err := templates.GetHandler(tmplName)
 		if err != nil {
