@@ -96,7 +96,15 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 		return err
 	}
 
-	// 3. Create the output file
+	// 3. Safety Tracking: Register the file with the transaction manager.
+	// If it exists, it will be backed up. If not, it will be marked for cleanup.
+	if tc.Tx != nil {
+		if err := tc.Tx.Track(finalPath); err != nil {
+			return fmt.Errorf("failed to track file %s: %w", finalPath, err)
+		}
+	}
+
+	// 4. Create the output file
 	// G304: Path is explicitly sanitized and verified in checkFilePreconditions
 	//nolint:gosec
 	f, err := os.Create(finalPath)
@@ -111,7 +119,7 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 		}
 	}()
 
-	// 4. Execute the template and write to the file
+	// 5. Execute the template and write to the file
 	if err = tpl.Execute(f, tc.Manifest); err != nil {
 		return fmt.Errorf("failed to render template %s: %w", t.TemplatePath, err)
 	}

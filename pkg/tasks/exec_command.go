@@ -7,7 +7,9 @@ package tasks
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"scbake/internal/types"
 )
 
@@ -27,6 +29,12 @@ type ExecCommandTask struct {
 
 	// If true, run in TaskContext.TargetPath, else run in "."
 	RunInTarget bool
+
+	// PredictedCreated lists files or directories this command is expected to create.
+	// If a transaction is active, these paths are tracked *before* execution.
+	// This allows the rollback system to clean up artifacts (like node_modules)
+	// even if the command is opaque.
+	PredictedCreated []string
 }
 
 // Description returns a human-readable summary of the task.
@@ -44,6 +52,23 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 	if tc.DryRun {
 		// In dry-run, we just log what we *would* have done.
 		return nil
+	}
+
+	// Safety Tracking for Predicted Outputs
+	if tc.Tx != nil {
+		for _, pred := range t.PredictedCreated {
+			// Resolve predicted path relative to TargetPath
+			// (Commands usually run relative to where they are invoked)
+			fullPath := filepath.Join(tc.TargetPath, pred)
+
+			// Only track if it does NOT exist.
+			// We want to clean up new artifacts, but avoiding backing up massive existing folders (like node_modules).
+			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+				if err := tc.Tx.Track(fullPath); err != nil {
+					return fmt.Errorf("failed to track predicted output %s: %w", fullPath, err)
+				}
+			}
+		}
 	}
 
 	// The command and arguments must be carefully controlled via the manifest to prevent injection.
