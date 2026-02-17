@@ -36,7 +36,8 @@ or the projects currently managed in this repository's scbake.toml.`,
 
 		case "projects":
 			fmt.Println("Managed Projects (from scbake.toml):")
-			m, err := manifest.Load()
+			// Pass "." as start path, ignore rootPath return
+			m, _, err := manifest.Load(".")
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error loading scbake.toml: %v\n", err)
 				os.Exit(1)
@@ -58,4 +59,5 @@ or the projects currently managed in this repository's scbake.toml.`,
 }
 
 func init() {
+	rootCmd.AddCommand(listCmd)
 }
