@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"scbake/internal/util/fileutil"
 	"testing"
 )
 
@@ -17,7 +18,7 @@ func createFile(t *testing.T, path, content string, mode os.FileMode) {
 	t.Helper()
 
 	// Ensure parent dir exists (restricted perms per gosec G301)
-	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), fileutil.DirPerms); err != nil {
 		t.Fatalf("failed to create parent dir for %s: %v", path, err)
 	}
 
@@ -61,7 +62,7 @@ func TestRollback_CreatedFiles(t *testing.T) {
 		t.Fatalf("Track failed: %v", err)
 	}
 
-	createFile(t, newFile, "package main", 0644)
+	createFile(t, newFile, "package main", fileutil.FilePerms)
 
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback failed: %v", err)
@@ -81,7 +82,7 @@ func TestRollback_ModifiedFiles(t *testing.T) {
 
 	targetFile := filepath.Join(rootDir, "config.json")
 	originalContent := `{"version": 1}`
-	originalMode := os.FileMode(0750)
+	originalMode := fileutil.DirPerms
 
 	createFile(t, targetFile, originalContent, originalMode)
 
@@ -89,7 +90,7 @@ func TestRollback_ModifiedFiles(t *testing.T) {
 		t.Fatalf("Track failed: %v", err)
 	}
 
-	createFile(t, targetFile, `{"version": 2}`, 0644)
+	createFile(t, targetFile, `{"version": 2}`, fileutil.FilePerms)
 
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback failed: %v", err)
@@ -129,21 +130,21 @@ func TestRollback_NestedStructures_LIFO(t *testing.T) {
 	if err := tx.Track(dirA); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(dirA, 0750); err != nil {
+	if err := os.Mkdir(dirA, fileutil.DirPerms); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := tx.Track(dirB); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(dirB, 0750); err != nil {
+	if err := os.Mkdir(dirB, fileutil.DirPerms); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := tx.Track(fileC); err != nil {
 		t.Fatal(err)
 	}
-	createFile(t, fileC, "content", 0644)
+	createFile(t, fileC, "content", fileutil.FilePerms)
 
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback failed: %v", err)
@@ -164,8 +165,8 @@ func TestRollback_SameBasenameFiles(t *testing.T) {
 	fileA := filepath.Join(rootDir, "a", "config.json")
 	fileB := filepath.Join(rootDir, "b", "config.json")
 
-	createFile(t, fileA, "A", 0644)
-	createFile(t, fileB, "B", 0644)
+	createFile(t, fileA, "A", fileutil.FilePerms)
+	createFile(t, fileB, "B", fileutil.FilePerms)
 
 	if err := tx.Track(fileA); err != nil {
 		t.Fatal(err)
@@ -174,8 +175,8 @@ func TestRollback_SameBasenameFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	createFile(t, fileA, "A2", 0644)
-	createFile(t, fileB, "B2", 0644)
+	createFile(t, fileA, "A2", fileutil.FilePerms)
+	createFile(t, fileB, "B2", fileutil.FilePerms)
 
 	if err := tx.Rollback(); err != nil {
 		t.Fatal(err)
@@ -205,7 +206,7 @@ func TestCommit_Cleanup(t *testing.T) {
 	}
 
 	file := filepath.Join(rootDir, "test.txt")
-	createFile(t, file, "data", 0644)
+	createFile(t, file, "data", fileutil.FilePerms)
 
 	if err := tx.Track(file); err != nil {
 		t.Fatal(err)
@@ -232,7 +233,7 @@ func TestTrack_ExistingDirectory_NoBackup(t *testing.T) {
 	}
 
 	dir := filepath.Join(rootDir, "existing_dir")
-	if err := os.Mkdir(dir, 0750); err != nil {
+	if err := os.Mkdir(dir, fileutil.DirPerms); err != nil {
 		t.Fatal(err)
 	}
 

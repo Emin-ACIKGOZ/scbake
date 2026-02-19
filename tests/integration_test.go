@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"scbake/internal/util/fileutil"
 	"strings"
 	"testing"
 )
@@ -27,7 +28,7 @@ func TestMain(m *testing.M) {
 	tmpDir, err := os.MkdirTemp("", "scbake-integration-build")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create temp dir: %v\n", err)
-		os.Exit(1)
+		os.Exit(fileutil.ExitError)
 	}
 
 	// Handle Windows executable extension
@@ -42,7 +43,7 @@ func TestMain(m *testing.M) {
 	buildCmd := exec.CommandContext(context.Background(), "go", "build", "-o", binaryPath, "../")
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "Build failed: %v\nOutput:\n%s\n", err, out)
-		os.Exit(1)
+		os.Exit(fileutil.ExitError)
 	}
 
 	fmt.Println("[Setup] Configuring Git identity for tests...")
@@ -105,7 +106,7 @@ func TestListCommand(t *testing.T) {
 			name:        "Unknown Resource",
 			args:        []string{"list", "not-exist"},
 			wantContain: "Unknown resource type",
-			wantError:   true, // Should fail with exit code 1
+			wantError:   true, // Should fail with exit error
 		},
 	}
 
@@ -164,7 +165,7 @@ func TestNewCommand(t *testing.T) {
 	}
 
 	// 2. Git initialized?
-	if _, err := os.Stat(filepath.Join(projectPath, ".git")); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(projectPath, fileutil.GitDir)); os.IsNotExist(err) {
 		t.Error("Git repository not initialized (.git missing)")
 	}
 
@@ -173,9 +174,9 @@ func TestNewCommand(t *testing.T) {
 		t.Error("Go language pack failed: go.mod missing")
 	}
 
-	// 4. Manifest created? (scbake.toml existence)
-	if _, err := os.Stat(filepath.Join(projectPath, "scbake.toml")); os.IsNotExist(err) {
-		t.Error("Manifest file (scbake.toml) missing")
+	// 4. Manifest created?
+	if _, err := os.Stat(filepath.Join(projectPath, fileutil.ManifestFileName)); os.IsNotExist(err) {
+		t.Error("Manifest file missing")
 	}
 
 	// 5. Idempotency / Safety check
