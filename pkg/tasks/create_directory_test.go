@@ -53,6 +53,7 @@ func TestCreateDirTask_Transaction(t *testing.T) {
 	tx, _ := transaction.New(rootDir)
 
 	targetDir := filepath.Join(rootDir, "tracked_dir")
+	absTargetDir, _ := filepath.Abs(targetDir)
 
 	task := &CreateDirTask{
 		Path:     targetDir,
@@ -75,7 +76,7 @@ func TestCreateDirTask_Transaction(t *testing.T) {
 		t.Fatalf("Rollback failed: %v", err)
 	}
 
-	if _, err := os.Stat(targetDir); !os.IsNotExist(err) {
-		t.Error("Directory was not removed by rollback, likely wasn't tracked")
+	if _, err := os.Stat(absTargetDir); !os.IsNotExist(err) {
+		t.Error("Directory was not removed by rollback, likely wasn't tracked via absolute path")
 	}
 }
