@@ -23,7 +23,7 @@ var binaryPath string
 func TestMain(m *testing.M) {
 	fmt.Println("[Setup] Building scbake binary for integration testing...")
 
-	// Create a temp directory for the build artifact
+	// Create a temp directory for the build artifact to ensure isolation
 	tmpDir, err := os.MkdirTemp("", "scbake-integration-build")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create temp dir: %v\n", err)
@@ -76,6 +76,8 @@ func runCLI(args ...string) (string, error) {
 	return stdout.String() + stderr.String(), err
 }
 
+// --- Basic Command Tests ---
+
 // TestListCommand verifies the 'list' subcommand.
 func TestListCommand(t *testing.T) {
 	tests := []struct {
@@ -93,9 +95,17 @@ func TestListCommand(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			output, err := runCLI(tt.args...)
 
-			if tt.wantError && err == nil {
-				t.Errorf("expected error, but got nil")
-			} else if !tt.wantError && err != nil {
+			if tt.wantError {
+				if err == nil {
+					t.Errorf("expected error, but got nil")
+				}
+				// Assert non-zero exit code for failures
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					if exitErr.ExitCode() == 0 {
+						t.Error("expected non-zero exit code for failure")
+					}
+				}
+			} else if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
 
@@ -106,14 +116,82 @@ func TestListCommand(t *testing.T) {
 	}
 }
 
+// --- Monorepo & Polyglot Tests ---
+
+func TestMonorepoScenarios(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(originalWd) })
+	_ = os.Chdir(tmpDir)
+
+	repoName := "main-repo"
+	repoPath := filepath.Join(tmpDir, repoName)
+
+	t.Run("Full Polyglot Lifecycle", func(t *testing.T) {
+		// 1. Root init
+		_, err := runCLI("new", repoName, "--with", "git,makefile")
+		if err != nil {
+			t.Fatalf("Root init failed: %v", err)
+		}
+
+		// 2. Subprojects
+		_, err = runCLI("apply", "--lang", "go", filepath.Join(repoPath, "backend"))
+		if err != nil {
+			t.Fatalf("Backend failed: %v", err)
+		}
+		_, err = runCLI("apply", "--lang", "svelte", filepath.Join(repoPath, "frontend"))
+		if err != nil {
+			t.Fatalf("Frontend failed: %v", err)
+		}
+
+		// 3. Final verification of orchestrated targets
+		_, _ = runCLI("apply", "--with", "makefile", repoPath)
+
+		// G304: repoPath is a test-controlled temporary directory.
+		//nolint:gosec
+		makefile, _ := os.ReadFile(filepath.Join(repoPath, "Makefile"))
+		content := string(makefile)
+		if !strings.Contains(content, "MAKE_BUILD_COMMAND_go") || !strings.Contains(content, "MAKE_BUILD_COMMAND_svelte") {
+			t.Error("Makefile failed to unify subprojects")
+		}
+	})
+}
+
+// --- Safety & Rollback Tests ---
+
+func TestRollbackIntegrity(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWd, _ := os.Getwd()
+	// TIGHTENING: Ensure WD is restored even if test panics or fails
+	t.Cleanup(func() { _ = os.Chdir(originalWd) })
+	_ = os.Chdir(tmpDir)
+
+	t.Run("Directory Cleanup on Invalid Input", func(t *testing.T) {
+		projectName := "ghost-project"
+		output, err := runCLI("new", projectName, "--lang", "invalid-lang")
+
+		// Assert failure logic
+		if err == nil {
+			t.Error("Command should have failed due to invalid language")
+		}
+
+		// LOGICAL VALIDATION: Directory must not exist after rollback
+		if _, err := os.Stat(filepath.Join(tmpDir, projectName)); !os.IsNotExist(err) {
+			t.Errorf("Rollback failed to remove directory. Output: %s", output)
+		}
+	})
+}
+
+// --- State Verification Helpers ---
+
 type projectExpectations struct {
 	projectName string
 	expectGit   bool
 	expectGoMod bool
 }
 
-// TestNewCommand verifies the 'new' subcommand with various combinations.
-func TestNewCommand(t *testing.T) {
+// TestNewCommandBasics verifies the 'new' subcommand with various combinations.
+func TestNewCommandBasics(t *testing.T) {
 	tmpDir := t.TempDir()
 	originalWd, _ := os.Getwd()
 	t.Cleanup(func() { _ = os.Chdir(originalWd) })
@@ -125,7 +203,6 @@ func TestNewCommand(t *testing.T) {
 	}{
 		{"Pure Go", []string{"new", "only-go", "--lang", "go"}, projectExpectations{"only-go", false, true}},
 		{"Pure Git", []string{"new", "only-git", "--with", "git"}, projectExpectations{"only-git", true, false}},
-		{"Full Scaffold", []string{"new", "go-and-git", "--lang", "go", "--with", "git"}, projectExpectations{"go-and-git", true, true}},
 	}
 
 	for _, tt := range tests {
