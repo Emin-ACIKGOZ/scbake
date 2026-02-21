@@ -8,8 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"scbake/internal/types"
 	"testing"
+
+	"scbake/internal/types"
 )
 
 func TestGitTemplate_Fresh(t *testing.T) {
@@ -25,7 +26,7 @@ func TestGitTemplate_Fresh(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewHandler()
+	h := &Handler{}
 	tasks, err := h.GetTasks(tmpDir)
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
@@ -63,7 +64,7 @@ func TestGitTemplate_Fresh(t *testing.T) {
 		t.Fatalf("Commit failed: %v", err)
 	}
 
-	// Verify
+	// Verify repository created
 	if _, err := os.Stat(filepath.Join(tmpDir, ".git")); os.IsNotExist(err) {
 		t.Error(".git directory not found")
 	}
@@ -96,7 +97,7 @@ func TestGitTemplate_Idempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewHandler()
+	h := &Handler{}
 	tasks, err := h.GetTasks(tmpDir)
 	if err != nil {
 		t.Fatal(err)

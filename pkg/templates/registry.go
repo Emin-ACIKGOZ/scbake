@@ -6,6 +6,8 @@ package templates
 
 import (
 	"fmt"
+	"sort"
+
 	"scbake/internal/types"
 	cighub "scbake/pkg/templates/ci_github"
 	devcontainer "scbake/pkg/templates/devcontainer"
@@ -15,7 +17,6 @@ import (
 	"scbake/pkg/templates/makefile"
 	mavenlinter "scbake/pkg/templates/maven_linter"
 	sveltelinter "scbake/pkg/templates/svelte_linter"
-	"sort"
 )
 
 // Handler is the interface all tooling template handlers must implement.
@@ -24,7 +25,7 @@ type Handler interface {
 	GetTasks(targetPath string) ([]types.Task, error)
 }
 
-// Map of all available template handlers.
+// handlers holds the map of all available template handlers.
 var handlers = map[string]Handler{
 	"makefile":      &makefile.Handler{},
 	"ci_github":     &cighub.Handler{},
@@ -33,7 +34,13 @@ var handlers = map[string]Handler{
 	"maven_linter":  &mavenlinter.Handler{},
 	"svelte_linter": &sveltelinter.Handler{},
 	"devcontainer":  &devcontainer.Handler{},
-	"git":           &git.Handler{}, // Registered Git template
+	"git":           &git.Handler{},
+}
+
+// Register allows external packages (like tests) to inject custom handlers.
+// This is essential for testing failure scenarios.
+func Register(name string, h Handler) {
+	handlers[name] = h
 }
 
 // GetHandler returns the correct template handler for the given string.

@@ -12,11 +12,6 @@ import (
 // Handler implements the templates.Handler interface for Git.
 type Handler struct{}
 
-// NewHandler creates a new Git template handler.
-func NewHandler() *Handler {
-	return &Handler{}
-}
-
 // GetTasks returns the plan to initialize a Git repository.
 // It performs `git init`, `git add .`, and `git commit`.
 func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
@@ -26,7 +21,7 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	// within the VersionControl band.
 	seq := types.NewPrioritySequence(types.PrioVersionControl, types.MaxVersionControl)
 
-	// Task 1: Initialize Git repository
+	// Task 1: Initialize Git repository.
 	// We predict creation of ".git" so the transaction system can rollback the entire repo creation on failure.
 	prio, err := seq.Next()
 	if err != nil {
@@ -41,7 +36,7 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 		PredictedCreated: []string{".git"},
 	})
 
-	// Task 2: Stage all files
+	// Task 2: Stage all files.
 	prio, err = seq.Next()
 	if err != nil {
 		return nil, err
@@ -54,7 +49,7 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 		RunInTarget: true,
 	})
 
-	// Task 3: Create initial commit
+	// Task 3: Create initial commit.
 	// We use "commit -m ..." to snapshot the scaffolding state.
 	// Note: If 'git add' found nothing (e.g. empty dir), this might fail with "nothing to commit".
 	// However, scbake always creates scbake.toml at minimum, so this should usually succeed.
