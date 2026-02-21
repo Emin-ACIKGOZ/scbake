@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // runGitCommand is a simple helper for running Git commands.
@@ -20,7 +21,8 @@ func runGitCommand(args ...string) (*bytes.Buffer, error) {
 	if err := cmd.Run(); err != nil {
 		// Use stderr for the error message if available
 		if stderr.Len() > 0 {
-			return nil, errors.New(stderr.String())
+			msg := strings.TrimSpace(stderr.String())
+			return nil, fmt.Errorf("%s: %w", msg, err)
 		}
 		return nil, err
 	}
