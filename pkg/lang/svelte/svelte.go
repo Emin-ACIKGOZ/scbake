@@ -1,3 +1,4 @@
+// Package svelte provides the task handler for initializing Svelte projects.
 package svelte
 
 import (
@@ -8,6 +9,7 @@ import (
 	"scbake/pkg/tasks"
 )
 
+// Handler implements the lang.Handler interface for Svelte projects.
 type Handler struct{}
 
 // GetTasks returns the list of tasks required to set up a Svelte project.
