@@ -84,7 +84,7 @@ func runNew(projectName string, dirCreated *bool) error {
 		return err
 	}
 
-	// Get the CWD inside the new dir
+	// Get the CWD inside the new dir (Absolute Path)
 	cwd, _ := os.Getwd()
 
 	// Defer a function to return to the original CWD (which is the parent)
@@ -117,7 +117,7 @@ func runNew(projectName string, dirCreated *bool) error {
 	rc := core.RunContext{
 		LangFlag:   newLangFlag,
 		WithFlag:   newWithFlag,
-		TargetPath: ".",
+		TargetPath: cwd,    // Use absolute path (cwd) instead of "."
 		DryRun:     dryRun, // Use global flag
 		Force:      force,  // Use global flag
 	}
