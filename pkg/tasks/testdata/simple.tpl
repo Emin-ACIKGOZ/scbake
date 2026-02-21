@@ -1,0 +1,1 @@
+Hello {{ (index .Projects 0).Name }} from {{ .SbakeVersion }}
