@@ -1,3 +1,6 @@
+// Copyright 2025 Emin Salih Açıkgöz
+// SPDX-License-Identifier: gpl3-or-later
+
 // internal/git/integration_test.go
 package git
 

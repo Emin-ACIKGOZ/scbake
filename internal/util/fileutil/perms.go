@@ -1,3 +1,6 @@
+// Copyright 2025 Emin Salih Açıkgöz
+// SPDX-License-Identifier: gpl3-or-later
+
 // Package fileutil provides general utility functions related to file system operations.
 package fileutil
 

@@ -1,3 +1,6 @@
+// Copyright 2025 Emin Salih Açıkgöz
+// SPDX-License-Identifier: gpl3-or-later
+
 // Package golinter provides the task handler for setting up Go linting via golangci-lint.
 package golinter
 
