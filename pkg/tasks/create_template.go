@@ -1,3 +1,4 @@
+// Package tasks defines the executable units of work used in a scaffolding plan.
 package tasks
 
 import (
@@ -8,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"scbake/internal/types"
+	"scbake/internal/util"
+	"strings"
 	"text/template"
 )
 
@@ -29,15 +32,18 @@ type CreateTemplateTask struct {
 	TaskPrio int
 }
 
+// Description returns a human-readable summary of the task.
 func (t *CreateTemplateTask) Description() string {
 	return t.Desc
 }
 
+// Priority returns the execution priority level.
 func (t *CreateTemplateTask) Priority() int {
 	return t.TaskPrio
 }
 
-func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
+// Execute performs the template creation task.
+func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 	if tc.DryRun {
 		// In dry-run, log what we *would* have done.
 		return nil
@@ -56,11 +62,14 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
 	}
 
 	// 3. Determine the final output path
-	finalPath := filepath.Join(tc.TargetPath, t.OutputPath)
+	finalPath := filepath.Join(tc.TargetPath, filepath.Clean(t.OutputPath))
+	if !strings.HasPrefix(finalPath, tc.TargetPath) {
+		return fmt.Errorf("output path '%s' is outside the target path '%s'", t.OutputPath, tc.TargetPath)
+	}
 
 	// 4. Ensure the directory exists
 	dir := filepath.Dir(finalPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, util.DirPerms); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
@@ -80,7 +89,13 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", finalPath, err)
 	}
-	defer f.Close()
+
+	// Check the return value of f.Close()
+	defer func() {
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+	}()
 
 	// 7. Execute the template and write to the file
 	if err := tpl.Execute(f, tc.Manifest); err != nil {

@@ -1,3 +1,4 @@
+// Package tasks defines the executable units of work used in a scaffolding plan.
 package tasks
 
 import (
@@ -25,20 +26,24 @@ type ExecCommandTask struct {
 	RunInTarget bool
 }
 
+// Description returns a human-readable summary of the task.
 func (t *ExecCommandTask) Description() string {
 	return t.Desc
 }
 
+// Priority returns the execution priority level.
 func (t *ExecCommandTask) Priority() int {
 	return t.TaskPrio
 }
 
+// Execute performs the command execution task.
 func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 	if tc.DryRun {
 		// In dry-run, we just log what we *would* have done.
 		return nil
 	}
 
+	// The command and arguments must be carefully controlled via the manifest to prevent injection.
 	cmd := exec.CommandContext(tc.Ctx, t.Cmd, t.Args...)
 
 	// Set the working directory for the command
