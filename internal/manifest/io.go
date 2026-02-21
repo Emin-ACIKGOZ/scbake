@@ -1,3 +1,4 @@
+// Package manifest provides functions for reading and writing the scbake manifest file (scbake.toml).
 package manifest
 
 import (
@@ -7,6 +8,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// ManifestFileName is the name of the project manifest file.
 const ManifestFileName = "scbake.toml"
 
 // Load reads scbake.toml from disk or returns a new, empty manifest.
@@ -41,9 +43,21 @@ func Save(m *types.Manifest) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+
+	// Capture the potential error from f.Close() and return it if writing was successful.
+	// This is necessary because f.Close() can return errors related to disk sync or I/O.
+	defer func() {
+		if closeErr := f.Close(); err == nil { // Only capture close error if no prior error occurred
+			err = closeErr
+		}
+	}()
 
 	// Use a TOML encoder to write to the file
 	encoder := toml.NewEncoder(f)
-	return encoder.Encode(m)
+	if encodeErr := encoder.Encode(m); encodeErr != nil {
+		return encodeErr // Return encoding error immediately
+	}
+
+	// The deferred function handles the close error.
+	return err
 }
