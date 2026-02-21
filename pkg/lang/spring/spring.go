@@ -1,7 +1,6 @@
 // Copyright 2025 Emin Salih Açıkgöz
 // SPDX-License-Identifier: gpl3-or-later
 
-// Package spring provides the task handler for initializing Spring Boot projects.
 package spring
 
 import (

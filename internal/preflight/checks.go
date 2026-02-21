@@ -1,7 +1,6 @@
 // Copyright 2025 Emin Salih Açıkgöz
 // SPDX-License-Identifier: gpl3-or-later
 
-// Package preflight contains essential checks run before executing a scaffolding plan.
 package preflight
 
 import (

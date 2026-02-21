@@ -1,7 +1,6 @@
 // Copyright 2025 Emin Salih Açıkgöz
 // SPDX-License-Identifier: gpl3-or-later
 
-// Package fileutil provides centralized constants for filesystem metadata and permissions.
 package fileutil
 
 const (

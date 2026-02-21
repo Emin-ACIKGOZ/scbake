@@ -1,7 +1,6 @@
 // Copyright 2025 Emin Salih Açıkgöz
 // SPDX-License-Identifier: gpl3-or-later
 
-// Package devcontainer provides the task handler for setting up Dev Containers (VS Code).
 package devcontainer
 
 import (
