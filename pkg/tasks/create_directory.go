@@ -19,7 +19,16 @@ type CreateDirTask struct {
 }
 
 // Execute performs the task of creating the directory.
-func (t *CreateDirTask) Execute(_ types.TaskContext) error {
+func (t *CreateDirTask) Execute(tc types.TaskContext) error {
+	// Safety Tracking: If a transaction manager is present, register this path.
+	// If the directory doesn't exist, it will be marked for cleanup on rollback.
+	// If it does exist, this is a no-op (idempotent).
+	if !tc.DryRun && tc.Tx != nil {
+		if err := tc.Tx.Track(t.Path); err != nil {
+			return fmt.Errorf("failed to track directory %s: %w", t.Path, err)
+		}
+	}
+
 	// Use the constant from the centralized location
 	if err := os.MkdirAll(t.Path, fileutil.DirPerms); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", t.Path, err)

@@ -8,6 +8,7 @@ import (
 	"embed"
 	"os"
 	"path/filepath"
+	"scbake/internal/filesystem/transaction"
 	"scbake/internal/types"
 	"testing"
 )
@@ -83,5 +84,55 @@ func TestCreateTemplateTask(t *testing.T) {
 	tc.Force = false
 	if err := attackTask.Execute(tc); err == nil {
 		t.Error("Path traversal attack succeeded! It should have been blocked.")
+	}
+}
+
+func TestCreateTemplateTask_Transaction(t *testing.T) {
+	// Setup with Transaction
+	rootDir := t.TempDir()
+	tx, _ := transaction.New(rootDir)
+
+	// FIX: Provide a valid manifest so the template can render {{ (index .Projects 0).Name }}
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		Projects: []types.Project{
+			{Name: "TrackedProject"},
+		},
+	}
+
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: rootDir,
+		Manifest:   manifest,
+		Tx:         tx,
+	}
+
+	task := &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/simple.tpl",
+		OutputPath:   "tracked_file.txt",
+		Desc:         "Tracked File",
+		TaskPrio:     100,
+	}
+
+	// Execute
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Task execution failed: %v", err)
+	}
+
+	// File should exist
+	path := filepath.Join(rootDir, "tracked_file.txt")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Fatal("File was not created")
+	}
+
+	// Rollback
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+
+	// File should be gone
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("File was not removed by rollback")
 	}
 }
