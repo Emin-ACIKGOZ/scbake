@@ -6,6 +6,7 @@ package git
 
 import (
 	"scbake/internal/types"
+	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
 )
 
@@ -22,7 +23,7 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	seq := types.NewPrioritySequence(types.PrioVersionControl, types.MaxVersionControl)
 
 	// Task 1: Initialize Git repository.
-	// We predict creation of ".git" so the transaction system can rollback the entire repo creation on failure.
+	// We predict creation of GitDir so the transaction system can rollback the entire repo creation on failure.
 	prio, err := seq.Next()
 	if err != nil {
 		return nil, err
@@ -33,7 +34,7 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 		Desc:             "Initialize Git repository",
 		TaskPrio:         int(prio),
 		RunInTarget:      true,
-		PredictedCreated: []string{".git"},
+		PredictedCreated: []string{fileutil.GitDir},
 	})
 
 	// Task 2: Stage all files.
@@ -52,7 +53,7 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	// Task 3: Create initial commit.
 	// We use "commit -m ..." to snapshot the scaffolding state.
 	// Note: If 'git add' found nothing (e.g. empty dir), this might fail with "nothing to commit".
-	// However, scbake always creates scbake.toml at minimum, so this should usually succeed.
+	// However, scbake always creates the manifest at minimum, so this should usually succeed.
 	prio, err = seq.Next()
 	if err != nil {
 		return nil, err

@@ -8,11 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"scbake/internal/util/fileutil"
 	"sync"
 	"time"
 )
-
-const tempDirPerm os.FileMode = 0o750
 
 // backupEntry holds the metadata required to restore a file.
 type backupEntry struct {
@@ -92,9 +91,9 @@ func (m *Manager) ensureTempDir() error {
 
 	// We place tmp inside the project root to ensure we are on the same filesystem/partition,
 	// which makes file moves atomic and avoids cross-device link errors.
-	path := filepath.Join(m.rootPath, ".scbake", "tmp", dirName)
+	path := filepath.Join(m.rootPath, fileutil.InternalDir, fileutil.TmpDir, dirName)
 
-	if err := os.MkdirAll(path, tempDirPerm); err != nil {
+	if err := os.MkdirAll(path, fileutil.DirPerms); err != nil {
 		return fmt.Errorf("failed to create temp dir %s: %w", path, err)
 	}
 
@@ -105,8 +104,8 @@ func (m *Manager) ensureTempDir() error {
 // cleanupStructure attempts to prune .scbake/tmp and .scbake.
 // It uses os.Remove which only succeeds if the directory is empty.
 func (m *Manager) cleanupStructure() {
-	tmpParent := filepath.Join(m.rootPath, ".scbake", "tmp")
-	scbakeRoot := filepath.Join(m.rootPath, ".scbake")
+	tmpParent := filepath.Join(m.rootPath, fileutil.InternalDir, fileutil.TmpDir)
+	scbakeRoot := filepath.Join(m.rootPath, fileutil.InternalDir)
 
 	// Best effort removal of parent directories
 	_ = os.Remove(tmpParent)

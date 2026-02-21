@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"scbake/internal/manifest"
+	"scbake/internal/util/fileutil"
 	"scbake/pkg/lang"
 	"scbake/pkg/templates"
 
@@ -18,7 +19,7 @@ var listCmd = &cobra.Command{
 	Use:   "list [langs|templates|projects]",
 	Short: "List available resources or projects",
 	Long: `Lists available language packs, tooling templates,
-or the projects currently managed in this repository's scbake.toml.`,
+or the projects currently managed in this repository's ` + fileutil.ManifestFileName + `.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(_ *cobra.Command, args []string) {
 		switch args[0] {
@@ -35,12 +36,12 @@ or the projects currently managed in this repository's scbake.toml.`,
 			}
 
 		case "projects":
-			fmt.Println("Managed Projects (from scbake.toml):")
+			fmt.Printf("Managed Projects (from %s):\n", fileutil.ManifestFileName)
 			// Pass "." as start path, ignore rootPath return
 			m, _, err := manifest.Load(".")
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error loading scbake.toml: %v\n", err)
-				os.Exit(1)
+				fmt.Fprintf(os.Stderr, "Error loading %s: %v\n", fileutil.ManifestFileName, err)
+				os.Exit(fileutil.ExitError)
 			}
 			if len(m.Projects) == 0 {
 				fmt.Println("  No projects found.")
@@ -53,7 +54,7 @@ or the projects currently managed in this repository's scbake.toml.`,
 		default:
 			fmt.Fprintf(os.Stderr, "Error: Unknown resource type '%s'.\n", args[0])
 			fmt.Println("Must be one of: langs, templates, projects")
-			os.Exit(1)
+			os.Exit(fileutil.ExitError)
 		}
 	},
 }

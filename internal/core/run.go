@@ -15,6 +15,7 @@ import (
 	"scbake/internal/preflight"
 	"scbake/internal/types"
 	"scbake/internal/util"
+	"scbake/internal/util/fileutil"
 	"scbake/pkg/lang"
 	"scbake/pkg/templates"
 )
@@ -71,12 +72,12 @@ type manifestChanges struct {
 func RunApply(rc RunContext) error {
 	logger := NewStepLogger(runApplyTotalSteps, rc.DryRun)
 
-	logger.Log("📖", "Loading manifest (scbake.toml)...")
+	logger.Log("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
 	// 1. Root Discovery & Manifest Load
 	m, rootPath, err := manifest.Load(rc.TargetPath)
 	if err != nil {
-		return fmt.Errorf("failed to load %s: %w", manifest.ManifestFileName, err)
+		return fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
 	}
 
 	// 2. Initialize Transaction Engine
@@ -160,7 +161,7 @@ func executeAndFinalize(
 	// We track the manifest file itself before saving.
 	// This ensures that if the Save succeeds but a subsequent step crashes (unlikely),
 	// the manifest is rolled back to sync with the filesystem.
-	manifestPath := filepath.Join(rootPath, manifest.ManifestFileName)
+	manifestPath := filepath.Join(rootPath, fileutil.ManifestFileName)
 	if err := tx.Track(manifestPath); err != nil {
 		return fmt.Errorf("failed to track manifest file: %w", err)
 	}

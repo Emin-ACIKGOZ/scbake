@@ -7,13 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"scbake/internal/types"
+	"scbake/internal/util/fileutil"
 	"testing"
-)
-
-// Define secure permissions for tests to satisfy gosec (G301, G306)
-const (
-	testDirPerm  os.FileMode = 0750
-	testFilePerm os.FileMode = 0600
 )
 
 func TestFindProjectRoot(t *testing.T) {
@@ -26,13 +21,13 @@ func TestFindProjectRoot(t *testing.T) {
 	srcDir := filepath.Join(rootDir, "src")
 	cmdDir := filepath.Join(srcDir, "cmd")
 
-	if err := os.MkdirAll(cmdDir, testDirPerm); err != nil {
+	if err := os.MkdirAll(cmdDir, fileutil.DirPerms); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create manifest at root
-	manifestPath := filepath.Join(rootDir, ManifestFileName)
-	if err := os.WriteFile(manifestPath, []byte(""), testFilePerm); err != nil {
+	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
+	if err := os.WriteFile(manifestPath, []byte(""), fileutil.PrivateFilePerms); err != nil {
 		t.Fatal(err)
 	}
 
@@ -66,15 +61,15 @@ func TestFindProjectRoot_NestedOverride(t *testing.T) {
 	subDir := filepath.Join(repoDir, "sub")
 	cmdDir := filepath.Join(subDir, "cmd")
 
-	if err := os.MkdirAll(cmdDir, testDirPerm); err != nil {
+	if err := os.MkdirAll(cmdDir, fileutil.DirPerms); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create BOTH manifests
-	if err := os.WriteFile(filepath.Join(repoDir, ManifestFileName), []byte("root=true"), testFilePerm); err != nil {
+	if err := os.WriteFile(filepath.Join(repoDir, fileutil.ManifestFileName), []byte("root=true"), fileutil.PrivateFilePerms); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(subDir, ManifestFileName), []byte("sub=true"), testFilePerm); err != nil {
+	if err := os.WriteFile(filepath.Join(subDir, fileutil.ManifestFileName), []byte("sub=true"), fileutil.PrivateFilePerms); err != nil {
 		t.Fatal(err)
 	}
 
@@ -102,12 +97,12 @@ func TestFindProjectRoot_FromFilePath(t *testing.T) {
 	// User runs Load("/tmp/root/main.go")
 
 	rootDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(rootDir, ManifestFileName), []byte(""), testFilePerm); err != nil {
+	if err := os.WriteFile(filepath.Join(rootDir, fileutil.ManifestFileName), []byte(""), fileutil.PrivateFilePerms); err != nil {
 		t.Fatal(err)
 	}
 
 	mainGo := filepath.Join(rootDir, "main.go")
-	if err := os.WriteFile(mainGo, []byte("package main"), testFilePerm); err != nil {
+	if err := os.WriteFile(mainGo, []byte("package main"), fileutil.PrivateFilePerms); err != nil {
 		t.Fatal(err)
 	}
 
@@ -125,10 +120,10 @@ func TestFindProjectRoot_GitFallback(t *testing.T) {
 	gitRoot := filepath.Join(baseDir, "gitroot")
 	childDir := filepath.Join(gitRoot, "child")
 
-	if err := os.MkdirAll(childDir, testDirPerm); err != nil {
+	if err := os.MkdirAll(childDir, fileutil.DirPerms); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(gitRoot, ".git"), testDirPerm); err != nil {
+	if err := os.Mkdir(filepath.Join(gitRoot, fileutil.GitDir), fileutil.DirPerms); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,7 +171,7 @@ func TestLoadAndSave(t *testing.T) {
 	}
 
 	// 3. Verify file exists
-	mfPath := filepath.Join(tmpDir, ManifestFileName)
+	mfPath := filepath.Join(tmpDir, fileutil.ManifestFileName)
 	if _, err := os.Stat(mfPath); err != nil {
 		t.Error("Manifest file was not created")
 	}

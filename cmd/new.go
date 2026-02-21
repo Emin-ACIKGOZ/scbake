@@ -8,16 +8,13 @@ import (
 	"fmt"
 	"os"
 	"scbake/internal/core"
+	"scbake/internal/util/fileutil"
 
 	"github.com/spf13/cobra"
 )
 
 // Steps in the new command run
 const newCmdTotalSteps = 4
-
-// Directory permissions for os.Mkdir, 0750 is recommended by gosec
-const dirPerms os.FileMode = 0750
-const filePerms os.FileMode = 0600
 
 var (
 	newLangFlag string
@@ -68,7 +65,7 @@ func runNew(projectName string, dirCreated *bool) error {
 	// 2. Create directory
 	logger.Log("📁", "Creating directory: "+projectName)
 	if !dryRun {
-		if err := os.Mkdir(projectName, dirPerms); err != nil {
+		if err := os.Mkdir(projectName, fileutil.DirPerms); err != nil {
 			return err
 		}
 		*dirCreated = true // Set flag: successfully created directory
@@ -88,7 +85,7 @@ func runNew(projectName string, dirCreated *bool) error {
 
 	// Bootstrap manifest so the engine can find the project root
 	if !dryRun {
-		if err := os.WriteFile("scbake.toml", []byte(""), filePerms); err != nil {
+		if err := os.WriteFile(fileutil.ManifestFileName, []byte(""), fileutil.PrivateFilePerms); err != nil {
 			return fmt.Errorf("failed to bootstrap manifest: %w", err)
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/manifest"
 	"scbake/internal/types"
+	"scbake/internal/util/fileutil"
 	"testing"
 )
 
@@ -34,8 +35,8 @@ func (m *MockTask) Execute(tc types.TaskContext) error {
 			}
 		}
 		// Create file
-		// G306: Use 0600 for secure test file creation
-		if err := os.WriteFile(m.PathToCreate, []byte("test data"), 0600); err != nil {
+		// G306: Use PrivateFilePerms for secure test file creation
+		if err := os.WriteFile(m.PathToCreate, []byte("test data"), fileutil.PrivateFilePerms); err != nil {
 			return err
 		}
 	}
@@ -53,9 +54,9 @@ func TestExecuteAndFinalize_Rollback(t *testing.T) {
 	rootDir := t.TempDir()
 
 	// Create initial manifest
-	manifestPath := filepath.Join(rootDir, manifest.ManifestFileName)
-	// G306: Use 0600 for secure test file creation
-	if err := os.WriteFile(manifestPath, []byte(""), 0600); err != nil {
+	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
+	// G306: Use PrivateFilePerms for secure test file creation
+	if err := os.WriteFile(manifestPath, []byte(""), fileutil.PrivateFilePerms); err != nil {
 		t.Fatal(err)
 	}
 
@@ -120,9 +121,9 @@ func TestExecuteAndFinalize_Rollback(t *testing.T) {
 func TestExecuteAndFinalize_Success(t *testing.T) {
 	rootDir := t.TempDir()
 
-	manifestPath := filepath.Join(rootDir, manifest.ManifestFileName)
-	// G306: Use 0600 for secure test file creation
-	if err := os.WriteFile(manifestPath, []byte(""), 0600); err != nil {
+	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
+	// G306: Use PrivateFilePerms for secure test file creation
+	if err := os.WriteFile(manifestPath, []byte(""), fileutil.PrivateFilePerms); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,7 +179,7 @@ func TestExecuteAndFinalize_Success(t *testing.T) {
 	}
 
 	// Assert Cleanup (Temp dir gone)
-	tmpDir := filepath.Join(rootDir, ".scbake", "tmp")
+	tmpDir := filepath.Join(rootDir, fileutil.InternalDir, fileutil.TmpDir)
 
 	// We read the directory.
 	// 1. If entries exist > 0: FAIL (cleanup didn't happen)

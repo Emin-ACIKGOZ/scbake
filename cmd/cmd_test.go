@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"scbake/internal/types"
+	"scbake/internal/util/fileutil"
 	"scbake/pkg/templates"
 	"strings"
 	"testing"
@@ -36,7 +37,7 @@ func executeCLI(args ...string) error {
 // verifyTransactionCleanup ensures the hidden transaction directory is deleted after execution.
 func verifyTransactionCleanup(t *testing.T, dir string) {
 	t.Helper()
-	scbakeDir := filepath.Join(dir, ".scbake")
+	scbakeDir := filepath.Join(dir, fileutil.InternalDir)
 	if _, err := os.Stat(scbakeDir); !os.IsNotExist(err) {
 		t.Errorf("transaction residue found at %s", scbakeDir)
 	}
@@ -56,18 +57,18 @@ func createMockGitScript(t *testing.T, dir string, failCommit bool) {
 		name = "git.bat"
 		// Use findstr to catch the 'commit' subcommand regardless of flag positions.
 		content = fmt.Sprintf(`@echo off
-echo %%* | findstr "init" >nul && ( mkdir .git & exit /b 0 )
+echo %%* | findstr "init" >nul && ( mkdir %s & exit /b 0 )
 echo %%* | findstr "commit" >nul && ( if "%s"=="true" exit /b 1 )
-exit /b 0`, failStr)
+exit /b 0`, fileutil.GitDir, failStr)
 	} else {
 		name = "git"
 		// Use case matching to catch 'commit' or 'init' anywhere in the argument string.
 		content = fmt.Sprintf(`#!/bin/sh
 case "$*" in
-  *init*) mkdir .git; exit 0 ;;
+  *init*) mkdir %s; exit 0 ;;
   *commit*) [ "%s" = "true" ] && exit 1 ;;
 esac
-exit 0`, failStr)
+exit 0`, fileutil.GitDir, failStr)
 	}
 
 	path := filepath.Join(dir, name)
@@ -84,7 +85,7 @@ func (m *MockFailTask) Execute(tc types.TaskContext) error {
 	if tc.Tx != nil {
 		_ = tc.Tx.Track(m.TargetFile)
 	}
-	_ = os.WriteFile(m.TargetFile, []byte("CORRUPTED"), 0600)
+	_ = os.WriteFile(m.TargetFile, []byte("CORRUPTED"), fileutil.PrivateFilePerms)
 	return errors.New("fail")
 }
 
@@ -97,7 +98,7 @@ func (m *MockCreateTask) Execute(tc types.TaskContext) error {
 	if tc.Tx != nil {
 		_ = tc.Tx.Track(m.TargetFile)
 	}
-	return os.WriteFile(m.TargetFile, []byte("CREATED"), 0600)
+	return os.WriteFile(m.TargetFile, []byte("CREATED"), fileutil.PrivateFilePerms)
 }
 
 // MockHandlerGeneric allows for the injection of custom task sets into the template registry.
@@ -134,7 +135,7 @@ func TestNew_EndToEnd_Success(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	binDir := filepath.Join(tmpDir, "bin")
-	_ = os.Mkdir(binDir, 0750)
+	_ = os.Mkdir(binDir, fileutil.DirPerms)
 	createMockGitScript(t, binDir, false)
 
 	// Prepend absolute bin path to PATH to override system git.
@@ -150,8 +151,8 @@ func TestNew_EndToEnd_Success(t *testing.T) {
 	}
 
 	projectPath := filepath.Join(tmpDir, "my-app")
-	if _, err := os.Stat(filepath.Join(projectPath, ".git")); os.IsNotExist(err) {
-		t.Error(".git missing")
+	if _, err := os.Stat(filepath.Join(projectPath, fileutil.GitDir)); os.IsNotExist(err) {
+		t.Error("git directory missing")
 	}
 
 	verifyTransactionCleanup(t, projectPath)
@@ -163,7 +164,7 @@ func TestNew_CommitFailure_CleansDirectory(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	binDir := filepath.Join(tmpDir, "bin")
-	_ = os.Mkdir(binDir, 0750)
+	_ = os.Mkdir(binDir, fileutil.DirPerms)
 	createMockGitScript(t, binDir, true)
 
 	absBin, _ := filepath.Abs(binDir)
@@ -190,7 +191,7 @@ func TestNew_DirectoryAlreadyExists(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	existing := filepath.Join(tmpDir, "app")
-	_ = os.Mkdir(existing, 0750)
+	_ = os.Mkdir(existing, fileutil.DirPerms)
 
 	oldWD, _ := os.Getwd()
 	t.Cleanup(func() { _ = os.Chdir(oldWD) })
@@ -213,7 +214,7 @@ func TestApply_PermissionError_Rollback(t *testing.T) {
 	resetFlags()
 
 	tmpDir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmpDir, "scbake.toml"), []byte(""), 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir, fileutil.ManifestFileName), []byte(""), fileutil.PrivateFilePerms)
 
 	targetFile := filepath.Join(tmpDir, "readonly.txt")
 	_ = os.WriteFile(targetFile, []byte("ORIGINAL"), 0400)
@@ -234,7 +235,7 @@ func TestApply_PermissionError_Rollback(t *testing.T) {
 		t.Error("rollback failed to restore original content")
 	}
 
-	_ = os.Chmod(targetFile, 0600)
+	_ = os.Chmod(targetFile, fileutil.PrivateFilePerms)
 	verifyTransactionCleanup(t, tmpDir)
 }
 
@@ -243,7 +244,7 @@ func TestApply_DryRun_NoChanges(t *testing.T) {
 	resetFlags()
 
 	tmpDir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmpDir, "scbake.toml"), []byte(""), 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir, fileutil.ManifestFileName), []byte(""), fileutil.PrivateFilePerms)
 
 	targetFile := filepath.Join(tmpDir, "file.txt")
 
@@ -269,7 +270,7 @@ func TestApply_UnknownTemplate(t *testing.T) {
 	resetFlags()
 
 	tmpDir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmpDir, "scbake.toml"), []byte(""), 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir, fileutil.ManifestFileName), []byte(""), fileutil.PrivateFilePerms)
 
 	oldWD, _ := os.Getwd()
 	t.Cleanup(func() { _ = os.Chdir(oldWD) })
@@ -286,7 +287,7 @@ func TestApply_IdempotentRun(t *testing.T) {
 	resetFlags()
 
 	tmpDir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmpDir, "scbake.toml"), []byte(""), 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir, fileutil.ManifestFileName), []byte(""), fileutil.PrivateFilePerms)
 
 	targetFile := filepath.Join(tmpDir, "file.txt")
 
