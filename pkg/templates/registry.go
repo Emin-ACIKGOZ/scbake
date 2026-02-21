@@ -1,3 +1,6 @@
+// Copyright 2025 Emin Salih Açıkgöz
+// SPDX-License-Identifier: gpl3-or-later
+
 // Package templates provides the registry and interface for tooling template handlers.
 package templates
 

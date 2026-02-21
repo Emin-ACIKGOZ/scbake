@@ -1,3 +1,6 @@
+// Copyright 2025 Emin Salih Açıkgöz
+// SPDX-License-Identifier: gpl3-or-later
+
 // Package util provides general utility functions used across the scbake project.
 package util
 
