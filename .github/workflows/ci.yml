@@ -8,6 +8,12 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual run'
+        required: false
+        default: 'Manual trigger for testing'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,6 +44,7 @@ jobs:
 
   test:
     name: Test (Go ${{ matrix.go-version }})
+    needs: lint
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -97,7 +104,7 @@ jobs:
           OUTPUT_NAME="dist/scbake-${GOOS}-${GOARCH}${EXT}"
 
           echo "Building $OUTPUT_NAME..."
-          go build -trimpath -ldflags="-s -w" -o "$OUTPUT_NAME"
+          go build -trimpath -ldflags="-s -w" -o "$OUTPUT_NAME" ./main.go
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
