@@ -27,7 +27,8 @@ func copyFile(src, dst string, mode os.FileMode) (err error) {
 	}()
 
 	// Create destination with the original mode
-	destFile, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_TRUNC, mode) // #nosec G304 -- path validated by Manager.Track
+	// #nosec G304 -- Path validated by Manager.Track
+	destFile, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
