@@ -59,10 +59,12 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	}
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd:         "git",
-		Args:        []string{"commit", "-m", "scbake: Apply templates"},
+		Args:        []string{"commit", "--allow-empty", "-m", "scbake: Apply templates"},
 		Desc:        "Create initial commit",
 		TaskPrio:    int(prio),
 		RunInTarget: true,
+		// Explicitly track internal mutations if they don't already exist.
+		PredictedCreated: []string{fileutil.GitDir},
 	})
 
 	return plan, nil
