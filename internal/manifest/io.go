@@ -9,12 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"scbake/internal/types"
+	"scbake/internal/util/fileutil"
 
 	"github.com/BurntSushi/toml"
 )
-
-// ManifestFileName is the name of the project manifest file.
-const ManifestFileName = "scbake.toml"
 
 // FindProjectRoot looks for scbake.toml or .git starting in startPath and walking up.
 // It returns the directory containing the marker, or the startPath (normalized directory) if not found.
@@ -36,7 +34,7 @@ func FindProjectRoot(startPath string) (string, error) {
 
 	for {
 		// 2. Check for scbake.toml (Primary Marker)
-		manifestPath := filepath.Join(current, ManifestFileName)
+		manifestPath := filepath.Join(current, fileutil.ManifestFileName)
 		if _, err := os.Stat(manifestPath); err == nil {
 			return current, nil
 		}
@@ -44,7 +42,7 @@ func FindProjectRoot(startPath string) (string, error) {
 		// 3. Check for .git (Secondary Marker)
 		// This helps in monorepos where scbake.toml might not exist yet (init phase)
 		// but we still want to respect the git root.
-		gitPath := filepath.Join(current, ".git")
+		gitPath := filepath.Join(current, fileutil.GitDir)
 		if _, err := os.Stat(gitPath); err == nil {
 			return current, nil
 		}
@@ -74,7 +72,7 @@ func Load(startPath string) (*types.Manifest, string, error) {
 	}
 
 	// Try to read the file at the discovered root
-	manifestPath := filepath.Join(rootPath, ManifestFileName)
+	manifestPath := filepath.Join(rootPath, fileutil.ManifestFileName)
 
 	// G304: The path is constructed from user input but sanitized via filepath.Join/Abs.
 	// Reading the manifest file from the target directory is the intended behavior of this CLI tool.
@@ -105,14 +103,14 @@ func Load(startPath string) (*types.Manifest, string, error) {
 // Save atomically writes the manifest to scbake.toml in the specified root path.
 // It writes to a temporary file first, syncs, then renames to ensure data integrity.
 func Save(m *types.Manifest, rootPath string) (err error) {
-	finalPath := filepath.Join(rootPath, ManifestFileName)
+	finalPath := filepath.Join(rootPath, fileutil.ManifestFileName)
 	tempPath := finalPath + ".tmp"
 
-	// Create temp file
+	// Create temp file using PrivateFilePerms (0600)
 	// G304: The path is constructed from user input but sanitized.
 	// Creating the temp manifest file in the target directory is intended behavior.
 	//nolint:gosec // Intended file creation
-	f, err := os.Create(tempPath)
+	f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileutil.PrivateFilePerms)
 	if err != nil {
 		return fmt.Errorf("failed to create temp manifest: %w", err)
 	}
