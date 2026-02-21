@@ -44,6 +44,8 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 	}
 
 	// The command and arguments must be carefully controlled via the manifest to prevent injection.
+	// G204: Command arguments are defined in the task manifest, which is the intended behavior
+	//nolint:gosec
 	cmd := exec.CommandContext(tc.Ctx, t.Cmd, t.Args...)
 
 	// Set the working directory for the command

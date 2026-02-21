@@ -45,6 +45,8 @@ func TestCreateTemplateTask(t *testing.T) {
 	}
 
 	// Verify Content
+	// G304: Reading file from trusted temp directory in test scope
+	//nolint:gosec
 	content, err := os.ReadFile(filepath.Join(tmpDir, "output.txt"))
 	if err != nil {
 		t.Fatalf("Failed to read output file: %v", err)

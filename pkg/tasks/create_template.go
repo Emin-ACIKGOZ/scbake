@@ -93,7 +93,9 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 		return err
 	}
 
-	// 3. Create the output file (G304 remains here, relying on checkFilePreconditions mitigation)
+	// 3. Create the output file
+	// G304: Path is explicitly sanitized and verified in checkFilePreconditions
+	//nolint:gosec
 	f, err := os.Create(finalPath)
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", finalPath, err)
