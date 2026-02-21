@@ -4,7 +4,10 @@
 // Package types holds the core data structures for the scbake manifest and tasks.
 package types
 
-import "context"
+import (
+	"context"
+	"scbake/internal/filesystem/transaction"
+)
 
 // TaskContext holds all the data a Task needs to run.
 type TaskContext struct {
@@ -22,6 +25,10 @@ type TaskContext struct {
 
 	// Force indicates if we should overwrite existing files.
 	Force bool
+
+	// Tx is the active filesystem transaction manager.
+	// If nil, tasks perform operations without safety tracking (legacy/testing mode).
+	Tx *transaction.Manager
 }
 
 // Task is the interface for all atomic operations (e.g., create file, exec command).
