@@ -1,3 +1,4 @@
+// Package golinter provides the task handler for setting up Go linting via golangci-lint.
 package golinter
 
 import (
@@ -9,10 +10,11 @@ import (
 //go:embed .golangci.yml.tpl
 var templates embed.FS
 
+// Handler implements the templates.Handler interface for Go linting.
 type Handler struct{}
 
 // GetTasks returns the plan to create the Go linter configuration file.
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Linter band (1200-1399)
