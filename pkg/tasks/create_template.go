@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"scbake/internal/types"
-	"scbake/internal/util"
+	"scbake/internal/util/fileutil"
 	"strings"
 	"text/template"
 )
@@ -51,7 +51,7 @@ func checkFilePreconditions(finalPath, output, target string, force bool) error 
 
 	// 2. Ensure the directory exists
 	dir := filepath.Dir(finalPath)
-	if err := os.MkdirAll(dir, util.DirPerms); err != nil {
+	if err := os.MkdirAll(dir, fileutil.DirPerms); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 

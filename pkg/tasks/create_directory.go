@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"scbake/internal/types"
-	"scbake/internal/util"
+	"scbake/internal/util/fileutil"
 )
 
 // CreateDirTask ensures a directory exists.
@@ -18,7 +18,7 @@ type CreateDirTask struct {
 // Execute performs the task of creating the directory.
 func (t *CreateDirTask) Execute(_ types.TaskContext) error {
 	// Use the constant from the centralized location
-	if err := os.MkdirAll(t.Path, util.DirPerms); err != nil {
+	if err := os.MkdirAll(t.Path, fileutil.DirPerms); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", t.Path, err)
 	}
 	return nil
