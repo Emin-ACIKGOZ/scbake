@@ -97,8 +97,8 @@ func RunApply(rc RunContext) error {
 
 	logger.Log("📖", "Loading manifest (scbake.toml)...")
 
-	m, err := manifest.Load()
-
+	// Pass TargetPath to Load, capture rootPath
+	m, rootPath, err := manifest.Load(rc.TargetPath)
 	if err != nil {
 		return fmt.Errorf("failed to load %s: %w", manifest.ManifestFileName, err)
 	}
@@ -138,7 +138,8 @@ func RunApply(rc RunContext) error {
 		return fmt.Errorf("failed to create savepoint: %w", err)
 	}
 
-	if err := executeAndFinalize(logger, plan, tc, m, changes, savepointTag, commitMessage); err != nil { // Extracted core run logic
+	// Pass rootPath to executeAndFinalize
+	if err := executeAndFinalize(logger, plan, tc, m, changes, savepointTag, commitMessage, rootPath); err != nil { // Extracted core run logic
 		return err
 	}
 
@@ -170,7 +171,9 @@ func executeAndFinalize(
 	m *types.Manifest,
 	changes *manifestChanges,
 	savepointTag string,
-	commitMessage string) error {
+	commitMessage string,
+	rootPath string,
+) error {
 	logger.Log("🚀", "Executing plan...")
 	if err := Execute(plan, tc); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Task execution failed: %v\n", err)
@@ -180,7 +183,8 @@ func executeAndFinalize(
 	logger.Log("✍️", "Updating manifest...")
 	updateManifest(m, changes)
 
-	if err := manifest.Save(m); err != nil {
+	// Pass rootPath to Save
+	if err := manifest.Save(m, rootPath); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Manifest save failed: %v\n", err)
 		return rollbackAndWrapError(savepointTag, errors.New("manifest save failed, operation rolled back"))
 	}
