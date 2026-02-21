@@ -46,6 +46,16 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	fmt.Println("[Setup] Configuring Git identity for tests...")
+
+	// Set a dummy user name globally
+	// The .Run() is used here to execute the command and discard the error,
+	// as failure to set a global git config shouldn't fail TestMain entirely.
+	exec.Command("git", "config", "--global", "user.name", "Test Runner").Run()
+
+	// Set a dummy email globally
+	exec.Command("git", "config", "--global", "user.email", "runner@test.com").Run()
+
 	// 2. Execution: Run the tests
 	exitCode := m.Run()
 
@@ -141,6 +151,7 @@ func TestNewCommand(t *testing.T) {
 	// This should create the dir, init git, and run 'go mod init'
 	output, err := runCLI("new", projectName, "--lang", "go")
 	if err != nil {
+		// This fatal error message is expected to change now that Git is configured.
 		t.Fatalf("scbake new failed: %v\nOutput:\n%s", err, output)
 	}
 
