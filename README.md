@@ -24,7 +24,7 @@
 
 ## 🚀 Installation
 
-#### (TODO.)
+#### (WIP)
 
 ## 📋 Commands & Usage
 
