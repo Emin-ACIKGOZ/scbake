@@ -28,7 +28,7 @@ type Manager struct {
 	// Safety check: The manager will refuse to touch files outside this root.
 	rootPath string
 
-	// tempDir is the hidden directory where backups are stored.
+	// tempDir is the hidden directory where backups for this specific transaction are stored.
 	// It is lazily created only when the first backup is needed.
 	tempDir string
 
@@ -54,7 +54,7 @@ func New(rootPath string) (*Manager, error) {
 	}, nil
 }
 
-// Commit finalizes the transaction by deleting the temporary backup directory.
+// Commit finalizes the transaction by deleting the temporary backup directory and pruning structural scaffolding.
 // This should be called only after all tasks have succeeded.
 func (m *Manager) Commit() error {
 	m.mu.Lock()
@@ -70,10 +70,11 @@ func (m *Manager) Commit() error {
 		return fmt.Errorf("failed to cleanup transaction temp dir: %w", err)
 	}
 
-	// Reset state
-	m.tempDir = ""
-	m.backups = make(map[string]backupEntry)
-	m.created = make([]string, 0)
+	// Prune parent scaffolding if empty (.scbake/tmp and .scbake)
+	m.cleanupStructure()
+
+	// Reset internal state
+	m.resetState()
 
 	return nil
 }
@@ -99,4 +100,22 @@ func (m *Manager) ensureTempDir() error {
 
 	m.tempDir = path
 	return nil
+}
+
+// cleanupStructure attempts to prune .scbake/tmp and .scbake.
+// It uses os.Remove which only succeeds if the directory is empty.
+func (m *Manager) cleanupStructure() {
+	tmpParent := filepath.Join(m.rootPath, ".scbake", "tmp")
+	scbakeRoot := filepath.Join(m.rootPath, ".scbake")
+
+	// Best effort removal of parent directories
+	_ = os.Remove(tmpParent)
+	_ = os.Remove(scbakeRoot)
+}
+
+// resetState clears the internal trackers for a fresh state.
+func (m *Manager) resetState() {
+	m.tempDir = ""
+	m.backups = make(map[string]backupEntry)
+	m.created = make([]string, 0)
 }

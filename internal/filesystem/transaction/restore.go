@@ -11,7 +11,7 @@ import (
 // Rollback undoes all tracked changes.
 // 1. Deletes created files/directories (LIFO order).
 // 2. Restores backed-up files (overwriting current state).
-// 3. Deletes the temp directory.
+// 3. Deletes the temp directory and structural scaffolding.
 func (m *Manager) Rollback() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -41,11 +41,13 @@ func (m *Manager) Rollback() error {
 		}
 	}
 
-	// 3. Cleanup temp dir
+	// 3. Cleanup temp dir and structural scaffolding
 	if m.tempDir != "" {
 		if err := os.RemoveAll(m.tempDir); err != nil {
 			errs = append(errs, fmt.Errorf("failed to remove temp dir: %w", err))
 		}
+		m.cleanupStructure()
+		m.resetState()
 	}
 
 	if len(errs) > 0 {
