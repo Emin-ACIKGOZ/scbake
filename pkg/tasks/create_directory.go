@@ -7,6 +7,7 @@ package tasks
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 )
@@ -20,17 +21,23 @@ type CreateDirTask struct {
 
 // Execute performs the task of creating the directory.
 func (t *CreateDirTask) Execute(tc types.TaskContext) error {
+	// Canonicalize the path to ensure consistency across relative/absolute calls.
+	absPath, err := filepath.Abs(t.Path)
+	if err != nil {
+		return fmt.Errorf("failed to resolve directory path %s: %w", t.Path, err)
+	}
+
 	// Safety Tracking: If a transaction manager is present, register this path.
 	// If the directory doesn't exist, it will be marked for cleanup on rollback.
 	// If it does exist, this is a no-op (idempotent).
 	if !tc.DryRun && tc.Tx != nil {
-		if err := tc.Tx.Track(t.Path); err != nil {
+		if err := tc.Tx.Track(absPath); err != nil {
 			return fmt.Errorf("failed to track directory %s: %w", t.Path, err)
 		}
 	}
 
-	// Use the constant from the centralized location
-	if err := os.MkdirAll(t.Path, fileutil.DirPerms); err != nil {
+	// Use the constant from the centralized location for secure permissions.
+	if err := os.MkdirAll(absPath, fileutil.DirPerms); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", t.Path, err)
 	}
 	return nil
