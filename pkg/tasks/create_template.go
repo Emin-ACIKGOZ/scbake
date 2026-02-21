@@ -42,39 +42,21 @@ func (t *CreateTemplateTask) Priority() int {
 	return t.TaskPrio
 }
 
-// Execute performs the template creation task.
-func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
-	if tc.DryRun {
-		// In dry-run, log what we *would* have done.
-		return nil
+// checkFilePreconditions handles path safety, directory creation, and existence checks.
+func checkFilePreconditions(finalPath, output, target string, force bool) error {
+	// 1. Path Safety Check
+	if !strings.HasPrefix(finalPath, target) {
+		return fmt.Errorf("output path '%s' is outside the target path '%s'", output, target)
 	}
 
-	// 1. Read the embedded template file
-	tplContent, err := fs.ReadFile(t.TemplateFS, t.TemplatePath)
-	if err != nil {
-		return fmt.Errorf("failed to read embedded template %s: %w", t.TemplatePath, err)
-	}
-
-	// 2. Parse the template
-	tpl, err := template.New(t.TemplatePath).Parse(string(tplContent))
-	if err != nil {
-		return fmt.Errorf("failed to parse template %s: %w", t.TemplatePath, err)
-	}
-
-	// 3. Determine the final output path
-	finalPath := filepath.Join(tc.TargetPath, filepath.Clean(t.OutputPath))
-	if !strings.HasPrefix(finalPath, tc.TargetPath) {
-		return fmt.Errorf("output path '%s' is outside the target path '%s'", t.OutputPath, tc.TargetPath)
-	}
-
-	// 4. Ensure the directory exists
+	// 2. Ensure the directory exists
 	dir := filepath.Dir(finalPath)
 	if err := os.MkdirAll(dir, util.DirPerms); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	// 5. Check if the file exists *before* creating it.
-	if !tc.Force {
+	// 3. Existence Check
+	if !force {
 		if _, err := os.Stat(finalPath); err == nil {
 			// File exists and Force is false.
 			return fmt.Errorf("file already exists: %s. Use --force to overwrite", finalPath)
@@ -83,8 +65,35 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 			return err
 		}
 	}
+	return nil
+}
 
-	// 6. Create the output file
+// Execute performs the template creation task.
+func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
+	if tc.DryRun {
+		return nil
+	}
+
+	// 1. Read and parse the template
+	tplContent, err := fs.ReadFile(t.TemplateFS, t.TemplatePath)
+	if err != nil {
+		return fmt.Errorf("failed to read embedded template %s: %w", t.TemplatePath, err)
+	}
+
+	tpl, err := template.New(t.TemplatePath).Parse(string(tplContent))
+	if err != nil {
+		return fmt.Errorf("failed to parse template %s: %w", t.TemplatePath, err)
+	}
+
+	// 2. Determine and check the final output path
+	finalPath := filepath.Join(tc.TargetPath, filepath.Clean(t.OutputPath))
+
+	// Check directory and file existence using the helper function.
+	if err = checkFilePreconditions(finalPath, t.OutputPath, tc.TargetPath, tc.Force); err != nil {
+		return err
+	}
+
+	// 3. Create the output file (G304 remains here, relying on checkFilePreconditions mitigation)
 	f, err := os.Create(finalPath)
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", finalPath, err)
@@ -97,8 +106,8 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 		}
 	}()
 
-	// 7. Execute the template and write to the file
-	if err := tpl.Execute(f, tc.Manifest); err != nil {
+	// 4. Execute the template and write to the file
+	if err = tpl.Execute(f, tc.Manifest); err != nil {
 		return fmt.Errorf("failed to render template %s: %w", t.TemplatePath, err)
 	}
 
