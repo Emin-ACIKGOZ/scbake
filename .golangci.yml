@@ -13,13 +13,8 @@ run:
   tests: true
 
 output:
-  format: colored-line-number
   print-issued-lines: true
   print-linter-name: true
-
-formatters:
-  enable:
-    - goimports     # Manages imports and applies standard formatting
 
 linters-settings:
   misspell:
@@ -28,34 +23,33 @@ linters-settings:
 linters:
   disable-all: true
   enable:
-    ## Linters: Core & Bugs
-    - bodyclose     # Checks whether HTTP response body is closed successfully
-    - copyloopvar   # Detects loop variable copying (standard in Go 1.22+)
-    - errcheck      # Checking for unchecked errors
-    - govet         # Reports suspicious constructs
-    - nilerr        # Reports returning nil despite a non-nil error check
-    - noctx         # Finds sending HTTP requests without context.Context
-    - reassign      # Prevents overriding predefined variables in other packages
-    - staticcheck   # Go static analysis, many checks
-    - unused        # Checks for unused constants, variables, functions and types
+    # --- Core & Bugs ---
+    - bodyclose
+    - copyloopvar
+    - errcheck
+    - govet
+    - nilerr
+    - noctx
+    - reassign
+    - staticcheck
+    - unused
 
-    ## Linters: Style, Performance & Idioms
-    - goconst       # Finds repeated strings that could be constants
-    - ineffassign   # Detects when assignments to existing variables are not used
-    - misspell      # Finds commonly misspelled English words in comments
-    - mnd           # Detects "magic numbers" that should be defined constants
-    - perfsprint    # Suggests faster alternatives to standard fmt.Sprintf calls
-    - predeclared   # Reports shadowing of Go's built-in identifiers
-    - revive        # Fast, configurable, extensible, flexible, and beautiful linter for Go
-    - whitespace    # Tool for detection of leading and trailing whitespace
+    # --- Style, Performance & Idioms ---
+    - goconst
+    - ineffassign
+    - misspell
+    - mnd
+    - perfsprint
+    - predeclared
+    - revive
+    - whitespace
 
-    ## Linters: Complexity & Meta
-    - cyclop        # Checks function cyclomatic complexity
-    # - gocritic      # Extensive collection of checks for bugs, performance, and style
-    - nolintlint    # Verifies hygiene and validity of //nolint directives
+    # --- Complexity & Meta ---
+    - cyclop
+    - nolintlint
 
-    ## Linters: Security
-    - gosec         # Inspects source code for security problems
+    # --- Security ---
+    - gosec
 
 issues:
   exclude-use-default: false
