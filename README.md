@@ -15,7 +15,7 @@
   Designed for flexibility. If a language pack is missing, simply **add it**. If a template doesn’t fit, you can **modify or replace it**. The handler interface simplifies extension.
 
 - **Built-in Atomic Safety**  
-  All modifications are wrapped in a **Git savepoint**. If any task fails, changes are automatically rolled back, restoring the repository to its exact previous state.
+  All modifications are managed by a **LIFO-based Transaction Manager**. If any task fails, the engine executes a journaled rollback. This deletes created artifacts and restores file backups in reverse order, ensuring the filesystem returns to its original state.
 
 - **Prioritized Execution**  
   Tasks run in a defined order using **Priority Bands** (e.g., directory creation → language setup → universal config) to ensure dependencies are met.
@@ -24,13 +24,36 @@
 
 ## 🚀 Installation
 
-#### (WIP)
+`scbake` is currently in **alpha development**. There is no fixed method for installation or distribution beyond compiling from source at this stage.
+
+### Build from Source
+
+To compile the binary yourself, ensure you have **Go 1.21+** installed:
+
+#### 1. Clone the repository:
+```bash
+git clone https://github.com/Emin-ACIKGOZ/scbake.git
+```
+
+
+#### 2. Build the project:
+```bash
+go build -o scbake main.go
+```
+
+
+#### 3. Move the binary to your path (optional):
+```bash
+mv scbake /usr/local/bin/
+```
 
 ## 📋 Commands & Usage
 
 ### `new`: Create a New Project
 
-Creates a directory, initializes Git, sets up `scbake.toml`, and applies language packs and templates.
+Creates a new directory, bootstraps the `scbake.toml` manifest, and applies language packs and templates. 
+
+**Note:** Git initialization can be added via the `--with git` template.
 
 ```bash
 scbake new <project-name> [--lang <lang>] [--with <template...>]
@@ -50,7 +73,7 @@ scbake new my-backend --lang go --with makefile,ci_github
 
 ### `apply`: Apply Templates to an Existing Project
 
-Applies new language packs or tooling templates to an existing path (requires a clean Git tree).
+Applies new language packs or tooling templates to an existing path. Because `scbake` uses its own transaction logic, it does **not** require a clean Git tree to operate safely.
 
 ```bash
 scbake apply [--lang <lang>] [--with <template...>] [<path>]
@@ -89,14 +112,14 @@ scbake list [langs|templates|projects]
 
 | Template        | Priority Band           | Features                                       |
 | :-------------- | :---------------------- | :--------------------------------------------- |
-| `editorconfig`  | Universal Config (1000) | Standard file formatting                       |
-| `ci_github`     | CI (1100)               | Conditional CI setup for all projects          |
-| `go_linter`     | Linter (1200)           | Configures `golangci-lint`                     |
+| `editorconfig`  | Universal Config (1000) | Standard file formatting across the project                       |
+| `ci_github`     | CI (1100)               | Conditional CI setup based on detected languages          |
+| `go_linter`     | Linter (1200)           | Standard `golangci-lint` configuration                     |
 | `maven_linter`  | Linter (1200)           | Sets up Maven Checkstyle                       |
-| `svelte_linter` | Linter (1200)           | Configures ESLint 9 with Svelte rules          |
+| `svelte_linter` | Linter (1200)           | ESLint 9 integration for Svelte projects          |
 | `makefile`      | Build System (1400)     | Universal build/lint scripts for all projects  |
-| `devcontainer`  | Dev Env (1500)          | Auto-detects languages and installs toolchains |
-
+| `devcontainer`  | Dev Env (1500)          | Containerized DX with auto-detected toolchains |
+| `git`  | Version Control (2000)          | Initializes repo, stages all files, and creates initial commit |
 
 ## 💻 Extending `scbake`
 
@@ -117,8 +140,8 @@ scbake list [langs|templates|projects]
 | `PrioCI`              | 1100–1199 | CI workflows          |
 | `PrioLinter`          | 1200–1399 | Linter setup          |
 | `PrioBuildSystem`     | 1400–1499 | Build systems         |
-| `PrioDevEnv`          | 1500+     | Dev environment setup |
-
+| `PrioDevEnv`          | 1500-1999     | Dev environment setup |
+| `PrioVersionControl`          | 2000-2100     | VCS initialization (Git) |
 
 ### Global Flags
 

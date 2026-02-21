@@ -8,6 +8,7 @@ import (
 	"embed"
 	"os"
 	"path/filepath"
+	"scbake/internal/filesystem/transaction"
 	"scbake/internal/types"
 	"testing"
 )
@@ -34,7 +35,7 @@ func TestCreateTemplateTask(t *testing.T) {
 		Force:      false,
 	}
 
-	// Case 1: Render a valid template
+	// Case 1: Render a valid template (Standard relative path)
 	task := &CreateTemplateTask{
 		TemplateFS:   testTemplates,
 		TemplatePath: "testdata/simple.tpl",
@@ -61,10 +62,10 @@ func TestCreateTemplateTask(t *testing.T) {
 
 	// Case 2: Existence Check (Should fail without Force)
 	if err := task.Execute(tc); err == nil {
-		t.Error("Overwriting existing file should fail without Force, but it succeeded")
+		t.Error("Overwriting existing file should fail without Force")
 	}
 
-	// Case 3: Force Overwrite (Should succeed)
+	// Case 3: Force Overwrite
 	tc.Force = true
 	if err := task.Execute(tc); err != nil {
 		t.Errorf("Force overwrite failed: %v", err)
@@ -83,5 +84,57 @@ func TestCreateTemplateTask(t *testing.T) {
 	tc.Force = false
 	if err := attackTask.Execute(tc); err == nil {
 		t.Error("Path traversal attack succeeded! It should have been blocked.")
+	}
+}
+
+func TestCreateTemplateTask_Transaction(t *testing.T) {
+	// Setup with Transaction
+	rootDir := t.TempDir()
+	tx, _ := transaction.New(rootDir)
+
+	// Provide a valid manifest so the template can render {{ (index .Projects 0).Name }}
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		Projects: []types.Project{
+			{Name: "TrackedProject"},
+		},
+	}
+
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: rootDir,
+		Manifest:   manifest,
+		Tx:         tx,
+	}
+
+	task := &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/simple.tpl",
+		OutputPath:   "tracked_file.txt",
+		Desc:         "Tracked File",
+		TaskPrio:     100,
+	}
+
+	// Execute
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Task execution failed: %v", err)
+	}
+
+	// File should exist
+	path := filepath.Join(rootDir, "tracked_file.txt")
+	absPath, _ := filepath.Abs(path)
+
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		t.Fatal("File was not created")
+	}
+
+	// Rollback
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+
+	// File should be gone
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("File was not removed by rollback")
 	}
 }

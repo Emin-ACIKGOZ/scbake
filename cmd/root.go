@@ -7,6 +7,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"scbake/internal/util/fileutil"
 
 	"github.com/spf13/cobra"
 )
@@ -31,12 +32,12 @@ and applying layered infrastructure templates.`,
 		v, _ := cmd.Flags().GetBool("version")
 		if v {
 			fmt.Println(version)
-			os.Exit(0)
+			os.Exit(fileutil.ExitSuccess)
 		}
 		if err := cmd.Help(); err != nil {
 			// This typically shouldn't fail, but check it for robustness.
 			fmt.Fprintf(os.Stderr, "Error showing help: %v\n", err)
-			os.Exit(1)
+			os.Exit(fileutil.ExitError)
 		}
 	},
 }
@@ -46,7 +47,7 @@ and applying layered infrastructure templates.`,
 func Execute() {
 	err := rootCmd.Execute()
 	if err != nil {
-		os.Exit(1)
+		os.Exit(fileutil.ExitError)
 	}
 }
 

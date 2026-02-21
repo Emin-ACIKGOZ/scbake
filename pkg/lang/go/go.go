@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"scbake/internal/types"
 	"scbake/internal/util"
+	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
 )
 
@@ -35,8 +36,8 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
 		TemplatePath: "gitignore.tpl",
-		OutputPath:   ".gitignore",
-		Desc:         "Create .gitignore",
+		OutputPath:   fileutil.GitIgnore,
+		Desc:         "Create " + fileutil.GitIgnore,
 		TaskPrio:     int(p),
 	})
 

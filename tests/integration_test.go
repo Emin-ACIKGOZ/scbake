@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"scbake/internal/util/fileutil"
 	"strings"
 	"testing"
 )
@@ -20,14 +21,13 @@ var binaryPath string
 
 // TestMain manages the test lifecycle: Build -> Run Tests -> Cleanup.
 func TestMain(m *testing.M) {
-	// 1. Setup: Compile the binary
 	fmt.Println("[Setup] Building scbake binary for integration testing...")
 
 	// Create a temp directory for the build artifact
 	tmpDir, err := os.MkdirTemp("", "scbake-integration-build")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create temp dir: %v\n", err)
-		os.Exit(1)
+		os.Exit(fileutil.ExitError)
 	}
 
 	// Handle Windows executable extension
@@ -37,48 +37,43 @@ func TestMain(m *testing.M) {
 	}
 	binaryPath = filepath.Join(tmpDir, binName)
 
-	// Build the project (targeting the root directory "../")
-	//nolint:gosec // Test runner needs to build the binary using variable paths
+	// G204: We use nolint because compiling the project binary for testing
+	// requires variable paths which gosec flags as unsafe.
+	//nolint:gosec // Intended build of test binary
 	buildCmd := exec.CommandContext(context.Background(), "go", "build", "-o", binaryPath, "../")
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "Build failed: %v\nOutput:\n%s\n", err, out)
-		os.Exit(1)
+		os.Exit(fileutil.ExitError)
 	}
 
-	fmt.Println("[Setup] Configuring Git identity for tests...")
-
-	// Set a dummy user name globally
-	if err := exec.Command("git", "config", "--global", "user.name", "Test Runner").Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to set git user.name: %v\n", err)
-	}
-
-	// Set a dummy email globally
-	if err := exec.Command("git", "config", "--global", "user.email", "runner@test.com").Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to set git user.email: %v\n", err)
-	}
-
-	// 2. Execution: Run the tests
 	exitCode := m.Run()
 
-	// 3. Teardown: Cleanup binary
 	_ = os.RemoveAll(tmpDir)
-
-	// Exit with the correct code
 	os.Exit(exitCode)
 }
 
-// runCLI executes the compiled binary with the provided arguments.
-// It returns the combined stdout/stderr and any execution error.
+// runCLI executes the compiled binary with a forced Git identity via environment variables.
+// This prevents the tests from ever touching the user's global ~/.gitconfig.
 func runCLI(args ...string) (string, error) {
-	//nolint:gosec // Test runner must execute the compiled binary to verify functionality
+	// G204: The binaryPath is internally managed by the test suite.
+	//nolint:gosec // Intended execution of test binary
 	cmd := exec.CommandContext(context.Background(), binaryPath, args...)
+
+	// ISOLATION: Inject Git identity directly into the process environment.
+	// This overrides ~/.gitconfig without modifying the user's machine state.
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Test Runner",
+		"GIT_AUTHOR_EMAIL=runner@test.com",
+		"GIT_COMMITTER_NAME=Test Runner",
+		"GIT_COMMITTER_EMAIL=runner@test.com",
+	)
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
-	output := stdout.String() + stderr.String()
-	return output, err
+	return stdout.String() + stderr.String(), err
 }
 
 // TestListCommand verifies the 'list' subcommand.
@@ -89,99 +84,98 @@ func TestListCommand(t *testing.T) {
 		wantContain string
 		wantError   bool
 	}{
-		{
-			name:        "List Languages",
-			args:        []string{"list", "langs"},
-			wantContain: "go", // We know 'go' is a supported language
-			wantError:   false,
-		},
-		{
-			name:        "List Templates",
-			args:        []string{"list", "templates"},
-			wantContain: "makefile", // We know 'makefile' is a template
-			wantError:   false,
-		},
-		{
-			name:        "Unknown Resource",
-			args:        []string{"list", "not-exist"},
-			wantContain: "Unknown resource type",
-			wantError:   true, // Should fail with exit code 1
-		},
+		{"List Languages", []string{"list", "langs"}, "go", false},
+		{"List Templates", []string{"list", "templates"}, "makefile", false},
+		{"Unknown Resource", []string{"list", "not-exist"}, "Unknown resource type", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			output, err := runCLI(tt.args...)
 
-			// Check exit code expectation
-			if tt.wantError {
-				if err == nil {
-					t.Errorf("expected error/exit-code, but got nil")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v. Output: %s", err, output)
-				}
+			if tt.wantError && err == nil {
+				t.Errorf("expected error, but got nil")
+			} else if !tt.wantError && err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 
-			// Check output content
 			if !strings.Contains(output, tt.wantContain) {
-				t.Errorf("output missing expected string '%s'. Got:\n%s", tt.wantContain, output)
+				t.Errorf("output missing expected string '%s'", tt.wantContain)
 			}
 		})
 	}
 }
 
-// TestNewCommand verifies the 'new' subcommand.
-// It simulates a user creating a new project from scratch.
+type projectExpectations struct {
+	projectName string
+	expectGit   bool
+	expectGoMod bool
+}
+
+// TestNewCommand verifies the 'new' subcommand with various combinations.
 func TestNewCommand(t *testing.T) {
-	// Setup a clean workspace for this test run
 	tmpDir := t.TempDir()
-
-	// Switch to tmpDir so 'scbake new' creates the project there.
-	// We defer switching back to the original directory.
 	originalWd, _ := os.Getwd()
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("failed to chdir: %v", err)
-	}
-	defer func() { _ = os.Chdir(originalWd) }()
+	t.Cleanup(func() { _ = os.Chdir(originalWd) })
 
-	projectName := "my-test-app"
-
-	// Execute: scbake new my-test-app --lang go
-	// This should create the dir, init git, and run 'go mod init'
-	output, err := runCLI("new", projectName, "--lang", "go")
-	if err != nil {
-		t.Fatalf("scbake new failed: %v\nOutput:\n%s", err, output)
+	tests := []struct {
+		name string
+		args []string
+		exp  projectExpectations
+	}{
+		{"Pure Go", []string{"new", "only-go", "--lang", "go"}, projectExpectations{"only-go", false, true}},
+		{"Pure Git", []string{"new", "only-git", "--with", "git"}, projectExpectations{"only-git", true, false}},
+		{"Full Scaffold", []string{"new", "go-and-git", "--lang", "go", "--with", "git"}, projectExpectations{"go-and-git", true, true}},
 	}
 
-	// --- Verification ---
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_ = os.Chdir(tmpDir)
 
-	// 1. Directory created?
-	projectPath := filepath.Join(tmpDir, projectName)
-	if _, err := os.Stat(projectPath); os.IsNotExist(err) {
-		t.Fatalf("Project directory was not created at %s", projectPath)
+			output, err := runCLI(tt.args...)
+			if err != nil {
+				t.Fatalf("scbake new failed: %v\nOutput: %s", err, output)
+			}
+
+			verifyProjectState(t, tmpDir, tt.exp)
+
+			// Idempotency check: creating the same project name should fail.
+			if _, err2 := runCLI(tt.args...); err2 == nil {
+				t.Errorf("expected failure when re-running 'scbake new' for '%s'", tt.exp.projectName)
+			}
+		})
 	}
+}
 
-	// 2. Git initialized?
-	if _, err := os.Stat(filepath.Join(projectPath, ".git")); os.IsNotExist(err) {
-		t.Error("Git repository not initialized (.git missing)")
+// verifyProjectState validates project structure while keeping cyclomatic complexity low.
+func verifyProjectState(t *testing.T, tmpDir string, exp projectExpectations) {
+	t.Helper()
+
+	projectPath := filepath.Join(tmpDir, exp.projectName)
+	mustExist(t, projectPath, "project directory")
+	mustExist(t, filepath.Join(projectPath, fileutil.ManifestFileName), "manifest file")
+
+	checkOptional(t, filepath.Join(projectPath, fileutil.GitDir), exp.expectGit, ".git folder")
+	checkOptional(t, filepath.Join(projectPath, "go.mod"), exp.expectGoMod, "go.mod file")
+}
+
+func mustExist(t *testing.T, path, label string) {
+	t.Helper()
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Fatalf("%s missing at %s", label, path)
 	}
+}
 
-	// 3. Go language pack applied? (go.mod existence)
-	if _, err := os.Stat(filepath.Join(projectPath, "go.mod")); os.IsNotExist(err) {
-		t.Error("Go language pack failed: go.mod missing")
+func checkOptional(t *testing.T, path string, shouldExist bool, label string) {
+	t.Helper()
+
+	_, err := os.Stat(path)
+	exists := !os.IsNotExist(err)
+
+	if shouldExist && !exists {
+		t.Errorf("expected %s, but missing", label)
 	}
-
-	// 4. Manifest created? (scbake.toml existence)
-	if _, err := os.Stat(filepath.Join(projectPath, "scbake.toml")); os.IsNotExist(err) {
-		t.Error("Manifest file (scbake.toml) missing")
-	}
-
-	// 5. Idempotency / Safety check
-	// Running 'new' again on an existing directory should fail.
-	_, err2 := runCLI("new", projectName, "--lang", "go")
-	if err2 == nil {
-		t.Error("scbake new should fail if directory exists, but it succeeded")
+	if !shouldExist && exists {
+		t.Errorf("unexpected %s found", label)
 	}
 }
