@@ -10,10 +10,12 @@ import (
 	cighub "scbake/pkg/templates/ci_github"
 	devcontainer "scbake/pkg/templates/devcontainer"
 	"scbake/pkg/templates/editorconfig"
+	"scbake/pkg/templates/git"
 	golinter "scbake/pkg/templates/go_linter"
 	"scbake/pkg/templates/makefile"
 	mavenlinter "scbake/pkg/templates/maven_linter"
 	sveltelinter "scbake/pkg/templates/svelte_linter"
+	"sort"
 )
 
 // Handler is the interface all tooling template handlers must implement.
@@ -31,6 +33,7 @@ var handlers = map[string]Handler{
 	"maven_linter":  &mavenlinter.Handler{},
 	"svelte_linter": &sveltelinter.Handler{},
 	"devcontainer":  &devcontainer.Handler{},
+	"git":           &git.Handler{}, // Registered Git template
 }
 
 // GetHandler returns the correct template handler for the given string.
@@ -42,11 +45,12 @@ func GetHandler(tmplName string) (Handler, error) {
 	return handler, nil
 }
 
-// ListTemplates returns the names of all supported templates.
+// ListTemplates returns the sorted names of all supported templates.
 func ListTemplates() []string {
 	keys := make([]string, 0, len(handlers))
 	for k := range handlers {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	return keys
 }

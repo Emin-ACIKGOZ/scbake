@@ -71,6 +71,10 @@ const (
 	// PrioDevEnv is for environment setup tasks (e.g., Dev Containers).
 	PrioDevEnv Priority = 1500
 
+	// PrioVersionControl is for VCS initialization (e.g., Git).
+	// Runs last to capture the final state of the generated project.
+	PrioVersionControl Priority = 2000
+
 	// --- Max Values ---
 
 	// Inclusive ceiling for each band.
@@ -94,5 +98,9 @@ const (
 	// MaxBuildSystem is the inclusive ceiling for the build system priority band (PrioBuildSystem).
 	MaxBuildSystem Priority = PrioDevEnv - 1 // 1499
 
-	// PrioDevEnv has no defined max; it runs last and is unlimited (max=0).
+	// MaxDevEnv is the inclusive ceiling for the dev env priority band (PrioDevEnv).
+	MaxDevEnv Priority = PrioVersionControl - 1 // 1999
+
+	// MaxVersionControl is the inclusive ceiling for the version control priority band (PrioVersionControl).
+	MaxVersionControl Priority = 2100
 )
