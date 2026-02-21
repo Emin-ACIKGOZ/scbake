@@ -16,13 +16,13 @@ type PrioritySequence struct {
 }
 
 // NewPrioritySequence creates a sequence starting at `base`.
-// Optional `max` allows to set an upper bound of a band flexibly.
+// Optional `maxPrio` allows to set an upper bound of a band flexibly.
 // (use 0 for no max, meaning unlimited).
-func NewPrioritySequence(base, max Priority) *PrioritySequence {
-	if max != 0 && max < base {
-		panic(fmt.Sprintf("invalid priority band: base=%d > max=%d", base, max))
+func NewPrioritySequence(base, maxPrio Priority) *PrioritySequence {
+	if maxPrio != 0 && maxPrio < base {
+		panic(fmt.Sprintf("invalid priority band: base=%d > max=%d", base, maxPrio))
 	}
-	return &PrioritySequence{current: base, max: max}
+	return &PrioritySequence{current: base, max: maxPrio}
 }
 
 // Next returns the next priority and increments the counter.
@@ -44,18 +44,28 @@ func (s *PrioritySequence) Next() (Priority, error) {
 // --- Priority Band Definitions ---
 
 const (
-	// PrioDirCreate: Foundation (used only for CreateDir tasks)
+	// PrioDirCreate is the foundation band used for directory creation tasks.
 	PrioDirCreate Priority = 50
 
-	// PrioLangSetup: The band for all language tasks (setup, init, deps).
+	// PrioLangSetup is the band for all language tasks (setup, init, deps).
 	PrioLangSetup Priority = 100
 
 	// --- Tooling Bands ---
+
+	// PrioConfigUniversal is for universal configuration files (e.g., .editorconfig).
 	PrioConfigUniversal Priority = 1000
-	PrioCI              Priority = 1100
-	PrioLinter          Priority = 1200
-	PrioBuildSystem     Priority = 1400
-	PrioDevEnv          Priority = 1500
+
+	// PrioCI is for Continuous Integration setup tasks (e.g., .github/workflows).
+	PrioCI Priority = 1100
+
+	// PrioLinter is for linter configuration tasks.
+	PrioLinter Priority = 1200 // FIXED: Added comment
+
+	// PrioBuildSystem is for build system configuration tasks (e.g., Makefiles).
+	PrioBuildSystem Priority = 1400 // FIXED: Added comment
+
+	// PrioDevEnv is for environment setup tasks (e.g., Dev Containers).
+	PrioDevEnv Priority = 1500 // FIXED: Added comment
 
 	// --- Max Values ---
 
