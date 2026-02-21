@@ -1,3 +1,4 @@
+// Package spring provides the task handler for initializing Spring Boot projects.
 package spring
 
 import (
@@ -11,6 +12,7 @@ import (
 	"scbake/pkg/tasks"
 )
 
+// Handler implements the lang.Handler interface for Spring Boot projects.
 type Handler struct{}
 
 // GetTasks returns the execution plan for initializing a Spring Boot project at targetPath.
@@ -112,10 +114,10 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 			TaskPrio:    int(p), // Now 103
 			RunInTarget: true,
 		})
-	} else if checkErr == nil {
-		// --- Path 2: pom.xml *does* exist (Maintenance) ---
-		// No maintenance tasks are defined here for now
-	} else {
+	} else if checkErr != nil {
+		// Path 2 (pom.xml *does* exist, checkErr == nil) now falls through to return plan, nil.
+		// If no initialization tasks were run, plan contains only the CreateDirTask.
+
 		// --- Path 3: Some other error ---
 		return nil, fmt.Errorf("could not check for pom.xml: %w", checkErr)
 	}

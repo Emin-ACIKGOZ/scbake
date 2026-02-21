@@ -1,3 +1,4 @@
+// Package golang provides the task handler for initializing Go projects.
 package golang
 
 import (
@@ -13,9 +14,10 @@ import (
 //go:embed main.go.tpl gitignore.tpl
 var templates embed.FS
 
+// Handler implements the lang.Handler interface for Go projects.
 type Handler struct{}
 
-// GetTasks uses the sanitize utility to sanitize the module name.
+// GetTasks uses the sanitize utility to sanitize the module name and returns the execution plan.
 func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
