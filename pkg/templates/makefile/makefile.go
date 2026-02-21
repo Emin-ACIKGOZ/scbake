@@ -1,7 +1,6 @@
 // Copyright 2025 Emin Salih Açıkgöz
 // SPDX-License-Identifier: gpl3-or-later
 
-// Package makefile provides the task handler for setting up a universal Makefile.
 package makefile
 
 import (

@@ -1,7 +1,6 @@
 // Copyright 2025 Emin Salih Açıkgöz
 // SPDX-License-Identifier: gpl3-or-later
 
-// Package golang provides the task handler for initializing Go projects.
 package golang
 
 import (

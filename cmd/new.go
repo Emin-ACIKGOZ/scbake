@@ -1,7 +1,6 @@
 // Copyright 2025 Emin Salih Açıkgöz
 // SPDX-License-Identifier: gpl3-or-later
 
-// Package cmd implements the command-line commands for scbake.
 package cmd
 
 import (

@@ -1,7 +1,6 @@
 // Copyright 2025 Emin Salih Açıkgöz
 // SPDX-License-Identifier: gpl3-or-later
 
-// Package git provides the template handler for initializing a Git repository.
 package git
 
 import (
