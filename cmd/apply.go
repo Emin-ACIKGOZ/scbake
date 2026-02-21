@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"scbake/internal/core"
 
@@ -21,10 +20,8 @@ var (
 var applyCmd = &cobra.Command{
 	Use:   "apply [--lang <lang>] [--with <template...>] [<path>]",
 	Short: "Apply a language pack or tooling template to a project",
-	Long: `Applies language packs or tooling templates to a specified path.
-This command is atomic and requires a clean Git working tree.`,
-	Args: cobra.MaximumNArgs(1),
-	Run: func(_ *cobra.Command, args []string) {
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
 		// Store the original argument for the manifest, which must be relative.
 		manifestPathArg := "."
 		targetPath := "."
@@ -36,8 +33,7 @@ This command is atomic and requires a clean Git working tree.`,
 		// Convert to absolute path for robust execution (npm, go build).
 		absPath, err := filepath.Abs(targetPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error resolving path %s: %v\n", targetPath, err)
-			os.Exit(1)
+			return fmt.Errorf("Error resolving path: %w", err)
 		}
 
 		rc := core.RunContext{
@@ -50,15 +46,15 @@ This command is atomic and requires a clean Git working tree.`,
 		}
 
 		if err := core.RunApply(rc); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		fmt.Println("✅ Success! 'apply' command finished.")
+		return nil
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(applyCmd)
-	applyCmd.PersistentFlags().StringVar(&langFlag, "lang", "", "Language project pack to apply (e.g., 'go')")
-	applyCmd.PersistentFlags().StringSliceVar(&withFlag, "with", []string{}, "Tooling template to apply (e.g., 'makefile')")
+	applyCmd.PersistentFlags().StringVar(&langFlag, "lang", "", "Language pack")
+	applyCmd.PersistentFlags().StringSliceVar(&withFlag, "with", []string{}, "Tooling templates")
 }
