@@ -1,3 +1,4 @@
+// Package devcontainer provides the task handler for setting up Dev Containers (VS Code).
 package devcontainer
 
 import (
@@ -9,11 +10,12 @@ import (
 //go:embed devcontainer.json.tpl Dockerfile.tpl
 var templates embed.FS
 
+// Handler implements the templates.Handler interface for Dev Containers.
 type Handler struct{}
 
 // GetTasks returns the plan to create the Dev Container configuration.
 // It creates both the JSON file and the Dockerfile.
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Dev Environment band (1500+)

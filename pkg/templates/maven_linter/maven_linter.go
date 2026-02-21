@@ -1,3 +1,4 @@
+// Package mavenlinter provides the task handler for setting up Maven Checkstyle linting.
 package mavenlinter
 
 import (
@@ -9,10 +10,11 @@ import (
 //go:embed checkstyle.xml.tpl pom_snippet.xml.tpl
 var templates embed.FS
 
+// Handler implements the templates.Handler interface for Maven linting.
 type Handler struct{}
 
 // GetTasks returns the plan to create Checkstyle config and update pom.xml.
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Linter band (1200-1399)

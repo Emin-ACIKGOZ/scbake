@@ -1,3 +1,4 @@
+// Package editorconfig provides the task handler for setting up universal editor configuration.
 package editorconfig
 
 import (
@@ -9,10 +10,11 @@ import (
 //go:embed .editorconfig.tpl
 var templates embed.FS
 
+// Handler implements the templates.Handler interface for EditorConfig.
 type Handler struct{}
 
 // GetTasks returns the plan to create the standard .editorconfig file.
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Universal Config band (1000-1099)

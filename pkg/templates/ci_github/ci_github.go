@@ -1,3 +1,4 @@
+// Package cighub provides the task handler for setting up GitHub Actions CI.
 package cighub
 
 import (
@@ -9,10 +10,11 @@ import (
 //go:embed main.yml.tpl
 var templates embed.FS
 
+// Handler implements the templates.Handler interface for GitHub CI.
 type Handler struct{}
 
 // GetTasks returns the plan to create the GitHub Actions workflow file.
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the CI band (1100-1199)

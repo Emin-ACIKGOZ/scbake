@@ -1,3 +1,4 @@
+// Package sveltelinter provides the task handler for setting up Svelte linting via ESLint.
 package sveltelinter
 
 import (
@@ -9,10 +10,11 @@ import (
 //go:embed eslint.config.js.tpl
 var templates embed.FS
 
+// Handler implements the templates.Handler interface for Svelte linting.
 type Handler struct{}
 
 // GetTasks returns the plan to add ESLint configuration and dependencies for Svelte.
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Linter band (1200-1399)

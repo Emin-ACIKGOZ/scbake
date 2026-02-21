@@ -1,3 +1,4 @@
+// Package makefile provides the task handler for setting up a universal Makefile.
 package makefile
 
 import (
@@ -9,10 +10,11 @@ import (
 //go:embed makefile.tpl
 var templates embed.FS
 
+// Handler implements the templates.Handler interface for the Makefile.
 type Handler struct{}
 
-// GetTasks signature updated, but logic is path-independent.
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+// GetTasks returns the plan to create the smart Makefile.
+func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Build System band (1400-1499)
