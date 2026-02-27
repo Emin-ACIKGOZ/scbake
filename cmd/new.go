@@ -7,13 +7,18 @@ import (
 	"fmt"
 	"os"
 	"scbake/internal/core"
+	"scbake/internal/ui"
 	"scbake/internal/util/fileutil"
 
 	"github.com/spf13/cobra"
 )
 
-// Steps in the new command run
-const newCmdTotalSteps = 4
+// newCmdTotalSteps represents the total milestones in the 'new' workflow:
+// 1. Directory creation
+// 2. Template application start
+// 3-7. Internal RunApply milestones (Load, Plan, Execute, Manifest, Commit)
+// 8. Finalization
+const newCmdTotalSteps = 8
 
 var (
 	newLangFlag string
@@ -27,13 +32,10 @@ var newCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		projectName := args[0]
-
-		// Flag to track directory creation
 		dirCreated := false
 
-		// runNew takes a pointer to dirCreated to track creation status
 		if err := runNew(projectName, &dirCreated); err != nil {
-			// SAFETY CHECK: Only clean up the directory if we created it during this command.
+			// Cleanup: Only remove the directory if it was created during this session.
 			if dirCreated {
 				fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
 				_ = os.RemoveAll(projectName)
@@ -46,9 +48,9 @@ var newCmd = &cobra.Command{
 	},
 }
 
-// runNew takes a pointer to dirCreated to track creation status.
+// runNew coordinates the project directory setup and delegates template application to the core engine.
 func runNew(projectName string, dirCreated *bool) error {
-	logger := core.NewStepLogger(newCmdTotalSteps, dryRun)
+	reporter := ui.NewReporter(newCmdTotalSteps, dryRun)
 
 	// Capture original working directory before any changes.
 	cwd, err := os.Getwd()
@@ -56,21 +58,21 @@ func runNew(projectName string, dirCreated *bool) error {
 		return fmt.Errorf("failed to get cwd: %w", err)
 	}
 
-	// 1. Check if directory exists
+	// Verify target directory availability
 	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
 		return fmt.Errorf("directory '%s' already exists", projectName)
 	}
 
-	// 2. Create directory
-	logger.Log("📁", "Creating directory: "+projectName)
+	// Initialize project directory
+	reporter.Step("📁", "Creating directory: "+projectName)
 	if !dryRun {
 		if err := os.Mkdir(projectName, fileutil.DirPerms); err != nil {
 			return err
 		}
-		*dirCreated = true // Set flag: successfully created directory
+		*dirCreated = true
 	}
 
-	// 3. CD into directory
+	// Relocate to target directory for atomic scaffolding
 	if !dryRun {
 		if err := os.Chdir(projectName); err != nil {
 			return err
@@ -82,32 +84,30 @@ func runNew(projectName string, dirCreated *bool) error {
 		}()
 	}
 
-	// Bootstrap manifest so the engine can find the project root
+	// Bootstrap manifest for project root discovery
 	if !dryRun {
 		if err := os.WriteFile(fileutil.ManifestFileName, []byte(""), fileutil.PrivateFilePerms); err != nil {
 			return fmt.Errorf("failed to bootstrap manifest: %w", err)
 		}
 	}
 
-	// 6. Run the 'apply' logic
-	logger.Log("🚀", "Applying templates...")
+	// Delegate template and language pack application to the core executor
+	reporter.Step("🚀", "Applying templates...")
 	rc := core.RunContext{
 		LangFlag:        newLangFlag,
 		WithFlag:        newWithFlag,
-		TargetPath:      ".",    // Now correctly relative to the new directory
-		DryRun:          dryRun, // Use global flag
-		Force:           force,  // Use global flag
+		TargetPath:      ".",
+		DryRun:          dryRun,
+		Force:           force,
 		ManifestPathArg: ".",
 	}
 
-	// RunApply prints its own logs.
-	if err := core.RunApply(rc); err != nil {
+	if err := core.RunApply(rc, reporter); err != nil {
 		return err
 	}
 
-	// Update the total steps for the logger, using the exported method.
-	logger.SetTotalSteps(newCmdTotalSteps)
-	logger.Log("✨", "Finalizing project...")
+	// Finalize output
+	reporter.Step("✨", "Finalizing project...")
 	return nil
 }
 

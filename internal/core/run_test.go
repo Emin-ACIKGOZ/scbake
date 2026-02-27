@@ -11,6 +11,7 @@ import (
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/manifest"
 	"scbake/internal/types"
+	"scbake/internal/ui"
 	"scbake/internal/util/fileutil"
 	"testing"
 )
@@ -94,9 +95,11 @@ func TestExecuteAndFinalize_Rollback(t *testing.T) {
 	}
 
 	// Run logic
-	logger := NewStepLogger(2, false)
+	// executeAndFinalize calls Step() 3 times (Execute, Update Manifest, Commit).
+	// We use 3 as the denominator to ensure the UI doesn't drift.
+	reporter := ui.NewPlainReporter(3, false)
 	// Execute should fail
-	err = executeAndFinalize(logger, plan, tc, m, changes, rootPath, tx)
+	err = executeAndFinalize(reporter, plan, tc, m, changes, rootPath, tx)
 
 	// Assert Failure
 	if err == nil {
@@ -162,8 +165,9 @@ func TestExecuteAndFinalize_Success(t *testing.T) {
 		Tx:         tx,
 	}
 
-	logger := NewStepLogger(1, false)
-	if err := executeAndFinalize(logger, plan, tc, m, changes, rootPath, tx); err != nil {
+	// executeAndFinalize calls Step() exactly 3 times.
+	reporter := ui.NewPlainReporter(3, false)
+	if err := executeAndFinalize(reporter, plan, tc, m, changes, rootPath, tx); err != nil {
 		t.Fatalf("Execution failed: %v", err)
 	}
 

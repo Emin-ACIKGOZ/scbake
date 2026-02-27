@@ -7,8 +7,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"scbake/internal/core"
+	"scbake/internal/ui"
 
 	"github.com/spf13/cobra"
+)
+
+const (
+	runApplyTotalSteps = 5 // Now 5 steps, as git steps are part of template logic
 )
 
 var (
@@ -44,7 +49,10 @@ var applyCmd = &cobra.Command{
 			Force:           force,           // force is the global flag.
 		}
 
-		if err := core.RunApply(rc); err != nil {
+		// Initialize modular UI reporter using the factory
+		reporter := ui.NewReporter(runApplyTotalSteps, dryRun)
+
+		if err := core.RunApply(rc, reporter); err != nil {
 			return err
 		}
 		fmt.Println("✅ Success! 'apply' command finished.")

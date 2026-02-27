@@ -19,44 +19,12 @@ import (
 	"scbake/pkg/templates"
 )
 
-// Define constants for step logging and cyclomatic complexity reduction
-const (
-	runApplyTotalSteps  = 5 // Now 5 steps, as git steps are part of template logic
-	langApplyTotalSteps = 5
-)
-
-// StepLogger helps print consistent step messages
-type StepLogger struct {
-	currentStep int
-	totalSteps  int // Keep unexported
-	DryRun      bool
-}
-
-// NewStepLogger creates a new StepLogger instance.
-func NewStepLogger(totalSteps int, dryRun bool) *StepLogger {
-	return &StepLogger{totalSteps: totalSteps, DryRun: dryRun}
-}
-
-// Log prints the current step message.
-func (l *StepLogger) Log(emoji, message string) {
-	l.currentStep++
-	if l.DryRun && l.currentStep > 2 {
-		return
-	}
-	fmt.Printf("[%d/%d] %s %s\n", l.currentStep, l.totalSteps, emoji, message)
-}
-
-// SetTotalSteps updates the total number of steps for logging.
-func (l *StepLogger) SetTotalSteps(newTotal int) {
-	l.totalSteps = newTotal
-}
-
-// RunContext holds all the flags and args for a run.
+// RunContext holds the flags and arguments for a single execution run.
 type RunContext struct {
 	LangFlag        string
 	WithFlag        []string
-	TargetPath      string // Used for execution (absolute path)
-	ManifestPathArg string // Used for manifest/template rendering (relative path)
+	TargetPath      string // Absolute path for execution stability.
+	ManifestPathArg string // Relative path for manifest portability.
 	DryRun          bool
 	Force           bool
 }
@@ -67,11 +35,9 @@ type manifestChanges struct {
 	Templates []types.Template
 }
 
-// RunApply is the main logic for the 'apply' command, extracted.
-func RunApply(rc RunContext) error {
-	logger := NewStepLogger(runApplyTotalSteps, rc.DryRun)
-
-	logger.Log("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
+// RunApply orchestrates the template application process.
+func RunApply(rc RunContext, reporter types.Reporter) error {
+	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
 	// 1. Root Discovery & Manifest Load
 	m, rootPath, err := manifest.Load(rc.TargetPath)
@@ -101,7 +67,7 @@ func RunApply(rc RunContext) error {
 		}()
 	}
 
-	logger.Log("📝", "Building execution plan...")
+	reporter.Step("📝", "Building execution plan...")
 
 	// Deduplicate requested templates to ensure idempotency
 	rc.WithFlag = deduplicateTemplates(rc.WithFlag)
@@ -127,19 +93,14 @@ func RunApply(rc RunContext) error {
 	}
 
 	if rc.DryRun {
-		fmt.Println("DRY RUN: No changes will be made.")
-		fmt.Println("Plan contains the following tasks:")
-		return Execute(plan, tc)
+		return Execute(plan, tc, reporter)
 	}
 
-	// 3. Execute and Finalize
-	// We pass the transaction and paths down.
-	return executeAndFinalize(logger, plan, tc, m, changes, rootPath, tx)
+	return executeAndFinalize(reporter, plan, tc, m, changes, rootPath, tx)
 }
 
-// executeAndFinalize runs the plan, updates manifest, and commits the transaction.
 func executeAndFinalize(
-	logger *StepLogger,
+	reporter types.Reporter,
 	plan *types.Plan,
 	tc types.TaskContext,
 	m *types.Manifest,
@@ -147,14 +108,12 @@ func executeAndFinalize(
 	rootPath string,
 	tx *transaction.Manager,
 ) error {
-	logger.Log("🚀", "Executing plan...")
-
-	// Run all tasks. They will auto-track changes via tc.Tx.
-	if err := Execute(plan, tc); err != nil {
-		return fmt.Errorf("task execution failed: %w", err)
+	reporter.Step("🚀", "Executing plan...")
+	if err := Execute(plan, tc, reporter); err != nil {
+		return err
 	}
 
-	logger.Log("✍️", "Updating manifest...")
+	reporter.Step("✍️", "Updating manifest...")
 	updateManifest(m, changes)
 
 	// We track the manifest file itself before saving.
@@ -169,7 +128,7 @@ func executeAndFinalize(
 		return fmt.Errorf("manifest save failed: %w", err)
 	}
 
-	logger.Log("✅", "Committing transaction...")
+	reporter.Step("✅", "Committing transaction...")
 	// Point of No Return: We delete the backups.
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
@@ -221,7 +180,7 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
 	changes := &manifestChanges{}
 	commitMessage := "scbake: Apply templates"
-	didSomething := false // Flag to ensure at least one action is requested
+	didSomething := false
 
 	if rc.LangFlag != "" {
 		didSomething = true
@@ -245,7 +204,7 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 
 	// Only fail if neither a language nor tooling was specified.
 	if !didSomething {
-		return nil, "", nil, errors.New("no language or templates specified. Use --lang or --with")
+		return nil, "", nil, errors.New("no language or templates specified")
 	}
 
 	return plan, commitMessage, changes, nil
@@ -281,7 +240,6 @@ func handleLangFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) (
 
 	plan.Tasks = append(plan.Tasks, langTasks...)
 
-	// Sanitize the project name for the manifest
 	projectName, err := util.SanitizeModuleName(rc.ManifestPathArg)
 	if err != nil {
 		return "", fmt.Errorf("could not determine project name: %w", err)
