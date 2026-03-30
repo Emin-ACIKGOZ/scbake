@@ -110,6 +110,14 @@ func TestGitTemplate_Fresh(t *testing.T) {
 		t.Skip("git not installed")
 	}
 
+	// Scoped environment setup. t.Setenv ensures these are cleaned up automatically.
+	t.Setenv("GIT_AUTHOR_NAME", "scbake-test-user")
+	t.Setenv("GIT_AUTHOR_EMAIL", "scbake-test@scbake.dev")
+	t.Setenv("GIT_COMMITTER_NAME", "scbake-test-user")
+	t.Setenv("GIT_COMMITTER_EMAIL", "scbake-test@scbake.dev")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "true")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+
 	tmpDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmpDir, "scbake.toml"), []byte(""), 0600); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
@@ -124,17 +132,6 @@ func TestGitTemplate_Fresh(t *testing.T) {
 	tc := types.TaskContext{
 		Ctx:        context.Background(),
 		TargetPath: tmpDir,
-	}
-
-	// Configure identity for test runner
-	cmd := exec.Command("git", "config", "--global", "user.email", "test@scbake.dev")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to set git user.email: %v", err)
-	}
-
-	cmd = exec.Command("git", "config", "--global", "user.name", "Test User")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to set git user.name: %v", err)
 	}
 
 	for _, task := range plan {
@@ -162,11 +159,17 @@ func TestGitTemplate_Idempotent(t *testing.T) {
 		t.Skip("git not installed")
 	}
 
+	// Apply identity isolation for idempotent tests.
+	t.Setenv("GIT_AUTHOR_NAME", "scbake-test-user")
+	t.Setenv("GIT_AUTHOR_EMAIL", "scbake-test@scbake.dev")
+	t.Setenv("GIT_COMMITTER_NAME", "scbake-test-user")
+	t.Setenv("GIT_COMMITTER_EMAIL", "scbake-test@scbake.dev")
+
 	tmpDir := t.TempDir()
 
 	runInDir(t, tmpDir, "git", "init")
-	runInDir(t, tmpDir, "git", "config", "user.email", "test@scbake.dev")
-	runInDir(t, tmpDir, "git", "config", "user.name", "Test User")
+	runInDir(t, tmpDir, "git", "config", "user.email", "scbake-test@scbake.dev")
+	runInDir(t, tmpDir, "git", "config", "user.name", "scbake-test-user")
 
 	if err := os.WriteFile(filepath.Join(tmpDir, "init.txt"), []byte("initial"), 0600); err != nil {
 		t.Fatalf("Failed to create init file: %v", err)
