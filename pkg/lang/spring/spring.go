@@ -22,8 +22,14 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for setup band
-	dirSeq := types.NewPrioritySequence(types.PrioDirCreate, types.MaxDirCreate)
-	langSeq := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
+	dirSeq, err := types.NewPrioritySequence(types.PrioDirCreate, types.MaxDirCreate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
+	}
+	langSeq, err := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
+	}
 
 	// Task 0: Ensure target directory exists (always needed)
 	p, err := dirSeq.Next()

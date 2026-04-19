@@ -5,6 +5,7 @@ package sveltelinter
 
 import (
 	"embed"
+	"fmt"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
@@ -20,7 +21,10 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Linter band (1200-1399)
-	seq := types.NewPrioritySequence(types.PrioLinter, types.MaxLinter)
+	seq, err := types.NewPrioritySequence(types.PrioLinter, types.MaxLinter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
+	}
 
 	// Task 1: Create the ESLint config file (eslint.config.js)
 	p, err := seq.Next()

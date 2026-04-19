@@ -5,6 +5,7 @@ package cighub
 
 import (
 	"embed"
+	"fmt"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
@@ -20,7 +21,10 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the CI band (1100-1199)
-	seq := types.NewPrioritySequence(types.PrioCI, types.MaxCI)
+	seq, err := types.NewPrioritySequence(types.PrioCI, types.MaxCI)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
+	}
 
 	// This task creates the workflow file in the required GitHub location.
 	// Since no TemplateData is provided here, the template will receive the

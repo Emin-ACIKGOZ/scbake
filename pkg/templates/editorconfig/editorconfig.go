@@ -5,6 +5,7 @@ package editorconfig
 
 import (
 	"embed"
+	"fmt"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
@@ -20,7 +21,10 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Universal Config band (1000-1099)
-	seq := types.NewPrioritySequence(types.PrioConfigUniversal, types.MaxConfigUniversal)
+	seq, err := types.NewPrioritySequence(types.PrioConfigUniversal, types.MaxConfigUniversal)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
+	}
 
 	p, err := seq.Next()
 	if err != nil {

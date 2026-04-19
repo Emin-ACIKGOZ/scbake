@@ -13,7 +13,10 @@ import (
 // and errors out if it hits the maximum.
 func TestPrioritySequence_Sequential(t *testing.T) {
 	// Start at 100, max is 105
-	seq := NewPrioritySequence(100, 105)
+	seq, err := NewPrioritySequence(100, 105)
+	if err != nil {
+		t.Fatalf("failed to create sequence: %v", err)
+	}
 
 	// We expect 6 valid numbers: 100, 101, 102, 103, 104, 105
 	for i := 0; i < 6; i++ {
@@ -28,7 +31,7 @@ func TestPrioritySequence_Sequential(t *testing.T) {
 	}
 
 	// The 7th call should fail (106 > 105)
-	_, err := seq.Next()
+	_, err = seq.Next()
 	if err == nil {
 		t.Error("expected error when exceeding max priority, got nil")
 	}
@@ -37,7 +40,10 @@ func TestPrioritySequence_Sequential(t *testing.T) {
 // TestPrioritySequence_Concurrency simulates a high-load environment.
 // It launches 100 goroutines at once to try and break the Mutex.
 func TestPrioritySequence_Concurrency(t *testing.T) {
-	seq := NewPrioritySequence(1000, 0) // 0 = Unlimited max
+	seq, err := NewPrioritySequence(1000, 0) // 0 = Unlimited max
+	if err != nil {
+		t.Fatalf("failed to create sequence: %v", err)
+	}
 	count := 100
 	var wg sync.WaitGroup
 
@@ -71,5 +77,35 @@ func TestPrioritySequence_Concurrency(t *testing.T) {
 
 	if len(uniqueMap) != count {
 		t.Errorf("expected %d unique priorities, got %d", count, len(uniqueMap))
+	}
+}
+
+// TestPrioritySequence_InvalidBand verifies that creating a sequence with invalid parameters returns error.
+func TestPrioritySequence_InvalidBand(t *testing.T) {
+	// base > max should return error
+	_, err := NewPrioritySequence(200, 100)
+	if err == nil {
+		t.Error("expected error when base > max, got nil")
+	}
+
+	// base == max should be valid
+	seq, err := NewPrioritySequence(100, 100)
+	if err != nil {
+		t.Fatalf("base == max should be valid, got error: %v", err)
+	}
+
+	// Should be able to get exactly one priority
+	p, err := seq.Next()
+	if err != nil {
+		t.Fatalf("failed to get priority: %v", err)
+	}
+	if p != 100 {
+		t.Errorf("expected priority 100, got %d", p)
+	}
+
+	// Next call should fail since we've exceeded max
+	_, err = seq.Next()
+	if err == nil {
+		t.Error("expected error after exceeding max, got nil")
 	}
 }

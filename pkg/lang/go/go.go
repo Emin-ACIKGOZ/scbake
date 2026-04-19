@@ -25,7 +25,10 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Use a single sequence for all language setup tasks (100-999)
-	langSeq := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
+	langSeq, err := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
+	}
 
 	// Task 1: Create .gitignore
 	p, err := langSeq.Next()
