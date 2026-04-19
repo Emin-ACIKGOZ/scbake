@@ -92,9 +92,9 @@ func TestValidateXMLEdgeCases(t *testing.T) {
 		xml     string
 		wantErr bool
 	}{
-		{"empty string", "", false},  // XML decoder returns EOF on empty, not error
-		{"whitespace only", "   \n  \t  ", false},  // Same - decoder returns EOF
-		{"text only", "hello world", false},  // XML decoder returns EOF on text, not error
+		{"empty string", "", false},               // XML decoder returns EOF on empty, not error
+		{"whitespace only", "   \n  \t  ", false}, // Same - decoder returns EOF
+		{"text only", "hello world", false},       // XML decoder returns EOF on text, not error
 		{"valid simple", "<root/>", false},
 		{"valid with namespace", "<root xmlns='http://example.com'/>", false},
 		{"valid with declaration", "<?xml version='1.0'?><root/>", false},
