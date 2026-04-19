@@ -32,26 +32,32 @@ No configuration files. No templates to maintain. No partial failures. Everythin
 
 ## 🚀 Installation
 
-`scbake` is currently in **alpha development**. There is no fixed method for installation or distribution beyond compiling from source at this stage.
+### Quick Install (macOS, Linux, Windows)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh | bash
+```
+
+Or with `wget`:
+```bash
+wget -qO- https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh | bash
+```
+
+The installer detects your OS/architecture and installs the latest binary to your PATH.
+
+**See [INSTALLING.md](docs/INSTALLING.md)** for detailed instructions, troubleshooting, and alternative installation methods:
+- ✅ Go Install
+- ✅ Manual download from GitHub Releases
+- ✅ Build from source
 
 ### Build from Source
 
-To compile the binary yourself, ensure you have **Go 1.21+** installed:
+To compile yourself (requires Go 1.21+):
 
-#### 1. Clone the repository:
 ```bash
 git clone https://github.com/Emin-ACIKGOZ/scbake.git
-```
-
-
-#### 2. Build the project:
-```bash
+cd scbake
 go build -o scbake main.go
-```
-
-
-#### 3. Move the binary to your path (optional):
-```bash
 mv scbake /usr/local/bin/
 ```
 
