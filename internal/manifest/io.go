@@ -8,10 +8,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 
 	"github.com/BurntSushi/toml"
+)
+
+var (
+	// manifestModTimes tracks the modification time when a manifest was last loaded
+	// to detect concurrent modifications (optimistic locking)
+	manifestModTimes = make(map[string]time.Time)
+	modTimesLock     sync.Mutex
 )
 
 // FindProjectRoot looks for scbake.toml or .git starting in startPath and walking up.
@@ -97,14 +106,69 @@ func Load(startPath string) (*types.Manifest, string, error) {
 		return nil, "", fmt.Errorf("failed to decode manifest: %w", err)
 	}
 
+	// Record the modification time for conflict detection during Save()
+	if info, statErr := os.Stat(manifestPath); statErr == nil {
+		modTimesLock.Lock()
+		manifestModTimes[manifestPath] = info.ModTime()
+		modTimesLock.Unlock()
+	}
+
 	return &m, rootPath, nil
+}
+
+// writeAndCloseManifestFile encodes manifest to file, syncs, and closes.
+func writeAndCloseManifestFile(f *os.File, m *types.Manifest) error {
+	encoder := toml.NewEncoder(f)
+	if err := encoder.Encode(m); err != nil {
+		return fmt.Errorf("failed to encode manifest: %w", err)
+	}
+
+	// Force write to disk
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("failed to sync manifest to disk: %w", err)
+	}
+
+	// Close explicitly to release file handle before Rename (critical on Windows)
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close temp manifest: %w", err)
+	}
+	return nil
+}
+
+// checkManifestConflict detects if the manifest file has been modified by another process.
+// Returns error if a conflict is detected.
+func checkManifestConflict(manifestPath string) error {
+	info, statErr := os.Stat(manifestPath)
+	if statErr != nil {
+		// File doesn't exist - no conflict can occur
+		if os.IsNotExist(statErr) {
+			return nil
+		}
+		// Some other stat error occurred
+		return statErr
+	}
+
+	modTimesLock.Lock()
+	originalModTime, exists := manifestModTimes[manifestPath]
+	modTimesLock.Unlock()
+
+	if exists && !info.ModTime().Equal(originalModTime) {
+		return errors.New("manifest conflict: file was modified by another process (concurrent scbake invocation detected)")
+	}
+	return nil
 }
 
 // Save atomically writes the manifest to scbake.toml in the specified root path.
 // It writes to a temporary file first, syncs, then renames to ensure data integrity.
+// Implements optimistic locking: detects if file was modified by another process.
 func Save(m *types.Manifest, rootPath string) (err error) {
 	finalPath := filepath.Join(rootPath, fileutil.ManifestFileName)
 	tempPath := finalPath + ".tmp"
+
+	// Conflict detection: Check if file has been modified by another process
+	if err := checkManifestConflict(finalPath); err != nil {
+		return err
+	}
 
 	// Create temp file using PrivateFilePerms (0600)
 	// G304: The path is constructed from user input but sanitized.
@@ -138,20 +202,8 @@ func Save(m *types.Manifest, rootPath string) (err error) {
 		}
 	}()
 
-	encoder := toml.NewEncoder(f)
-	if encodeErr := encoder.Encode(m); encodeErr != nil {
-		return fmt.Errorf("failed to encode manifest: %w", encodeErr)
-	}
-
-	// Force write to disk
-	if syncErr := f.Sync(); syncErr != nil {
-		return fmt.Errorf("failed to sync manifest to disk: %w", syncErr)
-	}
-
-	// Close explicitly to release file handle before Rename (critical on Windows).
-	// If this fails, 'err' becomes non-nil, and the defer will attempt cleanup.
-	if closeErr := f.Close(); closeErr != nil {
-		return fmt.Errorf("failed to close temp manifest: %w", closeErr)
+	if err := writeAndCloseManifestFile(f, m); err != nil {
+		return err
 	}
 
 	// Atomic rename
