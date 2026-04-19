@@ -10,16 +10,7 @@ run:
   # Include test files
   tests: true
 
-output:
-  print-issued-lines: true
-  print-linter-name: true
-
-linters-settings:
-  misspell:
-    locale: US
-
 linters:
-  disable-all: true
   enable:
     # --- Core & Bugs ---
     - bodyclose
@@ -49,7 +40,10 @@ linters:
     # --- Security ---
     - gosec
 
+  settings:
+    misspell:
+      locale: US
+
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0

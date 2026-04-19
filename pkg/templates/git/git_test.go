@@ -13,6 +13,7 @@ import (
 	"scbake/pkg/tasks"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestGitHandler_Structure validates the deterministic structural plan and task ordering.
@@ -140,7 +141,9 @@ func TestGitTemplate_Fresh(t *testing.T) {
 		}
 	}
 
-	logCmd := exec.Command("git", "log", "-1", "--pretty=%B")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	logCmd := exec.CommandContext(ctx, "git", "log", "-1", "--pretty=%B")
 	logCmd.Dir = tmpDir
 	out, err := logCmd.Output()
 	if err != nil {
@@ -195,7 +198,9 @@ func TestGitTemplate_Idempotent(t *testing.T) {
 		}
 	}
 
-	statusCmd := exec.Command("git", "status", "--porcelain")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	statusCmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	statusCmd.Dir = tmpDir
 	status, err := statusCmd.Output()
 	if err != nil {
@@ -209,7 +214,10 @@ func TestGitTemplate_Idempotent(t *testing.T) {
 
 func runInDir(t *testing.T, dir, name string, args ...string) {
 	t.Helper()
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	//nolint:gosec // Test helper intentionally accepts variable command name for flexibility
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("Command failed (%s %v): %v", name, args, err)

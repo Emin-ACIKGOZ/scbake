@@ -37,7 +37,7 @@ var applyCmd = &cobra.Command{
 		// Convert to absolute path for robust execution (npm, go build).
 		absPath, err := filepath.Abs(targetPath)
 		if err != nil {
-			return fmt.Errorf("Error resolving path: %w", err)
+			return fmt.Errorf("resolving path: %w", err)
 		}
 
 		rc := core.RunContext{
