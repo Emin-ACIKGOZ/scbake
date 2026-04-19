@@ -1,24 +1,32 @@
 
 # Scaffold Bake: The Atomic Project Scaffolder
 
-`scbake` is a single-binary CLI tool that simplifies project setup and maintenance by applying layered infrastructure templates and language packs atomically. It uses a **manifest file (`scbake.toml`)** as the source of truth for configuration, ensuring consistency and reproducibility.
+**Create production-ready projects in 3 minutes.** `scbake` is a single-binary CLI that scaffolds complete project structures with language setup, CI/CD, linters, and dev environments—all atomically, with automatic rollback on failure.
 
+```bash
+scbake new my-backend --lang go --with makefile,ci_github
+cd my-backend
+# ✅ You have: Go project, Makefile, GitHub Actions, scbake.toml
+```
 
-## ✨ Core Philosophy: Layering, Safety, and Extensibility
+No configuration files. No templates to maintain. No partial failures. Everything works the first time.
 
-`scbake` provides a safe, composable, and customizable way to manage project infrastructure.
+---
 
-- **Atomic Layering and Composition**  
-  Projects are built by applying independent **layers** (language packs and tooling templates). You can **mix and match** templates to achieve the desired setup.
+## Why scbake?
 
-- **Highly Configurable & Extensible**  
-  Designed for flexibility. If a language pack is missing, simply **add it**. If a template doesn’t fit, you can **modify or replace it**. The handler interface simplifies extension.
+**Before scbake**: New projects need 30+ manual steps (create dirs, init language, add CI, linters, Makefiles, dev containers...). Easy to miss steps, hard to standardize across teams.
 
-- **Built-in Atomic Safety**  
-  All modifications are managed by a **LIFO-based Transaction Manager**. If any task fails, the engine executes a journaled rollback. This deletes created artifacts and restores file backups in reverse order, ensuring the filesystem returns to its original state.
+**With scbake**: `scbake new` → your project is ready. Same setup everywhere. If anything fails, everything rolls back.
 
-- **Prioritized Execution**  
-  Tasks run in a defined order using **Priority Bands** (e.g., directory creation → language setup → universal config) to ensure dependencies are met.
+### ✨ Core Features
+
+- **Atomic Operations** - All changes apply transactionally. If a step fails, scbake rolls back everything. No partial, broken projects.
+- **3 Language Packs** - Go, Spring (Java), Svelte (Frontend). Add custom languages by forking.
+- **8 Built-in Templates** - Git, CI/CD, linters, Makefile, dev containers, editor config.
+- **One Manifest** - `scbake.toml` is your source of truth. Reproducible everywhere.
+- **No Dependencies** - Pure Go, standard library only. Single binary, no setup friction.
+- **Easily Extensible** - Fork scbake, add handlers, compile. Not a plugin system—just Go code.
 
 
 

@@ -106,8 +106,37 @@ jobs:
           echo "Building $OUTPUT_NAME..."
           go build -trimpath -ldflags="-s -w" -o "$OUTPUT_NAME" ./main.go
 
-      - name: Upload binary
+      - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: scbake-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/scbake-${{ matrix.goos }}-${{ matrix.goarch }}*
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          find artifacts -type f -name "scbake*" | while read f; do
+            cp "$f" "release/$(basename $f)"
+          done
+          ls -lh release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/scbake*
+          draft: false
+          prerelease: ${{ contains(github.ref, 'rc') || contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}

@@ -12,7 +12,7 @@ import (
 )
 
 // Set this with a linker flag during the build process in the future.
-var version = "v0.0.1-dev"
+var version = "v0.0.1"
 
 var (
 	dryRun bool
