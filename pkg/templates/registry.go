@@ -6,6 +6,7 @@ package templates
 import (
 	"fmt"
 	"sort"
+	"sync"
 
 	"scbake/internal/types"
 	cighub "scbake/pkg/templates/ci_github"
@@ -24,8 +25,9 @@ type Handler interface {
 	GetTasks(targetPath string) ([]types.Task, error)
 }
 
-// handlers holds the map of all available template handlers.
-var handlers = map[string]Handler{
+var (
+	handlersLock sync.RWMutex
+	handlers     = map[string]Handler{
 	"makefile":      &makefile.Handler{},
 	"ci_github":     &cighub.Handler{},
 	"editorconfig":  &editorconfig.Handler{},
@@ -34,16 +36,21 @@ var handlers = map[string]Handler{
 	"svelte_linter": &sveltelinter.Handler{},
 	"devcontainer":  &devcontainer.Handler{},
 	"git":           &git.Handler{},
-}
+	}
+)
 
 // Register allows external packages (like tests) to inject custom handlers.
 // This is essential for testing failure scenarios.
 func Register(name string, h Handler) {
+	handlersLock.Lock()
+	defer handlersLock.Unlock()
 	handlers[name] = h
 }
 
 // GetHandler returns the correct template handler for the given string.
 func GetHandler(tmplName string) (Handler, error) {
+	handlersLock.RLock()
+	defer handlersLock.RUnlock()
 	handler, ok := handlers[tmplName]
 	if !ok {
 		return nil, fmt.Errorf("unknown template: %s", tmplName)
@@ -53,6 +60,8 @@ func GetHandler(tmplName string) (Handler, error) {
 
 // ListTemplates returns the sorted names of all supported templates.
 func ListTemplates() []string {
+	handlersLock.RLock()
+	defer handlersLock.RUnlock()
 	keys := make([]string, 0, len(handlers))
 	for k := range handlers {
 		keys = append(keys, k)

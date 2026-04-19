@@ -6,6 +6,7 @@ package lang
 import (
 	"fmt"
 	"sort"
+	"sync"
 
 	"scbake/internal/types"
 	golang "scbake/pkg/lang/go"
@@ -19,20 +20,26 @@ type Handler interface {
 	GetTasks(targetPath string) ([]types.Task, error)
 }
 
-// handlers Map of all available language handlers.
-var handlers = map[string]Handler{
-	"go":     &golang.Handler{},
-	"svelte": &svelte.Handler{},
-	"spring": &spring.Handler{},
-}
+var (
+	handlersLock sync.RWMutex
+	handlers     = map[string]Handler{
+		"go":     &golang.Handler{},
+		"svelte": &svelte.Handler{},
+		"spring": &spring.Handler{},
+	}
+)
 
 // Register allows external packages or tests to inject custom language handlers.
 func Register(name string, h Handler) {
+	handlersLock.Lock()
+	defer handlersLock.Unlock()
 	handlers[name] = h
 }
 
 // GetHandler returns the correct language handler for the given string.
 func GetHandler(langName string) (Handler, error) {
+	handlersLock.RLock()
+	defer handlersLock.RUnlock()
 	handler, ok := handlers[langName]
 	if !ok {
 		return nil, fmt.Errorf("unknown language: %s", langName)
@@ -42,6 +49,8 @@ func GetHandler(langName string) (Handler, error) {
 
 // ListLangs returns the sorted names of all supported languages.
 func ListLangs() []string {
+	handlersLock.RLock()
+	defer handlersLock.RUnlock()
 	keys := make([]string, 0, len(handlers))
 	for k := range handlers {
 		keys = append(keys, k)
