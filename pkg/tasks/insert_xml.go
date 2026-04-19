@@ -244,16 +244,17 @@ func insertXMLElement(fileContent, elementPath, xmlToInsert string) (string, err
 
 	// Add proper indentation to the inserted content
 	insertedLines := strings.Split(strings.TrimSpace(xmlToInsert), "\n")
-	var indentedInsert strings.Builder
-	indentedInsert.WriteString("    ")
+	var result strings.Builder
+	result.WriteString(before)
+	result.WriteString("\n    ")
 	for i, line := range insertedLines {
-		indentedInsert.WriteString(strings.TrimSpace(line))
+		result.WriteString(strings.TrimSpace(line))
 		if i < len(insertedLines)-1 {
-			indentedInsert.WriteString("\n    ")
+			result.WriteString("\n    ")
 		}
 	}
+	result.WriteString("\n")
+	result.WriteString(after)
 
-	result := before + "\n" + indentedInsert.String() + "\n" + after
-
-	return result, nil
+	return result.String(), nil
 }
