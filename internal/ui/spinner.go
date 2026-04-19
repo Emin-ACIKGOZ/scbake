@@ -9,7 +9,11 @@ import (
 	"time"
 )
 
-var spinnerChars = []string{"⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾"}
+var (
+	spinnerChars = []string{"⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾"}
+	// outputMux synchronizes all output to prevent interleaving from concurrent goroutines
+	outputMux sync.Mutex
+)
 
 const spinnerDelay = 100 * time.Millisecond
 
@@ -32,9 +36,13 @@ func NewSpinnerReporter(totalSteps int) *SpinnerReporter {
 // Step logs a high-level orchestration milestone with a progress prefix and emoji.
 func (r *SpinnerReporter) Step(emoji, message string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.currentStep++
-	fmt.Printf("[%d/%d] %s %s\n", r.currentStep, r.totalSteps, emoji, message)
+	step := r.currentStep
+	total := r.totalSteps
+	r.mu.Unlock()
+	outputMux.Lock()
+	defer outputMux.Unlock()
+	fmt.Printf("[%d/%d] %s %s\n", step, total, emoji, message)
 }
 
 // SetTotalSteps updates the total number of high-level steps for future progress logging.
@@ -71,8 +79,10 @@ func (r *SpinnerReporter) animate() {
 			index := r.activeIndex
 			total := r.activeTotal
 			r.mu.Unlock()
+			outputMux.Lock()
 			prefix := fmt.Sprintf("[%d/%d]", index, total)
 			fmt.Printf("\r%s %s %s", prefix, spinnerChars[i%len(spinnerChars)], desc)
+			outputMux.Unlock()
 			i++
 		}
 	}
@@ -86,6 +96,8 @@ func (r *SpinnerReporter) TaskEnd(err error) {
 	index := r.activeIndex
 	total := r.activeTotal
 	r.mu.Unlock()
+	outputMux.Lock()
+	defer outputMux.Unlock()
 	prefix := fmt.Sprintf("[%d/%d]", index, total)
 	if err != nil {
 		fmt.Printf("\r%s ❌ %s\n", prefix, desc)
