@@ -4,6 +4,7 @@
 package manifest
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,10 +119,22 @@ func Save(m *types.Manifest, rootPath string) (err error) {
 	// We only act if there is an error, preventing double-close on success paths.
 	defer func() {
 		if err != nil {
-			// Best effort close (ignoring error) to ensure handle release
-			_ = f.Close()
+			var cleanupErrors []error
+
+			// Best effort close to ensure handle release
+			if closeErr := f.Close(); closeErr != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("failed to close temp file: %w", closeErr))
+			}
+
 			// Remove garbage temp file
-			_ = os.Remove(tempPath)
+			if removeErr := os.Remove(tempPath); removeErr != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("failed to remove temp file: %w", removeErr))
+			}
+
+			// Log cleanup errors but don't overwrite original error
+			if len(cleanupErrors) > 0 {
+				fmt.Fprintf(os.Stderr, "⚠️  Cleanup warnings during manifest save: %v\n", errors.Join(cleanupErrors...))
+			}
 		}
 	}()
 
