@@ -17,20 +17,20 @@ var (
 )
 
 const (
-	spinnerDelay    = 100 * time.Millisecond
-	spinnerTimeout  = 30 * time.Minute
+	spinnerDelay   = 100 * time.Millisecond
+	spinnerTimeout = 30 * time.Minute
 )
 
 // SpinnerReporter provides an interactive terminal UI with an animated spinner.
 type SpinnerReporter struct {
-	mu          sync.Mutex
-	currentStep int
-	totalSteps  int
-	activeDesc  string
-	activeIndex int
-	activeTotal int
-	done        chan struct{}
-	spinnerCtx  context.Context
+	mu            sync.Mutex
+	currentStep   int
+	totalSteps    int
+	activeDesc    string
+	activeIndex   int
+	activeTotal   int
+	done          chan struct{}
+	spinnerCtx    context.Context
 	spinnerCancel context.CancelFunc
 }
 

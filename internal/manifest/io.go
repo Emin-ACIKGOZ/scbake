@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
-	"time"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
+	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )

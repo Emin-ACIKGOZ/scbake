@@ -8,7 +8,6 @@
 // 4. Register in pkg/lang/registry.go: Register("rust", &rust.Handler{})
 // 5. Build: go build -o scbake main.go
 // 6. Use: scbake new my-app --lang rust
-//
 package rust
 
 import (

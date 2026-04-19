@@ -28,14 +28,14 @@ type Handler interface {
 var (
 	handlersLock sync.RWMutex
 	handlers     = map[string]Handler{
-	"makefile":      &makefile.Handler{},
-	"ci_github":     &cighub.Handler{},
-	"editorconfig":  &editorconfig.Handler{},
-	"go_linter":     &golinter.Handler{},
-	"maven_linter":  &mavenlinter.Handler{},
-	"svelte_linter": &sveltelinter.Handler{},
-	"devcontainer":  &devcontainer.Handler{},
-	"git":           &git.Handler{},
+		"makefile":      &makefile.Handler{},
+		"ci_github":     &cighub.Handler{},
+		"editorconfig":  &editorconfig.Handler{},
+		"go_linter":     &golinter.Handler{},
+		"maven_linter":  &mavenlinter.Handler{},
+		"svelte_linter": &sveltelinter.Handler{},
+		"devcontainer":  &devcontainer.Handler{},
+		"git":           &git.Handler{},
 	}
 )
 
