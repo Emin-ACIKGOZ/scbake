@@ -23,6 +23,8 @@ func (r *PlainReporter) Step(emoji, message string) {
 	if r.isDryRun && r.currentStep > 2 {
 		return
 	}
+	outputMux.Lock()
+	defer outputMux.Unlock()
 	fmt.Printf("[%d/%d] %s %s\n", r.currentStep, r.totalSteps, emoji, message)
 }
 
@@ -34,6 +36,8 @@ func (r *PlainReporter) SetTotalSteps(total int) {
 // TaskStart logs a dry-run task description. Standard tasks are silent in plain mode.
 func (r *PlainReporter) TaskStart(desc string, _, _ int) {
 	if r.isDryRun {
+		outputMux.Lock()
+		defer outputMux.Unlock()
 		fmt.Printf("  [DRY RUN] %s\n", desc)
 	}
 }
