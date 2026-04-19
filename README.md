@@ -115,7 +115,7 @@ scbake list [langs|templates|projects]
 | `editorconfig`  | Universal Config (1000) | Standard file formatting across the project                       |
 | `ci_github`     | CI (1100)               | Conditional CI setup based on detected languages          |
 | `go_linter`     | Linter (1200)           | Standard `golangci-lint` configuration                     |
-| `maven_linter`  | Linter (1200)           | Sets up Maven Checkstyle                       |
+| `maven_linter`  | Linter (1200)           | Checkstyle config + automatic pom.xml plugin integration                       |
 | `svelte_linter` | Linter (1200)           | ESLint 9 integration for Svelte projects          |
 | `makefile`      | Build System (1400)     | Universal build/lint scripts for all projects  |
 | `devcontainer`  | Dev Env (1500)          | Containerized DX with auto-detected toolchains |
@@ -123,9 +123,42 @@ scbake list [langs|templates|projects]
 
 ## 💻 Extending `scbake`
 
+### Creating Custom Handlers
+
 1. Create a new package under `pkg/lang` or `pkg/templates`.
-2. Implement the `Handler` interface using task types (`CreateTemplateTask`, `ExecCommandTask`, etc.).
+2. Implement the `Handler` interface using task types.
 3. Register the handler in the relevant `registry.go`.
+
+### Available Task Types
+
+- **CreateTemplateTask**: Creates new files from embedded templates (with manifest data available)
+- **ExecCommandTask**: Executes shell commands with optional output tracking
+- **CreateDirectoryTask**: Creates directories with transaction tracking
+- **InsertXMLTask**: Modifies existing XML files by inserting fragments at specified paths
+
+### Example: Modifying Existing XML Files
+
+For handlers that need to modify existing XML files (like Maven pom.xml), use `InsertXMLTask`:
+
+```go
+// Read snippet from embedded template
+snippet, _ := templates.ReadFile("plugin_snippet.xml.tpl")
+
+// Create insert task
+task := &tasks.InsertXMLTask{
+    FilePath:    "pom.xml",
+    ElementPath: "/project/build/plugins",
+    XMLContent:  string(snippet),
+    Desc:        "Inject plugin into pom.xml",
+    TaskPrio:    1201,
+}
+
+// The task automatically:
+// - Validates XML structure
+// - Prevents duplicate insertions (idempotent)
+// - Integrates with transaction manager for rollback
+// - Validates paths to prevent directory traversal
+```
 
 
 ## ⚙️ Development Details
