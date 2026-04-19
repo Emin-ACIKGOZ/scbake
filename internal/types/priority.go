@@ -21,11 +21,12 @@ type PrioritySequence struct {
 // NewPrioritySequence creates a sequence starting at `base`.
 // Optional `maxPrio` allows to set an upper bound of a band flexibly.
 // (use 0 for no max, meaning unlimited).
-func NewPrioritySequence(base, maxPrio Priority) *PrioritySequence {
+// Returns error if maxPrio is set and less than base.
+func NewPrioritySequence(base, maxPrio Priority) (*PrioritySequence, error) {
 	if maxPrio != 0 && maxPrio < base {
-		panic(fmt.Sprintf("invalid priority band: base=%d > max=%d", base, maxPrio))
+		return nil, fmt.Errorf("invalid priority band: base=%d > max=%d", base, maxPrio)
 	}
-	return &PrioritySequence{current: base, max: maxPrio}
+	return &PrioritySequence{current: base, max: maxPrio}, nil
 }
 
 // Next returns the next priority and increments the counter.

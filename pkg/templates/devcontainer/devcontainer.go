@@ -5,6 +5,7 @@ package devcontainer
 
 import (
 	"embed"
+	"fmt"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
@@ -22,7 +23,10 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 
 	// Initialize sequence for the Dev Environment band (1500+)
 	// Max is set to 0, indicating unlimited steps within this final band.
-	seq := types.NewPrioritySequence(types.PrioDevEnv, 0)
+	seq, err := types.NewPrioritySequence(types.PrioDevEnv, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
+	}
 
 	// Task 1: Create the lightweight, smart Dockerfile
 	p, err := seq.Next()

@@ -5,6 +5,7 @@ package makefile
 
 import (
 	"embed"
+	"fmt"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
@@ -20,7 +21,10 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Build System band (1400-1499)
-	seq := types.NewPrioritySequence(types.PrioBuildSystem, types.MaxBuildSystem)
+	seq, err := types.NewPrioritySequence(types.PrioBuildSystem, types.MaxBuildSystem)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
+	}
 
 	p, err := seq.Next()
 	if err != nil {

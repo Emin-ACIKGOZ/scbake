@@ -4,6 +4,7 @@
 package git
 
 import (
+	"fmt"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
@@ -19,7 +20,10 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 
 	// Use PrioritySequence to avoid magic numbers and ensure strictly ordered execution
 	// within the VersionControl band.
-	seq := types.NewPrioritySequence(types.PrioVersionControl, types.MaxVersionControl)
+	seq, err := types.NewPrioritySequence(types.PrioVersionControl, types.MaxVersionControl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
+	}
 
 	// Task 1: Initialize Git repository.
 	// We predict creation of GitDir so the transaction system can rollback the entire repo creation on failure.
