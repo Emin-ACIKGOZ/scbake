@@ -4,6 +4,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -15,7 +16,10 @@ var (
 	outputMux sync.Mutex
 )
 
-const spinnerDelay = 100 * time.Millisecond
+const (
+	spinnerDelay    = 100 * time.Millisecond
+	spinnerTimeout  = 30 * time.Minute
+)
 
 // SpinnerReporter provides an interactive terminal UI with an animated spinner.
 type SpinnerReporter struct {
@@ -26,6 +30,8 @@ type SpinnerReporter struct {
 	activeIndex int
 	activeTotal int
 	done        chan struct{}
+	spinnerCtx  context.Context
+	spinnerCancel context.CancelFunc
 }
 
 // NewSpinnerReporter initializes a reporter with a specified number of high-level steps.
@@ -54,6 +60,14 @@ func (r *SpinnerReporter) SetTotalSteps(total int) {
 
 // TaskStart initiates the spinner animation for a specific sub-task in a separate goroutine.
 func (r *SpinnerReporter) TaskStart(desc string, curr, total int) {
+	// Cancel previous spinner if still running (cleanup)
+	if r.spinnerCancel != nil {
+		r.spinnerCancel()
+	}
+
+	// Create context with timeout to prevent goroutine leaks if TaskEnd() is never called
+	r.spinnerCtx, r.spinnerCancel = context.WithTimeout(context.Background(), spinnerTimeout)
+
 	r.mu.Lock()
 	r.activeDesc = desc
 	r.activeIndex = curr
@@ -73,6 +87,8 @@ func (r *SpinnerReporter) animate() {
 		select {
 		case <-r.done:
 			return
+		case <-r.spinnerCtx.Done():
+			return
 		case <-ticker.C:
 			r.mu.Lock()
 			desc := r.activeDesc
@@ -90,7 +106,14 @@ func (r *SpinnerReporter) animate() {
 
 // TaskEnd stops the active spinner goroutine and prints a final success or failure indicator.
 func (r *SpinnerReporter) TaskEnd(err error) {
+	// Signal goroutine to stop (primary method)
 	close(r.done)
+
+	// Cancel context to ensure cleanup if done channel was already consumed
+	if r.spinnerCancel != nil {
+		r.spinnerCancel()
+	}
+
 	r.mu.Lock()
 	desc := r.activeDesc
 	index := r.activeIndex
