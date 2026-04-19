@@ -132,6 +132,33 @@ func BenchmarkInsertXMLElement_Large(b *testing.B) {
 	}
 }
 
+// BenchmarkInsertXMLElement_VeryLarge tests insertion with many plugins (stress test)
+func BenchmarkInsertXMLElement_VeryLarge(b *testing.B) {
+	var sb strings.Builder
+	sb.WriteString(`<project>
+	<build>
+		<plugins>`)
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&sb, `
+			<plugin>
+				<groupId>org.example</groupId>
+				<artifactId>plugin-%d</artifactId>
+				<version>1.0.0</version>
+			</plugin>`, i)
+	}
+	sb.WriteString(`
+		</plugins>
+	</build>
+</project>`)
+	fileContent := sb.String()
+	xmlToInsert := `<plugin><groupId>new</groupId><artifactId>test</artifactId></plugin>`
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = insertXMLElement(fileContent, "/project/build/plugins", xmlToInsert)
+	}
+}
+
 // BenchmarkContainsNormalizedXML_NotFound tests worst case (element not found)
 func BenchmarkContainsNormalizedXML_NotFound(b *testing.B) {
 	fileContent := strings.Repeat(`<plugin><groupId>org.example.plugin1</groupId></plugin>
