@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/manifest"
 	"scbake/internal/preflight"
@@ -17,6 +18,12 @@ import (
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/lang"
 	"scbake/pkg/templates"
+)
+
+const (
+	// defaultTimeout is the maximum time allowed for the entire operation.
+	// This includes external commands like spring boot init, npm install, etc.
+	defaultTimeout = 30 * time.Minute
 )
 
 // RunContext holds the flags and arguments for a single execution run.
@@ -77,14 +84,18 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 		return err
 	}
 
-	// Prepare task context
+	// Prepare task context with timeout
 	// NOTE: shallow copy of manifest. Ideally safe as we append to slices creating new backing arrays
 	// if capacity is exceeded, but 'm' is effectively read-only until updateManifest.
 	futureManifest := *m
 	futureManifest.Projects = append(futureManifest.Projects, changes.Projects...)
 	futureManifest.Templates = append(futureManifest.Templates, changes.Templates...)
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
 	tc := types.TaskContext{
-		Ctx:        context.Background(),
+		Ctx:        ctx,
 		DryRun:     rc.DryRun,
 		Manifest:   &futureManifest,
 		TargetPath: rc.TargetPath,
