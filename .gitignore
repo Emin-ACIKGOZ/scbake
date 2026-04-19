@@ -1,0 +1,15 @@
+# Binaries
+scbake
+scbake.exe
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+.env
