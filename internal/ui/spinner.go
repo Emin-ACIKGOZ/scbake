@@ -66,8 +66,13 @@ func (r *SpinnerReporter) animate() {
 		case <-r.done:
 			return
 		case <-ticker.C:
-			prefix := fmt.Sprintf("[%d/%d]", r.activeIndex, r.activeTotal)
-			fmt.Printf("\r%s %s %s", prefix, spinnerChars[i%len(spinnerChars)], r.activeDesc)
+			r.mu.Lock()
+			desc := r.activeDesc
+			index := r.activeIndex
+			total := r.activeTotal
+			r.mu.Unlock()
+			prefix := fmt.Sprintf("[%d/%d]", index, total)
+			fmt.Printf("\r%s %s %s", prefix, spinnerChars[i%len(spinnerChars)], desc)
 			i++
 		}
 	}
@@ -76,10 +81,15 @@ func (r *SpinnerReporter) animate() {
 // TaskEnd stops the active spinner goroutine and prints a final success or failure indicator.
 func (r *SpinnerReporter) TaskEnd(err error) {
 	close(r.done)
-	prefix := fmt.Sprintf("[%d/%d]", r.activeIndex, r.activeTotal)
+	r.mu.Lock()
+	desc := r.activeDesc
+	index := r.activeIndex
+	total := r.activeTotal
+	r.mu.Unlock()
+	prefix := fmt.Sprintf("[%d/%d]", index, total)
 	if err != nil {
-		fmt.Printf("\r%s ❌ %s\n", prefix, r.activeDesc)
+		fmt.Printf("\r%s ❌ %s\n", prefix, desc)
 		return
 	}
-	fmt.Printf("\r%s ✅ %s\n", prefix, r.activeDesc)
+	fmt.Printf("\r%s ✅ %s\n", prefix, desc)
 }
