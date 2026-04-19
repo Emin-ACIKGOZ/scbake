@@ -3,6 +3,7 @@
 
 # .golangci.yml - Standardized Go Linter Configuration
 
+version: "2"
 run:
   # Default timeout for linter
   timeout: 5m
