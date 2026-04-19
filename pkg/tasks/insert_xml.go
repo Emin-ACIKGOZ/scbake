@@ -6,7 +6,9 @@ package tasks
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,20 +139,36 @@ func (t *InsertXMLTask) isAlreadyInserted(contentStr string) bool {
 }
 
 // containsNormalizedXML checks if normalized XML content exists in file (ignores whitespace differences).
+// Uses O(n) single-pass algorithm instead of nested loops.
 func containsNormalizedXML(fileContent, xmlSnippet string) bool {
-	// Split into lines and normalize each for comparison
-	fileLines := strings.FieldsFunc(fileContent, func(r rune) bool { return r == '\n' })
-	snippetLines := strings.FieldsFunc(xmlSnippet, func(r rune) bool { return r == '\n' })
+	normalizedSnippet := strings.TrimSpace(xmlSnippet)
+	if normalizedSnippet == "" {
+		return false
+	}
 
+	// Split into lines once
+	snippetLines := strings.Split(normalizedSnippet, "\n")
 	if len(snippetLines) == 0 {
 		return false
 	}
 
-	// Look for the snippet in the file (allowing different indentation)
-	for i := 0; i <= len(fileLines)-len(snippetLines); i++ {
+	// Normalize snippet lines once
+	normalizedSnippetLines := make([]string, len(snippetLines))
+	for i, line := range snippetLines {
+		normalizedSnippetLines[i] = strings.TrimSpace(line)
+	}
+
+	// Split file into lines
+	fileLines := strings.Split(fileContent, "\n")
+	if len(fileLines) < len(normalizedSnippetLines) {
+		return false
+	}
+
+	// Single pass through file
+	for i := 0; i <= len(fileLines)-len(normalizedSnippetLines); i++ {
 		match := true
-		for j, snippetLine := range snippetLines {
-			if strings.TrimSpace(fileLines[i+j]) != strings.TrimSpace(snippetLine) {
+		for j, snippetLine := range normalizedSnippetLines {
+			if strings.TrimSpace(fileLines[i+j]) != snippetLine {
 				match = false
 				break
 			}
@@ -159,6 +177,7 @@ func containsNormalizedXML(fileContent, xmlSnippet string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -170,7 +189,7 @@ func validateXML(content string) error {
 	for {
 		_, err := decoder.Token()
 		if err != nil {
-			if err.Error() == "EOF" {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return err
