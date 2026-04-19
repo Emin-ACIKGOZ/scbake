@@ -24,3 +24,38 @@ type Template struct {
 	Name string `toml:"name"`
 	Path string `toml:"path"`
 }
+
+// DeepCopy creates a complete copy of the manifest including all nested slices.
+// This ensures modifications to the copy don't affect the original.
+func (m *Manifest) DeepCopy() *Manifest {
+	if m == nil {
+		return nil
+	}
+
+	result := &Manifest{
+		SbakeVersion: m.SbakeVersion,
+		Projects:     make([]Project, len(m.Projects)),
+		Templates:    make([]Template, len(m.Templates)),
+	}
+
+	// Deep copy projects
+	for i, p := range m.Projects {
+		result.Projects[i] = Project{
+			Name:      p.Name,
+			Path:      p.Path,
+			Language:  p.Language,
+			Templates: make([]string, len(p.Templates)),
+		}
+		result.Projects[i].Templates = append([]string{}, p.Templates...)
+	}
+
+	// Deep copy templates
+	for i, t := range m.Templates {
+		result.Templates[i] = Template{
+			Name: t.Name,
+			Path: t.Path,
+		}
+	}
+
+	return result
+}

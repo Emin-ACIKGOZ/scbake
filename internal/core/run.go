@@ -85,9 +85,8 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	}
 
 	// Prepare task context with timeout
-	// NOTE: shallow copy of manifest. Ideally safe as we append to slices creating new backing arrays
-	// if capacity is exceeded, but 'm' is effectively read-only until updateManifest.
-	futureManifest := *m
+	// Deep copy manifest to ensure modifications don't affect original
+	futureManifest := m.DeepCopy()
 	futureManifest.Projects = append(futureManifest.Projects, changes.Projects...)
 	futureManifest.Templates = append(futureManifest.Templates, changes.Templates...)
 
@@ -97,7 +96,7 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	tc := types.TaskContext{
 		Ctx:        ctx,
 		DryRun:     rc.DryRun,
-		Manifest:   &futureManifest,
+		Manifest:   futureManifest,
 		TargetPath: rc.TargetPath,
 		Force:      rc.Force,
 		Tx:         tx,
