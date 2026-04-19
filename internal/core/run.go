@@ -221,22 +221,23 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 	return plan, commitMessage, changes, nil
 }
 
+// checkLangPrerequisites validates that required binaries are available for the language.
+func checkLangPrerequisites(langFlag string) error {
+	switch langFlag {
+	case "go":
+		return preflight.CheckBinaries("go")
+	case "svelte":
+		return preflight.CheckBinaries("npm")
+	case "spring":
+		return preflight.CheckBinaries("curl", "unzip", "java")
+	}
+	return nil
+}
+
 // handleLangFlag processes the --lang flag, adding language tasks and project info.
 func handleLangFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) (string, error) {
-	// Binary check
-	switch rc.LangFlag {
-	case "go":
-		if err := preflight.CheckBinaries("go"); err != nil {
-			return "", err
-		}
-	case "svelte":
-		if err := preflight.CheckBinaries("npm"); err != nil {
-			return "", err
-		}
-	case "spring":
-		if err := preflight.CheckBinaries("curl", "unzip", "java"); err != nil {
-			return "", err
-		}
+	if err := checkLangPrerequisites(rc.LangFlag); err != nil {
+		return "", err
 	}
 
 	handler, err := lang.GetHandler(rc.LangFlag)
@@ -247,6 +248,10 @@ func handleLangFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) (
 	langTasks, err := handler.GetTasks(rc.TargetPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to get tasks for lang '%s': %w", rc.LangFlag, err)
+	}
+
+	if len(langTasks) == 0 {
+		return "", fmt.Errorf("language handler '%s' returned no tasks (possible misconfiguration)", rc.LangFlag)
 	}
 
 	plan.Tasks = append(plan.Tasks, langTasks...)
@@ -278,7 +283,11 @@ func handleWithFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) e
 			return fmt.Errorf("failed to get tasks for template '%s': %w", tmplName, err)
 		}
 
-		plan.Tasks = append(plan.Tasks, tmplTasks...)
+		if len(tmplTasks) > 0 {
+			plan.Tasks = append(plan.Tasks, tmplTasks...)
+		} else {
+			fmt.Fprintf(os.Stderr, "⚠️  Template handler '%s' returned no tasks (possible misconfiguration)\n", tmplName)
+		}
 	}
 
 	// Simplified change tracking for root templates:
