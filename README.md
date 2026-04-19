@@ -1,10 +1,9 @@
-
 # Scaffold Bake: The Atomic Project Scaffolder
 
 `scbake` is a single-binary CLI tool that simplifies project setup and maintenance by applying layered infrastructure templates and language packs atomically. It uses a **manifest file (`scbake.toml`)** as the source of truth for configuration, ensuring consistency and reproducibility.
 
 
-## ✨ Core Philosophy: Layering, Safety, and Extensibility
+## Core Philosophy: Layering, Safety, and Extensibility
 
 `scbake` provides a safe, composable, and customizable way to manage project infrastructure.
 
@@ -12,7 +11,7 @@
   Projects are built by applying independent **layers** (language packs and tooling templates). You can **mix and match** templates to achieve the desired setup.
 
 - **Highly Configurable & Extensible**  
-  Designed for flexibility. If a language pack is missing, simply **add it**. If a template doesn’t fit, you can **modify or replace it**. The handler interface simplifies extension.
+  Designed for flexibility. If a language pack is missing, simply **add it**. If a template doesn't fit, you can **modify or replace it**. The handler interface simplifies extension.
 
 - **Built-in Atomic Safety**  
   All modifications are managed by a **LIFO-based Transaction Manager**. If any task fails, the engine executes a journaled rollback. This deletes created artifacts and restores file backups in reverse order, ensuring the filesystem returns to its original state.
@@ -22,9 +21,25 @@
 
 
 
-## 🚀 Installation
+## Installation
 
-`scbake` is currently in **alpha development**. There is no fixed method for installation or distribution beyond compiling from source at this stage.
+### Quick Install (macOS, Linux, Windows)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh | bash
+```
+
+Or with `wget`:
+```bash
+wget -qO- https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh | bash
+```
+
+The installer detects your OS/architecture and installs the latest binary to your PATH.
+
+**See [INSTALLING.md](docs/INSTALLING.md)** for detailed instructions, troubleshooting, and alternative installation methods:
+- Go Install
+- Manual download from GitHub Releases
+- Build from source
 
 ### Build from Source
 
@@ -33,21 +48,20 @@ To compile the binary yourself, ensure you have **Go 1.21+** installed:
 #### 1. Clone the repository:
 ```bash
 git clone https://github.com/Emin-ACIKGOZ/scbake.git
+cd scbake
 ```
-
 
 #### 2. Build the project:
 ```bash
 go build -o scbake main.go
 ```
 
-
 #### 3. Move the binary to your path (optional):
 ```bash
 mv scbake /usr/local/bin/
 ```
 
-## 📋 Commands & Usage
+## Commands & Usage
 
 ### `new`: Create a New Project
 
@@ -99,7 +113,7 @@ scbake list [langs|templates|projects]
 ```
 
 
-## 🌐 Supported Language Packs
+## Supported Language Packs
 
 | Language   | Initialization Tasks                                                            | Required Binaries       |
 | :--------- | :------------------------------------------------------------------------------ | :---------------------- |
@@ -108,7 +122,7 @@ scbake list [langs|templates|projects]
 | **Spring** | Downloads starter zip from `start.spring.io`, extracts, makes `mvnw` executable | `curl`, `unzip`, `java` |
 
 
-## 🛠️ Tooling Templates
+## Tooling Templates
 
 | Template        | Priority Band           | Features                                       |
 | :-------------- | :---------------------- | :--------------------------------------------- |
@@ -121,7 +135,7 @@ scbake list [langs|templates|projects]
 | `devcontainer`  | Dev Env (1500)          | Containerized DX with auto-detected toolchains |
 | `git`  | Version Control (2000)          | Initializes repo, stages all files, and creates initial commit |
 
-## 💻 Extending `scbake`
+## Extending `scbake`
 
 ### Creating Custom Handlers
 
@@ -161,7 +175,7 @@ task := &tasks.InsertXMLTask{
 ```
 
 
-## ⚙️ Development Details
+## Development Details
 
 ### Task Execution Priority
 
