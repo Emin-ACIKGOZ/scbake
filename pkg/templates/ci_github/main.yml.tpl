@@ -25,7 +25,7 @@ jobs:
             - name: Setup Go Environment
               uses: actions/setup-go@v5
               with:
-                go-version: '1.21'
+                go-version: {{ index $root.Metadata "go_version" | default "1.22" | quote }}
             {{ $hasGo = true }}
           {{ end }}
         {{ end }}
@@ -35,7 +35,7 @@ jobs:
             - name: Setup Node.js Environment
               uses: actions/setup-node@v4
               with:
-                node-version: '20'
+                node-version: {{ index $root.Metadata "node_version" | default "20" | quote }}
             {{ $hasSvelte = true }}
           {{ end }}
         {{ end }}
@@ -45,8 +45,8 @@ jobs:
             - name: Setup Java Environment
               uses: actions/setup-java@v4
               with:
-                distribution: 'temurin'
-                java-version: '17'
+                distribution: {{ index $root.Metadata "java_distribution" | default "temurin" | quote }}
+                java-version: {{ index $root.Metadata "java_version" | default "17" | quote }}
           {{ $hasSpring = true }}
           {{ end }}
         {{ end }}

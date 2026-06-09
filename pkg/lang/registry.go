@@ -4,6 +4,7 @@
 package lang
 
 import (
+	"embed"
 	"fmt"
 	"sort"
 	"sync"
@@ -13,6 +14,15 @@ import (
 	"scbake/pkg/lang/spring"
 	"scbake/pkg/lang/svelte"
 )
+
+// SchemaProvider is an optional interface a language Handler can implement to
+// declare the input variables it expects. scbake validates the manifest
+// metadata against the schema before executing any tasks.
+type SchemaProvider interface {
+	Handler
+	SchemaFS() embed.FS
+	SchemaPath() string
+}
 
 // Handler is the interface all language handlers must implement.
 type Handler interface {
@@ -45,6 +55,28 @@ func GetHandler(langName string) (Handler, error) {
 		return nil, fmt.Errorf("unknown language: %s", langName)
 	}
 	return handler, nil
+}
+
+// GetSchema looks up the handler by name and, if it implements SchemaProvider,
+// reads and parses its embedded schema.json. Returns nil, nil when the handler
+// does not provide a schema (validation is skipped).
+func GetSchema(langName string) (*embed.FS, string, error) {
+	handlersLock.RLock()
+	defer handlersLock.RUnlock()
+
+	h, ok := handlers[langName]
+	if !ok {
+		return nil, "", fmt.Errorf("unknown language: %s", langName)
+	}
+
+	sp, ok := h.(SchemaProvider)
+	if !ok {
+		return nil, "", nil
+	}
+
+	fs := sp.SchemaFS()
+	path := sp.SchemaPath()
+	return &fs, path, nil
 }
 
 // ListLangs returns the sorted names of all supported languages.

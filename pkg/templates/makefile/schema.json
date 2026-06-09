@@ -1,0 +1,17 @@
+{
+  "description": "Generates a smart Makefile with per-project targets.",
+  "variables": {
+    "build_tool": {
+      "type": "string",
+      "required": false,
+      "default": "go",
+      "description": "Primary build tool (go, npm, mvn)"
+    },
+    "test_command": {
+      "type": "string",
+      "required": false,
+      "default": "go test ./...",
+      "description": "Command to run tests"
+    }
+  }
+}

@@ -12,11 +12,13 @@ import (
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/manifest"
 	"scbake/internal/preflight"
+	"scbake/internal/schema"
 	"scbake/internal/types"
 	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/lang"
 	"scbake/pkg/templates"
+	"strings"
 	"time"
 )
 
@@ -39,6 +41,7 @@ type RunContext struct {
 	RegistryCacheDir   string
 	License            string
 	CopyrightHolder    string
+	SetVars           map[string]string
 }
 
 // A struct to hold all proposed manifest changes
@@ -95,7 +98,7 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	futureManifest := m.DeepCopy()
 
 	// Update metadata from context if provided
-	if rc.License != "" || rc.CopyrightHolder != "" {
+	if rc.License != "" || rc.CopyrightHolder != "" || len(rc.SetVars) > 0 {
 		if futureManifest.Metadata == nil {
 			futureManifest.Metadata = make(map[string]string)
 		}
@@ -105,10 +108,18 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 		if rc.CopyrightHolder != "" {
 			futureManifest.Metadata["copyright_holder"] = rc.CopyrightHolder
 		}
+		for k, v := range rc.SetVars {
+			futureManifest.Metadata[k] = v
+		}
 	}
 
 	futureManifest.Projects = append(futureManifest.Projects, changes.Projects...)
 	futureManifest.Templates = append(futureManifest.Templates, changes.Templates...)
+
+	// Validate all selected templates against their schemas before executing
+	if err := validateSelectedTemplates(rc, futureManifest.Metadata); err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
@@ -215,6 +226,67 @@ func updateManifest(m *types.Manifest, changes *manifestChanges) {
 			m.Templates = append(m.Templates, newTmpl)
 		}
 	}
+}
+
+// validateSelectedTemplates checks every requested template and language
+// handler's schema against the provided metadata. It collects all errors and
+// reports them at once so the user can fix everything in a single pass.
+// Language handlers that implement SchemaProvider are also validated.
+//
+//nolint:cyclop // Two independent branches (with + lang) each have standard checks.
+func validateSelectedTemplates(rc RunContext, metadata map[string]string) error {
+	var allErrors []string
+
+	// Validate --with template handlers
+	for _, name := range rc.WithFlag {
+		efs, path, err := templates.GetSchema(name)
+		if err != nil {
+			return fmt.Errorf("schema lookup for %q: %w", name, err)
+		}
+		if efs == nil {
+			continue
+		}
+
+		s, err := schema.ReadSchema(*efs, path)
+		if err != nil {
+			return fmt.Errorf("failed to read schema for %q: %w", name, err)
+		}
+
+		result := schema.Validate(s, metadata)
+		if result.HasErrors() {
+			allErrors = append(allErrors, fmt.Sprintf("template %q:\n%s", name, result.Error()))
+		}
+	}
+
+	// Validate --lang handlers that implement SchemaProvider
+	if rc.LangFlag != "" {
+		efs, path, err := lang.GetSchema(rc.LangFlag)
+		if err != nil {
+			return fmt.Errorf("schema lookup for %q: %w", rc.LangFlag, err)
+		}
+		if efs != nil {
+			s, rErr := schema.ReadSchema(*efs, path)
+			if rErr != nil {
+				return fmt.Errorf("failed to read schema for %q: %w", rc.LangFlag, rErr)
+			}
+
+			result := schema.Validate(s, metadata)
+			if result.HasErrors() {
+				allErrors = append(allErrors, fmt.Sprintf("language %q:\n%s", rc.LangFlag, result.Error()))
+			}
+		}
+	}
+
+	if len(allErrors) > 0 {
+		var b strings.Builder
+		b.WriteString("input validation failed:\n")
+		for _, e := range allErrors {
+			b.WriteString(e)
+		}
+		return fmt.Errorf("%s", b.String())
+	}
+
+	return nil
 }
 
 func deduplicateTemplates(requested []string) []string {

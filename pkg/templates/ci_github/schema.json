@@ -1,0 +1,36 @@
+{
+  "description": "Creates a GitHub Actions CI workflow that runs tests on push and PR.",
+  "variables": {
+    "runner_os": {
+      "type": "string",
+      "required": false,
+      "default": "ubuntu-latest",
+      "description": "GitHub Actions runner OS label",
+      "enum": ["ubuntu-latest", "macos-latest", "windows-latest"]
+    },
+    "go_version": {
+      "type": "string",
+      "required": false,
+      "default": "1.22",
+      "description": "Go version to set up in the CI workflow"
+    },
+    "node_version": {
+      "type": "string",
+      "required": false,
+      "default": "20",
+      "description": "Node.js version for Svelte projects"
+    },
+    "java_version": {
+      "type": "string",
+      "required": false,
+      "default": "17",
+      "description": "Java version for Spring projects"
+    },
+    "java_distribution": {
+      "type": "string",
+      "required": false,
+      "default": "temurin",
+      "description": "Java distribution for setup-java"
+    }
+  }
+}

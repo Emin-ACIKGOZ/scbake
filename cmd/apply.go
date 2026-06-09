@@ -22,6 +22,7 @@ var (
 	licenseFlag         string
 	copyrightHolderFlag string
 	conflictStrategyFlag string
+	applySetFlag        []string
 )
 
 var applyCmd = &cobra.Command{
@@ -35,6 +36,12 @@ var applyCmd = &cobra.Command{
 		if len(args) > 0 {
 			manifestPathArg = args[0]
 			targetPath = args[0]
+		}
+
+		// Parse --set key=value pairs
+		setVars, err := parseSetFlags(applySetFlag)
+		if err != nil {
+			return err
 		}
 
 		// Convert to absolute path for robust execution (npm, go build).
@@ -55,6 +62,7 @@ var applyCmd = &cobra.Command{
 			RegistryCacheDir:   GetRegistryCacheDir(),
 			License:           licenseFlag,
 			CopyrightHolder:   copyrightHolderFlag,
+			SetVars:           setVars,
 		}
 
 		// Initialize modular UI reporter using the factory
@@ -72,6 +80,7 @@ func init() {
 	rootCmd.AddCommand(applyCmd)
 	applyCmd.PersistentFlags().StringVar(&langFlag, "lang", "", "Language pack")
 	applyCmd.PersistentFlags().StringSliceVar(&withFlag, "with", []string{}, "Tooling templates")
+	applyCmd.PersistentFlags().StringArrayVar(&applySetFlag, "set", []string{}, "Set template variable (key=value, can be repeated)")
 	applyCmd.PersistentFlags().StringVar(&conflictStrategyFlag, "conflict-strategy", "fail", "Conflict resolution strategy: fail, overwrite, artifact, keep-local")
 	applyCmd.PersistentFlags().StringVar(&licenseFlag, "license", "", "SPDX License ID")
 	applyCmd.PersistentFlags().StringVar(&copyrightHolderFlag, "copyright-holder", "", "Copyright holder name")

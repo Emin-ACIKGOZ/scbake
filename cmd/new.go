@@ -26,6 +26,7 @@ var (
 	newLicenseFlag         string
 	newCopyrightHolderFlag string
 	newConflictStrategyFlag string
+	newSetFlag             []string
 )
 
 var newCmd = &cobra.Command{
@@ -52,6 +53,8 @@ var newCmd = &cobra.Command{
 }
 
 // runNew coordinates the project directory setup and delegates template application to the core engine.
+//
+//nolint:cyclop // Sequential setup steps (mkdir, chdir, bootstrap) are inherently linear.
 func runNew(projectName string, dirCreated *bool) error {
 	reporter := ui.NewReporter(newCmdTotalSteps, dryRun)
 
@@ -94,6 +97,12 @@ func runNew(projectName string, dirCreated *bool) error {
 		}
 	}
 
+	// Parse --set key=value pairs
+	setVars, err := parseSetFlags(newSetFlag)
+	if err != nil {
+		return err
+	}
+
 	// Delegate template and language pack application to the core executor
 	reporter.Step("🚀", "Applying templates...")
 	rc := core.RunContext{
@@ -108,6 +117,7 @@ func runNew(projectName string, dirCreated *bool) error {
 		ManifestPathArg:   ".",
 		License:           newLicenseFlag,
 		CopyrightHolder:   newCopyrightHolderFlag,
+		SetVars:           setVars,
 	}
 
 	if err := core.RunApply(rc, reporter); err != nil {
@@ -119,10 +129,34 @@ func runNew(projectName string, dirCreated *bool) error {
 	return nil
 }
 
+// parseSetFlags converts --set key=value entries into a map.
+func parseSetFlags(flags []string) (map[string]string, error) {
+	setVars := make(map[string]string, len(flags))
+	for _, kv := range flags {
+		parts := splitOnce(kv, "=")
+		if len(parts) != 2 || parts[0] == "" {
+			return nil, fmt.Errorf("invalid --set value %q: expected key=value", kv)
+		}
+		setVars[parts[0]] = parts[1]
+	}
+	return setVars, nil
+}
+
+// splitOnce splits a string on the first occurrence of sep.
+func splitOnce(s, sep string) []string {
+	for i := 0; i < len(s); i++ {
+		if s[i:i+1] == sep {
+			return []string{s[:i], s[i+1:]}
+		}
+	}
+	return []string{s}
+}
+
 func init() {
 	// The rootCmd registration is handled in cmd/root.go init()
 	newCmd.Flags().StringVar(&newLangFlag, "lang", "", "Language project pack to apply")
 	newCmd.Flags().StringSliceVar(&newWithFlag, "with", []string{}, "Tooling template(s) to apply")
+	newCmd.Flags().StringArrayVar(&newSetFlag, "set", []string{}, "Set template variable (key=value, can be repeated)")
 	newCmd.Flags().StringVar(&newConflictStrategyFlag, "conflict-strategy", "fail", "Conflict resolution strategy: fail, overwrite, artifact, keep-local")
 	newCmd.Flags().StringVar(&newLicenseFlag, "license", "", "SPDX License ID (required for compliance)")
 	newCmd.Flags().StringVar(&newCopyrightHolderFlag, "copyright-holder", "", "Copyright holder name (required for compliance)")

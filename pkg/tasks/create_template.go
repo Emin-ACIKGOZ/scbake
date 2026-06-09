@@ -51,6 +51,9 @@ var templateFuncs = template.FuncMap{
 		}
 		return dict, nil
 	},
+	"quote": func(s string) string {
+		return fmt.Sprintf("%q", s)
+	},
 }
 
 // CreateTemplateTask renders and writes a file from an embedded template.

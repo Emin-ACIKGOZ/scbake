@@ -28,6 +28,9 @@
 - **Private Template Registries**  
   Define named remote registries to host and distribute team templates. Use `scbake template registry add` to register a source, then `scbake template pull` to cache templates locally. The resolution chain checks **local overrides → registry cache → embedded defaults**, so you can layer customizations at every level.
 
+- **Template Schema & Input Validation**  
+  Every template can declare its expected inputs in a `schema.json` embedded alongside its templates. Before a single task executes, scbake validates the manifest metadata and `--set` flags against all selected templates' schemas, catching missing required variables early.
+
 - **Explicit & Non-Interactive**  
   No "magic" defaults or hidden prompts—reproducible results every time via explicit flags and manifest configuration.
 
@@ -92,6 +95,7 @@ scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spd
 | `--license`          | SPDX License ID (required for `compliance`)      | `--license MIT`             |
 | `--copyright-holder` | Copyright holder name (required for `compliance`) | `--copyright-holder "Acme Corp"` |
 | `--template-dir`     | Directory with custom template overrides         | `--template-dir ./my-tpls`  |
+| `--set`              | Set template variable (`key=value`, can be repeated) | `--set service_id=srv-abc` |
 | `--conflict-strategy`| How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` | `--conflict-strategy overwrite` |
 
 **Example:**
@@ -243,4 +247,5 @@ task := &tasks.InsertXMLTask{
 | `--force`             | Override safety checks                               |
 | `--template-dir`      | Directory with custom template overrides (env: `SCBAKE_TEMPLATE_DIR`) |
 | `--conflict-strategy` | How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` |
-| `-v`, `--version`     | Show version (`v0.4.0`)                               |
+| `-v`, `--version`     | Show version (`v0.4.1`)                               |
+| `--set`              | Set template variable (`key=value`, can be repeated)  |

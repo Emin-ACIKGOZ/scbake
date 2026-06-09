@@ -16,6 +16,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.1] - 2025-06-09
+
+**Template schema & input validation: fail early when required variables are missing.**
+
+### Added
+
+#### Template Schema & Input Validation
+- **`schema.json` per template** — Template authors declare required and optional input variables with types and defaults in a `schema.json` embedded alongside their templates
+- **`SchemaProvider` interface** — Optional interface for `templates.Handler`; templates that implement it expose their embedded schema for pre-execution validation
+- **`internal/schema` package** — Schema parsing (`ParseSchema`, `ParseSchemaBytes`, `ReadSchema`), type system (`string`, `number`, `boolean`), and validation logic
+- **`validateSelectedTemplates()` in `core.RunApply`** — Before any tasks execute, every `--with` template's schema is validated against the manifest metadata; all errors are collected and reported in a single pass
+- **`--set key=value` flag** — New `--set` flag on `new` and `apply` commands populates `Manifest.Metadata` for schema validation; can be repeated (e.g., `--set oncall_alias=my-team --set service_id=srv-123`)
+- **Example schemas** — `makefile` and `ci_github` templates now ship with `schema.json` declaring their optional variables (`build_tool`, `test_command`, `runner_os`, `go_version`) with defaults
+
+#### Tests
+- Full unit test coverage for schema parsing, type validation, required/optional/default handling, and multiple error accumulation (`internal/schema/schema_test.go`, `internal/schema/validator_test.go`)
+- Core validation tests for `validateSelectedTemplates` with schema-providing, non-schema, and unknown handlers (`internal/core/schema_validation_test.go`)
+- Integration test for `--set` flag parsing and template application with optional variables (`tests/schema_validation_integration_test.go`)
+
+#### Documentation
+- Added schema and validation section to `docs/EXTENDING.md`
+
+---
+
 ## [0.4.0] - 2025-06-09
 
 **Private template registries: distribute and version templates across teams.**

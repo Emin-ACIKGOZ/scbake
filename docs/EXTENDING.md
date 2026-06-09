@@ -325,6 +325,86 @@ cat Cargo.toml  # Verify it works
 
 ---
 
+## Declaring a Schema (Input Validation)
+
+Each template can declare its expected inputs in a `schema.json` embedded alongside its templates. scbake validates the manifest metadata and `--set` flags against all selected templates' schemas before executing a single task.
+
+### 1. Create `schema.json`
+
+Place it in your handler package:
+
+```json
+{
+  "description": "What this template does",
+  "variables": {
+    "oncall_alias": {
+      "type": "string",
+      "required": true,
+      "description": "PagerDuty on-call alias"
+    },
+    "service_id": {
+      "type": "string",
+      "required": true,
+      "description": "Internal service identifier"
+    },
+    "team_name": {
+      "type": "string",
+      "required": false,
+      "default": "platform",
+      "description": "Team responsible for this service"
+    }
+  }
+}
+```
+
+### 2. Embed the schema
+
+Update your `//go:embed` directive and implement `SchemaProvider`:
+
+```go
+//go:embed templates/* schema.json
+var myTemplates embed.FS
+
+type Handler struct{}
+
+func (h *Handler) SchemaFS() embed.FS   { return myTemplates }
+func (h *Handler) SchemaPath() string   { return "schema.json" }
+
+func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
+    // ...
+}
+```
+
+### 3. Provide values via `--set`
+
+Users pass variable values on the command line:
+
+```bash
+scbake new my-service --with my_template \
+  --set oncall_alias=my-team \
+  --set service_id=srv-abc123
+```
+
+If a required variable is missing, scbake fails immediately with a clear message:
+
+```
+Error: input validation failed:
+template "my_template":
+schema validation failed with 1 error(s):
+  - variable "oncall_alias": required variable "oncall_alias" is missing
+```
+
+### Schema Reference
+
+| Field        | Values                     | Description                          |
+| :----------- | :------------------------- | :----------------------------------- |
+| `type`       | `string`, `number`, `boolean` | Expected input type               |
+| `required`   | `true`, `false`            | Must be provided by the user         |
+| `default`    | any string                 | Used when the user omits the value   |
+| `description`| text                       | Human-readable documentation         |
+
+---
+
 ## Testing Your Handler
 
 Once you've created your handler, test it thoroughly:

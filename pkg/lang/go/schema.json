@@ -1,0 +1,17 @@
+{
+  "description": "Go language pack: creates project structure and initializes modules.",
+  "variables": {
+    "module_path": {
+      "type": "string",
+      "required": false,
+      "description": "Override for the Go module path (default: derived from directory name)"
+    },
+    "go_version": {
+      "type": "string",
+      "required": false,
+      "default": "1.22",
+      "description": "Go version hint for tooling",
+      "pattern": "^1\\.\\d+$"
+    }
+  }
+}

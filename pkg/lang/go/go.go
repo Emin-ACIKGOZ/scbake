@@ -14,11 +14,17 @@ import (
 	"scbake/pkg/tasks"
 )
 
-//go:embed main.go.tpl gitignore.tpl
+//go:embed main.go.tpl gitignore.tpl schema.json
 var templates embed.FS
 
 // Handler implements the lang.Handler interface for Go projects.
 type Handler struct{}
+
+// SchemaFS returns the embedded filesystem containing schema.json.
+func (h *Handler) SchemaFS() embed.FS { return templates }
+
+// SchemaPath returns the path to the embedded schema definition.
+func (h *Handler) SchemaPath() string { return "schema.json" }
 
 // GetTasks uses the sanitize utility to sanitize the module name and returns the execution plan.
 func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task, error) {
