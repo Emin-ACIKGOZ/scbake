@@ -21,7 +21,7 @@ var templates embed.FS
 type Handler struct{}
 
 // GetTasks uses the sanitize utility to sanitize the module name and returns the execution plan.
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(targetPath string, _ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Use a single sequence for all language setup tasks (100-999)

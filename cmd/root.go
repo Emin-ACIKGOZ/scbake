@@ -12,11 +12,12 @@ import (
 )
 
 // Set this with a linker flag during the build process in the future.
-var version = "v0.2.0"
+var version = "v0.3.0"
 
 var (
-	dryRun bool
-	force  bool
+	dryRun          bool
+	force           bool
+	templateDirFlag string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -54,6 +55,7 @@ func init() {
 	// Add persistent flags, available to all subcommands
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Show what changes would be made without executing them")
 	rootCmd.PersistentFlags().BoolVar(&force, "force", false, "Override safety checks for file overwrites")
+	rootCmd.PersistentFlags().StringVar(&templateDirFlag, "template-dir", os.Getenv("SCBAKE_TEMPLATE_DIR"), "Directory containing custom template overrides (default: $SCBAKE_TEMPLATE_DIR)")
 
 	// Add a local version flag to the root command
 	rootCmd.Flags().BoolP("version", "v", false, "Show the scbake version")

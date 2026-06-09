@@ -28,6 +28,9 @@ type TaskContext struct {
 	// ConflictStrategy determines how to handle state-aware drift (fail, overwrite, artifact, keep-local)
 	ConflictStrategy string
 
+	// TemplateDir is the path to an external directory containing template overrides.
+	TemplateDir string
+
 	// Tx is the active filesystem transaction manager.
 	// If nil, tasks perform operations without safety tracking (legacy/testing mode).
 	Tx *transaction.Manager

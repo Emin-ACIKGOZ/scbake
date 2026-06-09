@@ -22,6 +22,9 @@
 - **Professional Governance**  
   Built-in support for enterprise-grade and open-source compliance standards (Licenses, Code Owners, Security Policies).
 
+- **Custom Template Overrides (BYOT)**  
+  Override any embedded `.tpl` file with your own version by passing `--template-dir` or setting the `SCBAKE_TEMPLATE_DIR` environment variable. Files in the override directory shadow the compiled-in defaults, enabling team-specific customizations without recompiling.
+
 - **Explicit & Non-Interactive**  
   No "magic" defaults or hidden prompts—reproducible results every time via explicit flags and manifest configuration.
 
@@ -76,7 +79,7 @@ Creates a new directory, bootstraps the `scbake.toml` manifest, and applies lang
 **Note:** Git initialization can be added via the `--with git` template.
 
 ```bash
-scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spdx>] [--copyright-holder <name>] [--conflict-strategy <strategy>]
+scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spdx>] [--copyright-holder <name>] [--template-dir <dir>] [--conflict-strategy <strategy>]
 ```
 
 | Flag                 | Description                                      | Example                     |
@@ -85,6 +88,7 @@ scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spd
 | `--with`             | Comma-separated tooling templates                | `--with makefile,ci_github` |
 | `--license`          | SPDX License ID (required for `compliance`)      | `--license MIT`             |
 | `--copyright-holder` | Copyright holder name (required for `compliance`) | `--copyright-holder "Acme Corp"` |
+| `--template-dir`     | Directory with custom template overrides         | `--template-dir ./my-tpls`  |
 | `--conflict-strategy`| How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` | `--conflict-strategy overwrite` |
 
 **Example:**
@@ -99,7 +103,7 @@ scbake new my-backend --lang go --with makefile,ci_github
 Applies new language packs or tooling templates to an existing path. Because `scbake` uses its own transaction logic, it does **not** require a clean Git tree to operate safely.
 
 ```bash
-scbake apply [--lang <lang>] [--with <template...>] [<path>]
+scbake apply [--lang <lang>] [--with <template...>] [--template-dir <dir>] [--conflict-strategy <strategy>] [<path>]
 ```
 
 | Argument | Description      | Default |
@@ -156,7 +160,8 @@ scbake list [langs|templates|projects]
 
 ### Available Task Types
 
-- **CreateTemplateTask**: Creates new files from embedded templates (with manifest data available)
+- **CreateTemplateTask**: Creates new files from embedded templates (with manifest data available); supports template overrides via `--template-dir`
+- **AppendFileTask**: Appends content to existing files with idempotency checks
 - **ExecCommandTask**: Executes shell commands with optional output tracking
 - **CreateDirectoryTask**: Creates directories with transaction tracking
 - **InsertXMLTask**: Modifies existing XML files by inserting fragments at specified paths
@@ -207,5 +212,6 @@ task := &tasks.InsertXMLTask{
 | :-------------------- | :--------------------------------------------------- |
 | `--dry-run`           | Show planned changes without applying them            |
 | `--force`             | Override safety checks                               |
+| `--template-dir`      | Directory with custom template overrides (env: `SCBAKE_TEMPLATE_DIR`) |
 | `--conflict-strategy` | How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` |
-| `-v`, `--version`     | Show version (`v0.2.0`)                               |
+| `-v`, `--version`     | Show version (`v0.3.0`)                               |

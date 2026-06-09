@@ -18,7 +18,7 @@ import (
 type Handler struct{}
 
 // GetTasks returns the execution plan for initializing a Spring Boot project at targetPath.
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(targetPath string, _ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for setup band

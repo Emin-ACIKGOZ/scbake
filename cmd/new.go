@@ -103,6 +103,7 @@ func runNew(projectName string, dirCreated *bool) error {
 		DryRun:           dryRun,
 		Force:            force,
 		ConflictStrategy: newConflictStrategyFlag,
+		TemplateDir:      templateDirFlag,
 		ManifestPathArg:  ".",
 		License:          newLicenseFlag,
 		CopyrightHolder:  newCopyrightHolderFlag,

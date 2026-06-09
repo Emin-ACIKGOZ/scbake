@@ -18,7 +18,7 @@ var templates embed.FS
 type Handler struct{}
 
 // GetTasks returns the plan to create community governance files.
-func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Community/Governance band (1000-1099 range, reusing PrioConfigUniversal)

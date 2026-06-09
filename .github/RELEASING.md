@@ -30,7 +30,7 @@ Before cutting a release:
 Edit `cmd/root.go`:
 
 ```go
-var version = "v0.2.0"  // Update from current version
+var version = "v0.3.0"  // Update from current version
 ```
 
 ### 2. Update CHANGELOG
@@ -61,20 +61,20 @@ Move "Unreleased" section to versioned section with date.
 
 ```bash
 git add cmd/root.go CHANGELOG.md
-git commit -m "chore(release): bump version to v0.2.0"
+git commit -m "chore(release): bump version to v0.3.0"
 ```
 
 ### 4. Tag Release
 
 ```bash
-git tag -a v0.2.0 -m "Release v0.2.0"
+git tag -a v0.3.0 -m "Release v0.3.0"
 ```
 
 ### 5. Push to GitHub
 
 ```bash
 git push origin main
-git push origin v0.2.0
+git push origin v0.3.0
 ```
 
 ### 6. Create GitHub Release
@@ -83,26 +83,26 @@ On GitHub:
 
 1. Go to Releases page
 2. Click "Draft a new release"
-3. Select tag: `v0.2.0`
-4. Title: `v0.2.0`
+3. Select tag: `v0.3.0`
+4. Title: `v0.3.0`
 5. Description: Copy from CHANGELOG.md
 
 Or via gh CLI:
 
 ```bash
-gh release create v0.2.0 --title "v0.2.0" --notes-file <(sed -n '/^## \[0.2.0\]/,/^## \[/p' CHANGELOG.md | head -n -1)
+gh release create v0.3.0 --title "v0.3.0" --notes-file <(sed -n '/^## \[0.3.0\]/,/^## \[/p' CHANGELOG.md | head -n -1)
 ```
 
 ## Version Numbering Examples
 
-### v0.2.0 → v0.2.1 (Patch: bug fix)
+### v0.3.0 → v0.3.1 (Patch: bug fix)
 Bug fixes that are backward-compatible.
 ### v0.0.1 → v0.1.0 (Minor: new features)
 - Added config-driven extension discovery
 - Added new `python_linter` template
 - Refactored built-in handlers to unified system
 
-### v0.2.0 → v1.0.0 (Major: breaking changes)
+### v0.3.0 → v1.0.0 (Major: breaking changes)
 - Changed manifest format from TOML to YAML
 - Renamed `scbake apply` to `scbake extend`
 - Removed deprecated `--with` flag
@@ -113,17 +113,17 @@ For urgent bug fixes:
 
 1. Create branch from tag:
    ```bash
-   git checkout -b hotfix/v0.2.1 v0.2.0
+   git checkout -b hotfix/v0.3.1 v0.3.0
    ```
 
 2. Fix the bug, commit, push
 
-3. Tag and release: `v0.2.1`
+3. Tag and release: `v0.3.1`
 
 4. Merge back to main:
    ```bash
    git checkout main
-   git merge hotfix/v0.2.1
+   git merge hotfix/v0.3.1
    git push origin main
    ```
 
@@ -177,7 +177,7 @@ For now, releases are source-only.
 
 Maintain backward compatibility:
 
-- **v0.1.0 projects** must work with v0.2.0, v0.3.0, etc.
+- **v0.3.0 projects** must work with v0.4.0, v0.5.0, etc.
 - `scbake.toml` format changes require migration tooling
 - Command interface changes require deprecation warnings
 - Handler API changes (rare) should follow Go compatibility rules

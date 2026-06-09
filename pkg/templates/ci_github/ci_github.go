@@ -17,7 +17,7 @@ var templates embed.FS
 type Handler struct{}
 
 // GetTasks returns the plan to create the GitHub Actions workflow file.
-func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the CI band (1100-1199)
