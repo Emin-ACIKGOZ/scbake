@@ -127,6 +127,45 @@ func TestTemplateOverrides_FallbackToEmbedded(t *testing.T) {
 	}
 }
 
+func TestTemplateOverrides_WithSubdirectoryStructure(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(originalWd) })
+	_ = os.Chdir(tmpDir)
+
+	overrideDir := filepath.Join(tmpDir, "sub-overrides")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(overrideDir, 0755); err != nil {
+		t.Fatalf("Failed to create override dir: %v", err)
+	}
+
+	// Override a community template that normally lives under templates/ subdirectory
+	contribPath := filepath.Join(overrideDir, "templates/CONTRIBUTING.md.tpl")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(filepath.Dir(contribPath), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(contribPath, []byte("SUBDIR OVERRIDE\n"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	projectPath := filepath.Join(tmpDir, "test-subdir")
+	output, err := runCLI("new", "test-subdir", "--with", "community", "--template-dir", overrideDir)
+	if err != nil {
+		t.Fatalf("Failed to create project: %v\nOutput: %s", err, output)
+	}
+
+	//nolint:gosec // reading test-created file from project dir
+	content, err := os.ReadFile(filepath.Join(projectPath, "CONTRIBUTING.md"))
+	if err != nil {
+		t.Fatalf("CONTRIBUTING.md was not created: %v", err)
+	}
+	if !strings.Contains(string(content), "SUBDIR OVERRIDE") {
+		t.Errorf("Subdirectory override not applied. Got:\n%s", string(content))
+	}
+}
+
 func TestTemplateOverrides_WithEnvVar(t *testing.T) {
 	tmpDir := t.TempDir()
 	originalWd, _ := os.Getwd()
