@@ -21,6 +21,7 @@ var (
 	withFlag            []string
 	licenseFlag         string
 	copyrightHolderFlag string
+	conflictStrategyFlag string
 )
 
 var applyCmd = &cobra.Command{
@@ -49,6 +50,7 @@ var applyCmd = &cobra.Command{
 			ManifestPathArg:  manifestPathArg, // Pass Arg for manifest portability.
 			DryRun:           dryRun,          // dryRun is the global flag.
 			Force:            force,           // force is the global flag.
+			ConflictStrategy: conflictStrategyFlag,
 			License:          licenseFlag,
 			CopyrightHolder:  copyrightHolderFlag,
 		}
@@ -68,6 +70,7 @@ func init() {
 	rootCmd.AddCommand(applyCmd)
 	applyCmd.PersistentFlags().StringVar(&langFlag, "lang", "", "Language pack")
 	applyCmd.PersistentFlags().StringSliceVar(&withFlag, "with", []string{}, "Tooling templates")
+	applyCmd.PersistentFlags().StringVar(&conflictStrategyFlag, "conflict-strategy", "fail", "Conflict resolution strategy: fail, overwrite, artifact, keep-local")
 	applyCmd.PersistentFlags().StringVar(&licenseFlag, "license", "", "SPDX License ID")
 	applyCmd.PersistentFlags().StringVar(&copyrightHolderFlag, "copyright-holder", "", "Copyright holder name")
 }

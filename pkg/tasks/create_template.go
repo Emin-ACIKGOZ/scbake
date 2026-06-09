@@ -4,7 +4,10 @@
 package tasks
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -82,11 +85,78 @@ func (t *CreateTemplateTask) Priority() int {
 	return t.TaskPrio
 }
 
-// checkFilePreconditions handles path safety, directory creation, and existence checks.
-func checkFilePreconditions(finalPath, output, target string, force bool) error {
+// HashContent calculates the SHA-256 hash of the given bytes.
+func HashContent(content []byte) string {
+	hasher := sha256.New()
+	hasher.Write(content)
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+// checkReconciliation evaluates drift and conflict strategies.
+// Returns the path to write to, or an error if the operation should abort.
+func checkReconciliation(absFinalPath string, outputRelPath string, newContentHash string, tc types.TaskContext) (string, error) {
+	// If force is enabled, we always overwrite the original file, ignoring state.
+	if tc.Force {
+		return absFinalPath, nil
+	}
+
+	// Read existing file
+	//nolint:gosec // Path is canonicalized
+	existingContent, err := os.ReadFile(absFinalPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return absFinalPath, nil // Safe to write, file doesn't exist
+		}
+		return "", fmt.Errorf("failed to read existing file %s: %w", outputRelPath, err)
+	}
+
+	existingHash := HashContent(existingContent)
+
+	// Check state
+	var originalHash string
+	if tc.Manifest.ManagedFiles != nil {
+		originalHash = tc.Manifest.ManagedFiles[outputRelPath]
+	}
+
+	// If the file exists but we've never managed it (or didn't record it), it's a conflict
+	if originalHash == "" {
+		return handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
+	}
+
+	// If the file exactly matches what we originally generated, it hasn't drifted. Safe to update.
+	if existingHash == originalHash {
+		return absFinalPath, nil
+	}
+
+	// If the existing file happens to already match what we're trying to generate, we're good (idempotent).
+	if existingHash == newContentHash {
+		return absFinalPath, nil
+	}
+
+	// Drift detected! The user modified the file.
+	return handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
+}
+
+func handleConflict(absFinalPath, outputRelPath, strategy string) (string, error) {
+	switch strategy {
+	case "overwrite":
+		return absFinalPath, nil
+	case "artifact":
+		fmt.Printf("⚠️  Conflict in %s (user modifications detected). Writing new template to artifact.\n", outputRelPath)
+		return absFinalPath + ".scbake-new", nil
+	case "keep-local":
+		fmt.Printf("⚠️  Conflict in %s (user modifications detected). Skipping update (--strategy=keep-local).\n", outputRelPath)
+		return "", nil // Signal to skip
+	case "fail":
+		fallthrough
+	default:
+		return "", fmt.Errorf("file %s has manual modifications (drift detected). Use --conflict-strategy to resolve", outputRelPath)
+	}
+}
+
+// checkFilePreconditions handles path safety and directory creation.
+func checkFilePreconditions(finalPath, output, target string) error {
 	// 1. Path Safety Check (Canonicalization)
-	// We resolve both target and finalPath to absolute cleaned paths to ensure
-	// that indicators like "." and relative subdirectories match correctly.
 	absTarget, err := filepath.Abs(target)
 	if err != nil {
 		return fmt.Errorf("failed to resolve target path: %w", err)
@@ -110,26 +180,12 @@ func checkFilePreconditions(finalPath, output, target string, force bool) error 
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	// 3. Existence Check
-	if !force {
-		if _, err := os.Stat(cleanFinalPath); err == nil {
-			// File exists and Force is false.
-			return fmt.Errorf("file already exists: %s. Use --force to overwrite", output)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			// Some other error occurred (e.g., permissions).
-			return err
-		}
-	}
 	return nil
 }
 
 // Execute performs the template creation task.
 //nolint:cyclop // Complex precondition checks and file ops are linear
 func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
-	if tc.DryRun {
-		return nil
-	}
-
 	// 1. Read and parse the template
 	tplContent, err := fs.ReadFile(t.TemplateFS, t.TemplatePath)
 	if err != nil {
@@ -141,49 +197,72 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 		return fmt.Errorf("failed to parse template %s: %w", t.TemplatePath, err)
 	}
 
-	// 2. Determine and check the final output path
-	finalPath := filepath.Join(tc.TargetPath, t.OutputPath)
+	// 2. Render template to memory buffer first (to calculate hash)
+	data := interface{}(tc.Manifest)
+	if t.TemplateData != nil {
+		data = t.TemplateData
+	}
 
-	// Check directory and file existence using the helper function.
-	if err = checkFilePreconditions(finalPath, t.OutputPath, tc.TargetPath, tc.Force); err != nil {
+	var buf bytes.Buffer
+	if err = tpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to render template %s: %w", t.TemplatePath, err)
+	}
+
+	renderedBytes := buf.Bytes()
+	newHash := HashContent(renderedBytes)
+
+	// 3. Determine and check the final output path
+	finalPath := filepath.Join(tc.TargetPath, t.OutputPath)
+	if err = checkFilePreconditions(finalPath, t.OutputPath, tc.TargetPath); err != nil {
 		return err
 	}
 
-	// Canonical path for tracking and writing
 	absPath, _ := filepath.Abs(finalPath)
 
-	// 3. Safety Tracking: Register the file with the transaction manager.
-	// If it exists, it will be backed up. If not, it will be marked for cleanup.
+	// 4. State-Aware Reconciliation
+	writePath, err := checkReconciliation(absPath, t.OutputPath, newHash, tc)
+	if err != nil {
+		return err // Conflict strategy is 'fail'
+	}
+	if writePath == "" {
+		return nil // Conflict strategy is 'keep-local' (skip)
+	}
+
+	if tc.DryRun {
+		return nil
+	}
+
+	// 5. Safety Tracking: Register the file with the transaction manager.
 	if tc.Tx != nil {
-		if err := tc.Tx.Track(absPath); err != nil {
-			return fmt.Errorf("failed to track file %s: %w", t.OutputPath, err)
+		if err := tc.Tx.Track(writePath); err != nil {
+			return fmt.Errorf("failed to track file %s: %w", writePath, err)
 		}
 	}
 
-	// 4. Create the output file
-	// G304: Path is explicitly sanitized and verified in checkFilePreconditions
+	// 6. Create the output file
 	//nolint:gosec
-	f, err := os.OpenFile(absPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileutil.FilePerms)
+	f, err := os.OpenFile(writePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileutil.FilePerms)
 	if err != nil {
-		return fmt.Errorf("failed to create file %s: %w", t.OutputPath, err)
+		return fmt.Errorf("failed to create file %s: %w", writePath, err)
 	}
 
-	// Check the return value of f.Close()
 	defer func() {
 		if closeErr := f.Close(); err == nil {
 			err = closeErr
 		}
 	}()
 
-	// 5. Execute the template and write to the file
-	data := interface{}(tc.Manifest)
-	if t.TemplateData != nil {
-		data = t.TemplateData
+	// 7. Write the rendered buffer
+	if _, err = f.Write(renderedBytes); err != nil {
+		return fmt.Errorf("failed to write to %s: %w", writePath, err)
 	}
 
-	if err = tpl.Execute(f, data); err != nil {
-		return fmt.Errorf("failed to render template %s: %w", t.TemplatePath, err)
+	// 8. Record State
+	if tc.Manifest.ManagedFiles == nil {
+		tc.Manifest.ManagedFiles = make(map[string]string)
 	}
+	// Always record the hash against the original output path, even if we wrote an artifact
+	tc.Manifest.ManagedFiles[t.OutputPath] = newHash
 
 	return nil
 }

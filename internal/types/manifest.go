@@ -10,6 +10,9 @@ type Manifest struct {
 	Projects     []Project         `toml:"projects"`
 	Templates    []Template        `toml:"templates"`
 	Metadata     map[string]string `toml:"metadata,omitempty"`
+	// ManagedFiles tracks files created by scbake and their SHA-256 hashes
+	// The key is the relative path (e.g., "SECURITY.md"), the value is the hash.
+	ManagedFiles map[string]string `toml:"managed_files,omitempty"`
 }
 
 // Project represents a distinct code unit, like a Go backend or a React frontend.
@@ -38,11 +41,17 @@ func (m *Manifest) DeepCopy() *Manifest {
 		Projects:     make([]Project, len(m.Projects)),
 		Templates:    make([]Template, len(m.Templates)),
 		Metadata:     make(map[string]string),
+		ManagedFiles: make(map[string]string),
 	}
 
 	// Deep copy metadata
 	for k, v := range m.Metadata {
 		result.Metadata[k] = v
+	}
+
+	// Deep copy managed files
+	for k, v := range m.ManagedFiles {
+		result.ManagedFiles[k] = v
 	}
 
 	// Deep copy projects

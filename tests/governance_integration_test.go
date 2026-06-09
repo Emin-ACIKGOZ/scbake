@@ -58,26 +58,29 @@ func TestGovernanceLifecycle(t *testing.T) {
 		_ = os.WriteFile(secPath, []byte("# Custom Security\nContact us directly."), 0644)
 	})
 
-	t.Run("3. Failed Update (Safety Check)", func(t *testing.T) {
+	t.Run("3. Failed Update (Drift Detection)", func(t *testing.T) {
 		_ = os.Chdir(projectPath)
 
+		// Try to apply an update with default conflict strategy (fail). Should fail because SECURITY.md has drifted.
 		output, err := runCLI("apply", "--with", "compliance", "--license", "Apache-2.0", "--copyright-holder", "Bob Corp")
 		if err == nil {
-			t.Fatalf("Expected apply to fail due to existing files, but it succeeded.")
+			t.Fatalf("Expected apply to fail due to drift, but it succeeded.")
 		}
-		if !strings.Contains(output, "file already exists") {
-			t.Errorf("Expected 'file already exists' error, got: %s", output)
+		if !strings.Contains(output, "has manual modifications") {
+			t.Errorf("Expected 'manual modifications' error, got: %s", output)
 		}
 	})
 
-	t.Run("4. Successful Force Update", func(t *testing.T) {
+	t.Run("4. Update with Artifact Strategy", func(t *testing.T) {
 		_ = os.Chdir(projectPath)
 
-		output, err := runCLI("apply", "--with", "compliance", "--force", "--license", "Apache-2.0", "--copyright-holder", "Bob Corp")
+		// Apply update with --conflict-strategy=artifact
+		output, err := runCLI("apply", "--with", "compliance", "--conflict-strategy=artifact", "--license", "Apache-2.0", "--copyright-holder", "Bob Corp")
 		if err != nil {
 			t.Fatalf("Failed to apply update: %v\nOutput: %s", err, output)
 		}
 
+		// Verify License changed to Apache and new holder (because it wasn't modified by the user)
 		licenseBytes, _ := os.ReadFile("LICENSE")
 		licenseText := string(licenseBytes)
 		if !strings.Contains(licenseText, "Apache License") {
@@ -86,14 +89,16 @@ func TestGovernanceLifecycle(t *testing.T) {
 		if !strings.Contains(licenseText, "Bob Corp") {
 			t.Errorf("LICENSE copyright holder was not updated")
 		}
-		if strings.Contains(licenseText, "Alice Inc") {
-			t.Errorf("Old copyright holder still present in LICENSE")
+
+		// Verify SECURITY.md artifact was created because it HAD drifted
+		if _, err := os.Stat("SECURITY.md.scbake-new"); os.IsNotExist(err) {
+			t.Errorf("Artifact SECURITY.md.scbake-new was not created for drifted file")
 		}
 
+		// Verify original drifted SECURITY.md is untouched
 		secBytes, _ := os.ReadFile("SECURITY.md")
-		secText := string(secBytes)
-		if !strings.Contains(secText, "Reporting a Vulnerability") {
-			t.Errorf("SECURITY.md was not reset to standard template")
+		if !strings.Contains(string(secBytes), "Custom Security") {
+			t.Errorf("Drifted SECURITY.md was overwritten despite artifact strategy")
 		}
 
 		ownersBytes, _ := os.ReadFile(filepath.Join(".github", "CODEOWNERS"))

@@ -25,6 +25,7 @@ var (
 	newWithFlag            []string
 	newLicenseFlag         string
 	newCopyrightHolderFlag string
+	newConflictStrategyFlag string
 )
 
 var newCmd = &cobra.Command{
@@ -101,6 +102,7 @@ func runNew(projectName string, dirCreated *bool) error {
 		TargetPath:       ".",
 		DryRun:           dryRun,
 		Force:            force,
+		ConflictStrategy: newConflictStrategyFlag,
 		ManifestPathArg:  ".",
 		License:          newLicenseFlag,
 		CopyrightHolder:  newCopyrightHolderFlag,
@@ -119,6 +121,7 @@ func init() {
 	// The rootCmd registration is handled in cmd/root.go init()
 	newCmd.Flags().StringVar(&newLangFlag, "lang", "", "Language project pack to apply")
 	newCmd.Flags().StringSliceVar(&newWithFlag, "with", []string{}, "Tooling template(s) to apply")
+	newCmd.Flags().StringVar(&newConflictStrategyFlag, "conflict-strategy", "fail", "Conflict resolution strategy: fail, overwrite, artifact, keep-local")
 	newCmd.Flags().StringVar(&newLicenseFlag, "license", "", "SPDX License ID (required for compliance)")
 	newCmd.Flags().StringVar(&newCopyrightHolderFlag, "copyright-holder", "", "Copyright holder name (required for compliance)")
 }
