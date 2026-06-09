@@ -40,6 +40,12 @@ func (m *MockTask) Execute(tc types.TaskContext) error {
 		if err := os.WriteFile(m.PathToCreate, []byte("test data"), fileutil.PrivateFilePerms); err != nil {
 			return err
 		}
+
+		// Record managed file state (simulating real task behavior)
+		if tc.Manifest.ManagedFiles == nil {
+			tc.Manifest.ManagedFiles = make(map[string]string)
+		}
+		tc.Manifest.ManagedFiles[m.PathToCreate] = "testhash"
 	}
 
 	if m.ShouldFail {
@@ -121,6 +127,95 @@ func TestExecuteAndFinalize_Rollback(t *testing.T) {
 
 // TestExecuteAndFinalize_Success verifies that a successful run commits changes
 // and cleans up the temp directory.
+// TestExecuteAndFinalize_ManagedFilesRecords verifies that after a successful
+// execution, ManagedFiles are recorded in the manifest for reconciliation.
+func TestExecuteAndFinalize_ManagedFilesRecords(t *testing.T) {
+	rootDir := t.TempDir()
+
+	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
+	if err := os.WriteFile(manifestPath, []byte(""), fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := transaction.New(rootDir)
+	if err != nil {
+		t.Fatalf("Failed to create transaction: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	file1 := filepath.Join(rootDir, "managed.txt")
+
+	plan := &types.Plan{
+		Tasks: []types.Task{
+			&MockTask{Name: "Managed File", PathToCreate: file1},
+		},
+	}
+
+	m, rootPath, err := manifest.Load(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	changes := &manifestChanges{}
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: rootDir,
+		Manifest:   m,
+		Tx:         tx,
+	}
+
+	reporter := ui.NewPlainReporter(3, false)
+	if err := executeAndFinalize(reporter, plan, tc, m, changes, rootPath, tx); err != nil {
+		t.Fatalf("Execution failed: %v", err)
+	}
+
+	if m.ManagedFiles == nil {
+		t.Fatal("ManagedFiles should be initialized after successful execution")
+	}
+	if _, ok := m.ManagedFiles[file1]; !ok {
+		t.Error("file1 should be tracked in ManagedFiles")
+	}
+}
+
+// TestExecuteAndFinalize_EmptyPlan verifies that a plan with no tasks completes
+// without error and records no ManagedFiles.
+func TestExecuteAndFinalize_EmptyPlan(t *testing.T) {
+	rootDir := t.TempDir()
+
+	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
+	if err := os.WriteFile(manifestPath, []byte(""), fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := transaction.New(rootDir)
+	if err != nil {
+		t.Fatalf("Failed to create transaction: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	plan := &types.Plan{
+		Tasks: []types.Task{},
+	}
+
+	m, rootPath, err := manifest.Load(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	changes := &manifestChanges{}
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: rootDir,
+		Manifest:   m,
+		Tx:         tx,
+	}
+
+	reporter := ui.NewPlainReporter(0, false)
+	if err := executeAndFinalize(reporter, plan, tc, m, changes, rootPath, tx); err != nil {
+		t.Fatalf("Empty plan execution should succeed: %v", err)
+	}
+}
+
 func TestExecuteAndFinalize_Success(t *testing.T) {
 	rootDir := t.TempDir()
 

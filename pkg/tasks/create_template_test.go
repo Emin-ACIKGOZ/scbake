@@ -97,6 +97,191 @@ func TestCreateTemplateTask(t *testing.T) {
 	}
 }
 
+func TestCreateTemplateTask_DryRun(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		Projects:     []types.Project{{Name: "DryRun"}},
+	}
+	tc := types.TaskContext{
+		TargetPath: tmpDir,
+		Manifest:   manifest,
+		DryRun:     true,
+	}
+
+	task := &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/simple.tpl",
+		OutputPath:   "dryrun.txt",
+		Desc:         "Dry run test",
+		TaskPrio:     100,
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() with dry-run failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(tmpDir, "dryrun.txt")); !os.IsNotExist(err) {
+		t.Error("Dry-run should not create the file")
+	}
+}
+
+func TestCreateTemplateTask_ConflictStrategyOverwrite(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		Projects:     []types.Project{{Name: "OverwriteTest"}},
+	}
+	tc := types.TaskContext{
+		TargetPath:       tmpDir,
+		Manifest:         manifest,
+		ConflictStrategy: "overwrite",
+		DryRun:           false,
+		Force:            false,
+	}
+
+	task := &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/simple.tpl",
+		OutputPath:   "overwrite.txt",
+		Desc:         "Overwrite test",
+		TaskPrio:     100,
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("First execute failed: %v", err)
+	}
+
+	//nolint:gosec // Test temp directory
+	if err := os.WriteFile(filepath.Join(tmpDir, "overwrite.txt"), []byte("DRIFTED CONTENT"), 0644); err != nil {
+		t.Fatalf("Failed to modify file: %v", err)
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Overwrite strategy should succeed: %v", err)
+	}
+}
+
+func TestCreateTemplateTask_ConflictStrategyArtifact(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		Projects:     []types.Project{{Name: "ArtifactTest"}},
+	}
+	tc := types.TaskContext{
+		TargetPath:       tmpDir,
+		Manifest:         manifest,
+		ConflictStrategy: "artifact",
+		DryRun:           false,
+		Force:            false,
+	}
+
+	task := &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/simple.tpl",
+		OutputPath:   "artifact.txt",
+		Desc:         "Artifact test",
+		TaskPrio:     100,
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("First execute failed: %v", err)
+	}
+
+	//nolint:gosec // Test temp directory
+	if err := os.WriteFile(filepath.Join(tmpDir, "artifact.txt"), []byte("DRIFTED"), 0644); err != nil {
+		t.Fatalf("Failed to modify file: %v", err)
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Artifact strategy should succeed: %v", err)
+	}
+
+	artifactPath := filepath.Join(tmpDir, "artifact.txt.scbake-new")
+	if _, err := os.Stat(artifactPath); os.IsNotExist(err) {
+		t.Error("Artifact file was not created")
+	}
+}
+
+func TestCreateTemplateTask_ConflictStrategyKeepLocal(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		Projects:     []types.Project{{Name: "KeepLocalTest"}},
+	}
+	tc := types.TaskContext{
+		TargetPath:       tmpDir,
+		Manifest:         manifest,
+		ConflictStrategy: "keep-local",
+		DryRun:           false,
+		Force:            false,
+	}
+
+	task := &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/simple.tpl",
+		OutputPath:   "keeplocal.txt",
+		Desc:         "Keep local test",
+		TaskPrio:     100,
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("First execute failed: %v", err)
+	}
+
+	drifterContent := []byte("DRIFTED")
+	if err := os.WriteFile(filepath.Join(tmpDir, "keeplocal.txt"), drifterContent, 0600); err != nil {
+		t.Fatalf("Failed to modify file: %v", err)
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Keep-local strategy should succeed without error: %v", err)
+	}
+
+	//nolint:gosec // Test temp directory
+	content, _ := os.ReadFile(filepath.Join(tmpDir, "keeplocal.txt"))
+	if string(content) != string(drifterContent) {
+		t.Errorf("Keep-local should preserve local content. Got %q, want %q", string(content), string(drifterContent))
+	}
+}
+
+func TestCreateTemplateTask_FileNeverManaged(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manifest := &types.Manifest{
+		SbakeVersion:  "v1.0.0",
+		Projects:      []types.Project{{Name: "UnmanagedTest"}},
+		ManagedFiles:  nil,
+	}
+	tc := types.TaskContext{
+		TargetPath: tmpDir,
+		Manifest:   manifest,
+		DryRun:     false,
+		Force:      false,
+	}
+
+	//nolint:gosec // Test temp directory
+	if err := os.WriteFile(filepath.Join(tmpDir, "preexisting.txt"), []byte("preexisting"), 0644); err != nil {
+		t.Fatalf("Failed to create preexisting file: %v", err)
+	}
+
+	task := &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/simple.tpl",
+		OutputPath:   "preexisting.txt",
+		Desc:         "Unmanaged file test",
+		TaskPrio:     100,
+	}
+
+	if err := task.Execute(tc); err == nil {
+		t.Error("Expected error for unmanaged preexisting file without force")
+	}
+}
+
 func TestCreateTemplateTask_Transaction(t *testing.T) {
 	// Setup with Transaction
 	rootDir := t.TempDir()

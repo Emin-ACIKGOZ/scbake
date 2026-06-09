@@ -81,6 +81,159 @@ func TestLicenseTask_Execute(t *testing.T) {
 	}
 }
 
+func TestLicenseTask_DryRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	m := &types.Manifest{Metadata: map[string]string{"license": "MIT", "copyright_holder": "DryRun Holder"}}
+	tc := types.TaskContext{
+		TargetPath: tmpDir,
+		Manifest:   m,
+		DryRun:     true,
+	}
+	task := &LicenseTask{TaskPrio: 100}
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() with dry-run failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "LICENSE")); !os.IsNotExist(err) {
+		t.Error("Dry-run should not create LICENSE file")
+	}
+}
+
+func TestLicenseTask_ConflictStrategyFail(t *testing.T) {
+	tmpDir := t.TempDir()
+	m := &types.Manifest{
+		Metadata:     map[string]string{"license": "MIT", "copyright_holder": "Fail Holder"},
+		ManagedFiles: map[string]string{"LICENSE": "originalhash"},
+	}
+	tc := types.TaskContext{
+		TargetPath:       tmpDir,
+		Manifest:         m,
+		ConflictStrategy: "fail",
+	}
+	task := &LicenseTask{TaskPrio: 100}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("First execute should succeed: %v", err)
+	}
+
+	//nolint:gosec // Test temp directory
+	if err := os.WriteFile(filepath.Join(tmpDir, "LICENSE"), []byte("DRIFTED CONTENT"), 0644); err != nil {
+		t.Fatalf("Failed to drift file: %v", err)
+	}
+
+	if err := task.Execute(tc); err == nil {
+		t.Error("Expected drift error with 'fail' strategy")
+	}
+}
+
+func TestLicenseTask_ConflictStrategyOverwrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	m := &types.Manifest{
+		Metadata:     map[string]string{"license": "MIT", "copyright_holder": "Overwrite Holder"},
+		ManagedFiles: map[string]string{"LICENSE": "originalhash"},
+	}
+	tc := types.TaskContext{
+		TargetPath:       tmpDir,
+		Manifest:         m,
+		ConflictStrategy: "overwrite",
+	}
+	task := &LicenseTask{TaskPrio: 100}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("First execute should succeed: %v", err)
+	}
+
+	//nolint:gosec // Test temp directory
+	if err := os.WriteFile(filepath.Join(tmpDir, "LICENSE"), []byte("DRIFTED"), 0644); err != nil {
+		t.Fatalf("Failed to drift file: %v", err)
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Overwrite strategy should succeed: %v", err)
+	}
+}
+
+func TestLicenseTask_ConflictStrategyArtifact(t *testing.T) {
+	tmpDir := t.TempDir()
+	m := &types.Manifest{
+		Metadata:     map[string]string{"license": "MIT", "copyright_holder": "Artifact Holder"},
+		ManagedFiles: map[string]string{"LICENSE": "originalhash"},
+	}
+	tc := types.TaskContext{
+		TargetPath:       tmpDir,
+		Manifest:         m,
+		ConflictStrategy: "artifact",
+	}
+	task := &LicenseTask{TaskPrio: 100}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("First execute should succeed: %v", err)
+	}
+
+	//nolint:gosec // Test temp directory
+	if err := os.WriteFile(filepath.Join(tmpDir, "LICENSE"), []byte("DRIFTED"), 0644); err != nil {
+		t.Fatalf("Failed to drift file: %v", err)
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Artifact strategy should succeed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(tmpDir, "LICENSE.scbake-new")); os.IsNotExist(err) {
+		t.Error("Artifact file was not created")
+	}
+}
+
+func TestLicenseTask_ConflictStrategyKeepLocal(t *testing.T) {
+	tmpDir := t.TempDir()
+	m := &types.Manifest{
+		Metadata:     map[string]string{"license": "MIT", "copyright_holder": "KeepLocal Holder"},
+		ManagedFiles: map[string]string{"LICENSE": "originalhash"},
+	}
+	tc := types.TaskContext{
+		TargetPath:       tmpDir,
+		Manifest:         m,
+		ConflictStrategy: "keep-local",
+	}
+	task := &LicenseTask{TaskPrio: 100}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("First execute should succeed: %v", err)
+	}
+
+	drifterContent := []byte("DRIFTED KEEPLOCAL")
+	if err := os.WriteFile(filepath.Join(tmpDir, "LICENSE"), drifterContent, 0600); err != nil {
+		t.Fatalf("Failed to drift file: %v", err)
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Keep-local should succeed: %v", err)
+	}
+
+	//nolint:gosec // Test temp directory
+	content, _ := os.ReadFile(filepath.Join(tmpDir, "LICENSE"))
+	if string(content) != string(drifterContent) {
+		t.Errorf("Keep-local should preserve local content. Got %q, want %q", string(content), string(drifterContent))
+	}
+}
+
+func TestLicenseTask_ManagedFilesTracking(t *testing.T) {
+	tmpDir := t.TempDir()
+	m := &types.Manifest{
+		Metadata: map[string]string{"license": "MIT", "copyright_holder": "Tracking Holder"},
+	}
+	tc := types.TaskContext{
+		TargetPath: tmpDir,
+		Manifest:   m,
+	}
+	task := &LicenseTask{TaskPrio: 100}
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() failed: %v", err)
+	}
+	if _, ok := m.ManagedFiles["LICENSE"]; !ok {
+		t.Error("ManagedFiles should track LICENSE after execution")
+	}
+}
+
 func TestLicenseTask_Metadata(t *testing.T) {
 	task := &LicenseTask{TaskPrio: 150}
 	if task.Description() != "Generate LICENSE file" {
