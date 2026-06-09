@@ -25,6 +25,9 @@ type TaskContext struct {
 	// Force indicates if we should overwrite existing files.
 	Force bool
 
+	// ConflictStrategy determines how to handle state-aware drift (fail, overwrite, artifact, keep-local)
+	ConflictStrategy string
+
 	// Tx is the active filesystem transaction manager.
 	// If nil, tasks perform operations without safety tracking (legacy/testing mode).
 	Tx *transaction.Manager

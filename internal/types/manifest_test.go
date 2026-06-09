@@ -10,7 +10,7 @@ import (
 // TestManifestDeepCopy verifies that DeepCopy creates independent copies.
 func TestManifestDeepCopy(t *testing.T) {
 	original := &Manifest{
-		SbakeVersion: "v0.1.0",
+		SbakeVersion: "v0.2.0",
 		Projects: []Project{
 			{
 				Name:      "backend",
@@ -44,7 +44,7 @@ func TestManifestDeepCopy(t *testing.T) {
 	}
 
 	// Modify the copy
-	copied.SbakeVersion = "v0.1.1"
+	copied.SbakeVersion = "v0.2.1"
 	if copied.Projects[0].Name != "backend" {
 		t.Fatalf("Failed to copy project name")
 	}
@@ -54,7 +54,7 @@ func TestManifestDeepCopy(t *testing.T) {
 	copied.Templates[0].Name = "modified"
 
 	// Verify original is unchanged
-	if original.SbakeVersion != "v0.1.0" {
+	if original.SbakeVersion != "v0.2.0" {
 		t.Errorf("Original SbakeVersion was modified: %q", original.SbakeVersion)
 	}
 
@@ -83,7 +83,7 @@ func TestManifestDeepCopyNil(t *testing.T) {
 // TestManifestDeepCopyEmpty verifies that DeepCopy handles empty manifests.
 func TestManifestDeepCopyEmpty(t *testing.T) {
 	original := &Manifest{
-		SbakeVersion: "v0.1.0",
+		SbakeVersion: "v0.2.0",
 		Projects:     []Project{},
 		Templates:    []Template{},
 	}

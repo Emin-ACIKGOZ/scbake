@@ -123,7 +123,7 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	)
 	text = replacer.Replace(text)
 
-	// 3. Manual write with existence check (respecting --force)
+	// 3. Manual write with State-Aware Reconciliation
 	if tc.DryRun {
 		return nil
 	}
@@ -131,21 +131,55 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	finalPath := filepath.Join(tc.TargetPath, "LICENSE")
 	absPath, _ := filepath.Abs(finalPath)
 
+	newHash := tasks.HashContent([]byte(text))
+
+	// Re-implement reconciliation logic here to avoid circular dependency
+	writePath := absPath
 	if !tc.Force {
-		if _, err := os.Stat(absPath); err == nil {
-			return errors.New("file already exists: LICENSE. Use --force to overwrite")
+		//nolint:gosec
+		existingContent, err := os.ReadFile(absPath)
+		if err == nil {
+			existingHash := tasks.HashContent(existingContent)
+			var originalHash string
+			if tc.Manifest.ManagedFiles != nil {
+				originalHash = tc.Manifest.ManagedFiles["LICENSE"]
+			}
+
+			if originalHash == "" || (existingHash != originalHash && existingHash != newHash) {
+				// Drift detected
+				switch tc.ConflictStrategy {
+				case "overwrite":
+					writePath = absPath
+				case "artifact":
+					fmt.Printf("⚠️  Conflict in LICENSE (user modifications detected). Writing new template to artifact.\n")
+					writePath = absPath + ".scbake-new"
+				case "keep-local":
+					fmt.Printf("⚠️  Conflict in LICENSE (user modifications detected). Skipping update (--strategy=keep-local).\n")
+					return nil
+				case "fail":
+					fallthrough
+				default:
+					return errors.New("file LICENSE has manual modifications (drift detected). Use --conflict-strategy to resolve")
+				}
+			}
 		}
 	}
 
 	if tc.Tx != nil {
-		if err := tc.Tx.Track(absPath); err != nil {
+		if err := tc.Tx.Track(writePath); err != nil {
 			return fmt.Errorf("failed to track LICENSE file: %w", err)
 		}
 	}
 
-	if err := os.WriteFile(absPath, []byte(text), fileutil.FilePerms); err != nil {
+	if err := os.WriteFile(writePath, []byte(text), fileutil.FilePerms); err != nil {
 		return fmt.Errorf("failed to write LICENSE: %w", err)
 	}
+
+	// Record State
+	if tc.Manifest.ManagedFiles == nil {
+		tc.Manifest.ManagedFiles = make(map[string]string)
+	}
+	tc.Manifest.ManagedFiles["LICENSE"] = newHash
 
 	return nil
 }

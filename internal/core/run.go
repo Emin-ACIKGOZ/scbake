@@ -34,6 +34,7 @@ type RunContext struct {
 	ManifestPathArg string // Relative path for manifest portability.
 	DryRun           bool
 	Force            bool
+	ConflictStrategy string
 	License          string
 	CopyrightHolder  string
 }
@@ -116,6 +117,7 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 		Manifest:         futureManifest,
 		TargetPath:       rc.TargetPath,
 		Force:            rc.Force,
+		ConflictStrategy: rc.ConflictStrategy,
 		Tx:               tx,
 	}
 
@@ -126,6 +128,7 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	return executeAndFinalize(reporter, plan, tc, m, changes, rootPath, tx)
 }
 
+//nolint:cyclop // Complex finalization logic requires multiple linear steps
 func executeAndFinalize(
 	reporter types.Reporter,
 	plan *types.Plan,
@@ -150,6 +153,16 @@ func executeAndFinalize(
 		}
 		for k, v := range tc.Manifest.Metadata {
 			m.Metadata[k] = v
+		}
+	}
+
+	// Persist managed files state
+	if tc.Manifest.ManagedFiles != nil {
+		if m.ManagedFiles == nil {
+			m.ManagedFiles = make(map[string]string)
+		}
+		for k, v := range tc.Manifest.ManagedFiles {
+			m.ManagedFiles[k] = v
 		}
 	}
 
