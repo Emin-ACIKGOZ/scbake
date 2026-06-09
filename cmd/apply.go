@@ -44,16 +44,17 @@ var applyCmd = &cobra.Command{
 		}
 
 		rc := core.RunContext{
-			LangFlag:         langFlag,
-			WithFlag:         withFlag,
-			TargetPath:       absPath,         // Pass absolute path for execution stability.
-			ManifestPathArg:  manifestPathArg, // Pass Arg for manifest portability.
-			DryRun:           dryRun,          // dryRun is the global flag.
-			Force:            force,           // force is the global flag.
-			ConflictStrategy: conflictStrategyFlag,
-			TemplateDir:      templateDirFlag,
-			License:          licenseFlag,
-			CopyrightHolder:  copyrightHolderFlag,
+			LangFlag:          langFlag,
+			WithFlag:          withFlag,
+			TargetPath:        absPath,         // Pass absolute path for execution stability.
+			ManifestPathArg:   manifestPathArg, // Pass Arg for manifest portability.
+			DryRun:            dryRun,          // dryRun is the global flag.
+			Force:             force,           // force is the global flag.
+			ConflictStrategy:  conflictStrategyFlag,
+			TemplateDir:       templateDirFlag,
+			RegistryCacheDir:   GetRegistryCacheDir(),
+			License:           licenseFlag,
+			CopyrightHolder:   copyrightHolderFlag,
 		}
 
 		// Initialize modular UI reporter using the factory

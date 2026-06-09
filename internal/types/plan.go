@@ -31,6 +31,9 @@ type TaskContext struct {
 	// TemplateDir is the path to an external directory containing template overrides.
 	TemplateDir string
 
+	// RegistryCacheDir is the path to the local cache of pulled registry templates.
+	RegistryCacheDir string
+
 	// Tx is the active filesystem transaction manager.
 	// If nil, tasks perform operations without safety tracking (legacy/testing mode).
 	Tx *transaction.Manager

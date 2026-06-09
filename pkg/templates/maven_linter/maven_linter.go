@@ -46,7 +46,7 @@ func (h *Handler) GetTasks(_ string, templateDir string) ([]types.Task, error) {
 	}
 
 	// Read the plugin snippet to inject
-	pluginSnippet, err := tasks.ReadTemplate(templates, "pom_snippet.xml.tpl", templateDir)
+	pluginSnippet, err := tasks.ReadTemplate(templates, "pom_snippet.xml.tpl", templateDir, "")
 	if err != nil {
 		return nil, err
 	}

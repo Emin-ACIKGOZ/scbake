@@ -5,13 +5,17 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"scbake/internal/templateregistry"
 )
 
-// ReadTemplate reads a template file from an external override directory first.
-// If overrideDir is empty or the file doesn't exist there, it falls back to
-// reading from the embedded filesystem (efs). Permission errors on the override
-// file are propagated; missing files silently fall through to the embedded copy.
-func ReadTemplate(efs embed.FS, tplPath string, overrideDir string) ([]byte, error) {
+// ReadTemplate reads a template file using a resolution chain:
+//  1. overrideDir — local filesystem overrides (--template-dir or SCBAKE_TEMPLATE_DIR)
+//  2. registryCacheDir — downloaded templates from remote registries
+//  3. efs — embedded filesystem (built-in templates)
+//
+// If overrideDir or registryCacheDir is empty, those steps are skipped.
+// Permission errors on override files are propagated; missing files fall through.
+func ReadTemplate(efs embed.FS, tplPath string, overrideDir, registryCacheDir string) ([]byte, error) {
 	if overrideDir != "" {
 		cleanTplPath := filepath.Clean(tplPath)
 		overridePath := filepath.Join(overrideDir, cleanTplPath)
@@ -24,6 +28,17 @@ func ReadTemplate(efs embed.FS, tplPath string, overrideDir string) ([]byte, err
 
 		if !os.IsNotExist(err) {
 			return nil, err
+		}
+	}
+
+	if registryCacheDir != "" {
+		cachePath := templateregistry.ResolveCachePath(registryCacheDir, tplPath)
+		if cachePath != "" {
+			//nolint:gosec // cachePath is within our controlled cache dir
+			content, err := os.ReadFile(cachePath)
+			if err == nil {
+				return content, nil
+			}
 		}
 	}
 

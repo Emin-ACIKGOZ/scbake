@@ -28,16 +28,17 @@ const (
 
 // RunContext holds the flags and arguments for a single execution run.
 type RunContext struct {
-	LangFlag        string
-	WithFlag        []string
-	TargetPath      string // Absolute path for execution stability.
-	ManifestPathArg string // Relative path for manifest portability.
-	DryRun           bool
-	Force            bool
-	ConflictStrategy string
-	TemplateDir      string
-	License          string
-	CopyrightHolder  string
+	LangFlag          string
+	WithFlag          []string
+	TargetPath        string // Absolute path for execution stability.
+	ManifestPathArg   string // Relative path for manifest portability.
+	DryRun             bool
+	Force              bool
+	ConflictStrategy   string
+	TemplateDir        string
+	RegistryCacheDir   string
+	License            string
+	CopyrightHolder    string
 }
 
 // A struct to hold all proposed manifest changes
@@ -113,14 +114,15 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	defer cancel()
 
 	tc := types.TaskContext{
-		Ctx:              ctx,
-		DryRun:           rc.DryRun,
-		Manifest:         futureManifest,
-		TargetPath:       rc.TargetPath,
-		Force:            rc.Force,
-		ConflictStrategy: rc.ConflictStrategy,
-		TemplateDir:      rc.TemplateDir,
-		Tx:               tx,
+		Ctx:               ctx,
+		DryRun:            rc.DryRun,
+		Manifest:          futureManifest,
+		TargetPath:        rc.TargetPath,
+		Force:             rc.Force,
+		ConflictStrategy:  rc.ConflictStrategy,
+		TemplateDir:       rc.TemplateDir,
+		RegistryCacheDir:   rc.RegistryCacheDir,
+		Tx:                tx,
 	}
 
 	if rc.DryRun {
