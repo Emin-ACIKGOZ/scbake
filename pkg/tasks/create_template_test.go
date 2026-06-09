@@ -60,18 +60,28 @@ func TestCreateTemplateTask(t *testing.T) {
 		t.Errorf("Render mismatch. Got '%s', want '%s'", string(content), expected)
 	}
 
-	// Case 2: Existence Check (Should fail without Force)
-	if err := task.Execute(tc); err == nil {
-		t.Error("Overwriting existing file should fail without Force")
+	// Case 2: Idempotent re-run (should succeed — same hash, no drift)
+	if err := task.Execute(tc); err != nil {
+		t.Errorf("Idempotent re-run should succeed: %v", err)
 	}
 
-	// Case 3: Force Overwrite
+	// Case 3: Modify file externally, then re-run (drift detection)
+	existingContent := append([]byte("MANUAL EDIT"), []byte("Hello MyProject from v1.0.0")...)
+	//nolint:gosec
+	if err := os.WriteFile(filepath.Join(tmpDir, "output.txt"), existingContent, 0644); err != nil {
+		t.Fatalf("Failed to modify file: %v", err)
+	}
+	if err := task.Execute(tc); err == nil {
+		t.Error("Expected error when overwriting drifted file without Force")
+	}
+
+	// Case 4: Force Overwrite (drifted file)
 	tc.Force = true
 	if err := task.Execute(tc); err != nil {
-		t.Errorf("Force overwrite failed: %v", err)
+		t.Errorf("Force overwrite of drifted file failed: %v", err)
 	}
 
-	// Case 4: Path Traversal Attack (Security Check)
+	// Case 5: Path Traversal Attack (Security Check)
 	// Try to write outside the target path
 	attackTask := &CreateTemplateTask{
 		TemplateFS:   testTemplates,
