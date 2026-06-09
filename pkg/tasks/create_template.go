@@ -16,6 +16,41 @@ import (
 	"text/template"
 )
 
+// templateFuncs provides utility functions for Go templates.
+var templateFuncs = template.FuncMap{
+	"default": func(defaultValue interface{}, given interface{}) interface{} {
+		if given == nil {
+			return defaultValue
+		}
+		switch v := given.(type) {
+		case string:
+			if v == "" {
+				return defaultValue
+			}
+		case []interface{}:
+			if len(v) == 0 {
+				return defaultValue
+			}
+		}
+		return given
+	},
+	"dict": func(values ...interface{}) (map[string]interface{}, error) {
+		if len(values)%2 != 0 {
+			return nil, errors.New("invalid dict call")
+		}
+		//nolint:mnd // Keys and values come in pairs
+		dict := make(map[string]interface{}, len(values)/2)
+		for i := 0; i < len(values); i += 2 {
+			key, ok := values[i].(string)
+			if !ok {
+				return nil, errors.New("dict keys must be strings")
+			}
+			dict[key] = values[i+1]
+		}
+		return dict, nil
+	},
+}
+
 // CreateTemplateTask renders and writes a file from an embedded template.
 type CreateTemplateTask struct {
 	// TemplateFS is the embedded filesystem (e.g., lang.GoTemplates)
@@ -32,6 +67,9 @@ type CreateTemplateTask struct {
 
 	// Execution priority
 	TaskPrio int
+
+	// Optional: Custom data to pass to the template instead of the full manifest
+	TemplateData interface{}
 }
 
 // Description returns a human-readable summary of the task.
@@ -86,6 +124,7 @@ func checkFilePreconditions(finalPath, output, target string, force bool) error 
 }
 
 // Execute performs the template creation task.
+//nolint:cyclop // Complex precondition checks and file ops are linear
 func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 	if tc.DryRun {
 		return nil
@@ -97,7 +136,7 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 		return fmt.Errorf("failed to read embedded template %s: %w", t.TemplatePath, err)
 	}
 
-	tpl, err := template.New(t.TemplatePath).Parse(string(tplContent))
+	tpl, err := template.New(t.TemplatePath).Funcs(templateFuncs).Parse(string(tplContent))
 	if err != nil {
 		return fmt.Errorf("failed to parse template %s: %w", t.TemplatePath, err)
 	}
@@ -137,7 +176,12 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 	}()
 
 	// 5. Execute the template and write to the file
-	if err = tpl.Execute(f, tc.Manifest); err != nil {
+	data := interface{}(tc.Manifest)
+	if t.TemplateData != nil {
+		data = t.TemplateData
+	}
+
+	if err = tpl.Execute(f, data); err != nil {
 		return fmt.Errorf("failed to render template %s: %w", t.TemplatePath, err)
 	}
 
