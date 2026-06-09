@@ -15,7 +15,7 @@ import (
 func TestGetTasks_Makefile(t *testing.T) {
 	handler := &Handler{}
 
-	plan, err := handler.GetTasks("", "")
+	plan, err := handler.GetTasks("", "", "")
 	if err != nil {
 		t.Fatalf("Failed to get tasks: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestGetTasks_Makefile(t *testing.T) {
 // TestMakefile_TemplateExists verifies the embedded template is bundled correctly.
 func TestMakefile_TemplateExists(t *testing.T) {
 	handler := &Handler{}
-	plan, _ := handler.GetTasks("", "")
+	plan, _ := handler.GetTasks("", "", "")
 	task := plan[0].(*tasks.CreateTemplateTask)
 
 	_, err := templates.ReadFile(task.TemplatePath)

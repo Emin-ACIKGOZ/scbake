@@ -10,7 +10,7 @@ import (
 
 func TestCommunityHandler_GetTasks(t *testing.T) {
 	h := &Handler{}
-	tasks, err := h.GetTasks(".", "")
+	tasks, err := h.GetTasks(".", "", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestCommunityHandler_GetTasks(t *testing.T) {
 
 func TestCommunityHandler_ExecuteCreateContributing(t *testing.T) {
 	h := &Handler{}
-	plan, err := h.GetTasks(".", "")
+	plan, err := h.GetTasks(".", "", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestCommunityHandler_ExecuteCreateContributing(t *testing.T) {
 
 func TestCommunityHandler_ExecuteDryRun(t *testing.T) {
 	h := &Handler{}
-	plan, err := h.GetTasks(".", "")
+	plan, err := h.GetTasks(".", "", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}

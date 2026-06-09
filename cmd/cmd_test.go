@@ -104,7 +104,7 @@ func (m *MockCreateTask) Execute(tc types.TaskContext) error {
 // MockHandlerGeneric allows for the injection of custom task sets into the template registry.
 type MockHandlerGeneric struct{ Tasks []types.Task }
 
-func (h *MockHandlerGeneric) GetTasks(_ string, _ string) ([]types.Task, error) {
+func (h *MockHandlerGeneric) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 	return h.Tasks, nil
 }
 

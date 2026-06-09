@@ -15,7 +15,7 @@ func TestGetTasks_GitHubCI(t *testing.T) {
 	handler := &Handler{}
 
 	// targetPath is ignored by this handler as CI is usually root-level
-	plan, err := handler.GetTasks("", "")
+	plan, err := handler.GetTasks("", "", "")
 	if err != nil {
 		t.Fatalf("Failed to get tasks: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestGetTasks_GitHubCI(t *testing.T) {
 // TestGetTasks_TemplateBinding checks if the embedded template is correctly referenced.
 func TestGetTasks_TemplateBinding(t *testing.T) {
 	handler := &Handler{}
-	plan, _ := handler.GetTasks("", "")
+	plan, _ := handler.GetTasks("", "", "")
 	task := plan[0].(*tasks.CreateTemplateTask)
 
 	// Ensure the embedded file path matches the go:embed directive

@@ -23,8 +23,8 @@ import (
 
 // Handler is the interface all tooling template handlers must implement.
 type Handler interface {
-	// GetTasks takes a targetPath to be context-aware, and a templateDir for overrides
-	GetTasks(targetPath string, templateDir string) ([]types.Task, error)
+	// GetTasks takes a targetPath to be context-aware, and directories for overrides/cache
+	GetTasks(targetPath string, templateDir string, registryCacheDir string) ([]types.Task, error)
 }
 
 var (

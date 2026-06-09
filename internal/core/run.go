@@ -288,7 +288,7 @@ func handleLangFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) (
 		return "", err
 	}
 
-	langTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir)
+	langTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to get tasks for lang '%s': %w", rc.LangFlag, err)
 	}
@@ -321,7 +321,7 @@ func handleWithFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) e
 			return err
 		}
 
-		tmplTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir)
+		tmplTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir)
 		if err != nil {
 			return fmt.Errorf("failed to get tasks for template '%s': %w", tmplName, err)
 		}

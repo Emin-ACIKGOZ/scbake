@@ -20,7 +20,7 @@ import (
 // Logic: Git operations MUST be strictly sequential (Init -> Add -> Commit) with no priority gaps.
 func TestGitHandler_Structure(t *testing.T) {
 	h := &Handler{}
-	plan, err := h.GetTasks("", "")
+	plan, err := h.GetTasks("", "", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestGitTemplate_Fresh(t *testing.T) {
 	}
 
 	h := &Handler{}
-	plan, err := h.GetTasks(tmpDir, "")
+	plan, err := h.GetTasks(tmpDir, "", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestGitTemplate_Idempotent(t *testing.T) {
 	runInDir(t, tmpDir, "git", "commit", "-m", "Initial")
 
 	h := &Handler{}
-	plan, err := h.GetTasks(tmpDir, "")
+	plan, err := h.GetTasks(tmpDir, "", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}

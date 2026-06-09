@@ -17,7 +17,7 @@ var templates embed.FS
 type Handler struct{}
 
 // GetTasks returns the plan to create the smart Makefile.
-func (h *Handler) GetTasks(_ string, _ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Build System band (1400-1499)

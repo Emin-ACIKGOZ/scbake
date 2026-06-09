@@ -17,7 +17,7 @@ var templates embed.FS
 type Handler struct{}
 
 // GetTasks returns the plan to create Checkstyle config and inject the plugin into pom.xml.
-func (h *Handler) GetTasks(_ string, templateDir string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, templateDir string, registryCacheDir string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Linter band (1200-1399)
@@ -46,7 +46,7 @@ func (h *Handler) GetTasks(_ string, templateDir string) ([]types.Task, error) {
 	}
 
 	// Read the plugin snippet to inject
-	pluginSnippet, err := tasks.ReadTemplate(templates, "pom_snippet.xml.tpl", templateDir, "")
+	pluginSnippet, err := tasks.ReadTemplate(templates, "pom_snippet.xml.tpl", templateDir, registryCacheDir)
 	if err != nil {
 		return nil, err
 	}

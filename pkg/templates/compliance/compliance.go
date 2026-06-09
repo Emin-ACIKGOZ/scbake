@@ -27,7 +27,7 @@ var templates embed.FS
 type Handler struct{}
 
 // GetTasks returns the plan to create compliance files.
-func (h *Handler) GetTasks(_ string, _ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Compliance band (1200-1399 range, PrioLinter)

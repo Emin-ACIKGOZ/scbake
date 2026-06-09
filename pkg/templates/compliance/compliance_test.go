@@ -13,7 +13,7 @@ import (
 
 func TestComplianceHandler_GetTasks(t *testing.T) {
 	h := &Handler{}
-	tasks, err := h.GetTasks(".", "")
+	tasks, err := h.GetTasks(".", "", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
