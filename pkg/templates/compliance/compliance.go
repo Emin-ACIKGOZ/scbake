@@ -143,7 +143,6 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 		}
 	}
 
-	//nolint:gosec
 	if err := os.WriteFile(absPath, []byte(text), fileutil.FilePerms); err != nil {
 		return fmt.Errorf("failed to write LICENSE: %w", err)
 	}

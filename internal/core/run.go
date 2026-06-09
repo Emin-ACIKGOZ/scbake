@@ -126,7 +126,6 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	return executeAndFinalize(reporter, plan, tc, m, changes, rootPath, tx)
 }
 
-//nolint:cyclop // Complex finalization logic requires multiple linear steps
 func executeAndFinalize(
 	reporter types.Reporter,
 	plan *types.Plan,
