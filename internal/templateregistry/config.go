@@ -23,8 +23,11 @@ const (
 
 // Registry represents a remote template source.
 type Registry struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name         string `json:"name"`
+	URL          string `json:"url"`
+	Token        string `json:"token,omitempty"`
+	Version      string `json:"version,omitempty"`
+	Subdirectory string `json:"subdirectory,omitempty"`
 }
 
 // Config manages the list of known registries.
@@ -100,8 +103,8 @@ func (m *Manager) save() error {
 	return nil
 }
 
-// Add registers a new registry. Returns an error if name already exists.
-func (m *Manager) Add(name, url string) error {
+// Add registers a new registry with optional token, version, and subdirectory.
+func (m *Manager) Add(name, url, token, version, subdirectory string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -111,8 +114,47 @@ func (m *Manager) Add(name, url string) error {
 		}
 	}
 
-	m.config.Registries = append(m.config.Registries, Registry{Name: name, URL: url})
+	m.config.Registries = append(m.config.Registries, Registry{
+		Name:         name,
+		URL:          url,
+		Token:        token,
+		Version:      version,
+		Subdirectory: subdirectory,
+	})
 	return m.save()
+}
+
+// SetToken updates the token for an existing registry.
+func (m *Manager) SetToken(name, token string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i := range m.config.Registries {
+		if m.config.Registries[i].Name == name {
+			m.config.Registries[i].Token = token
+			return m.save()
+		}
+	}
+	return fmt.Errorf("registry %q not found", name)
+}
+
+// Get returns a registry by name. Returns nil if not found.
+func (m *Manager) Get(name string) *Registry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, r := range m.config.Registries {
+		if r.Name == name {
+			return &Registry{
+				Name:         r.Name,
+				URL:          r.URL,
+				Token:        r.Token,
+				Version:      r.Version,
+				Subdirectory: r.Subdirectory,
+			}
+		}
+	}
+	return nil
 }
 
 // Remove deletes a registry by name. Returns an error if not found.

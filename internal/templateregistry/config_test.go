@@ -12,7 +12,7 @@ func TestAddAndList(t *testing.T) {
 	cacheDir := filepath.Join(dir, "cache")
 	m := NewManagerWithPaths(configPath, cacheDir)
 
-	if err := m.Add("acme", "https://templates.acme.com/v1"); err != nil {
+	if err := m.Add("acme", "https://templates.acme.com/v1", "", "", ""); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
 
@@ -26,6 +26,9 @@ func TestAddAndList(t *testing.T) {
 	if registries[0].URL != "https://templates.acme.com/v1" {
 		t.Errorf("expected URL 'https://templates.acme.com/v1', got %q", registries[0].URL)
 	}
+	if registries[0].Token != "" {
+		t.Errorf("expected empty token, got %q", registries[0].Token)
+	}
 }
 
 func TestAddDuplicate(t *testing.T) {
@@ -34,10 +37,10 @@ func TestAddDuplicate(t *testing.T) {
 	cacheDir := filepath.Join(dir, "cache")
 	m := NewManagerWithPaths(configPath, cacheDir)
 
-	if err := m.Add("acme", "https://templates.acme.com/v1"); err != nil {
+	if err := m.Add("acme", "https://templates.acme.com/v1", "", "", ""); err != nil {
 		t.Fatalf("first Add failed: %v", err)
 	}
-	if err := m.Add("acme", "https://other.com/v1"); err == nil {
+	if err := m.Add("acme", "https://other.com/v1", "", "", ""); err == nil {
 		t.Fatal("expected error for duplicate registry name")
 	}
 }
@@ -48,10 +51,10 @@ func TestRemove(t *testing.T) {
 	cacheDir := filepath.Join(dir, "cache")
 	m := NewManagerWithPaths(configPath, cacheDir)
 
-	if err := m.Add("acme", "https://templates.acme.com/v1"); err != nil {
+	if err := m.Add("acme", "https://templates.acme.com/v1", "", "", ""); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
-	if err := m.Add("internal", "https://templates.internal/v1"); err != nil {
+	if err := m.Add("internal", "https://templates.internal/v1", "", "", ""); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
 
@@ -97,7 +100,7 @@ func TestPersistenceAcrossManagers(t *testing.T) {
 	cacheDir := filepath.Join(dir, "cache")
 
 	m1 := NewManagerWithPaths(configPath, cacheDir)
-	if err := m1.Add("acme", "https://templates.acme.com/v1"); err != nil {
+	if err := m1.Add("acme", "https://templates.acme.com/v1", "tok_abc", "1.0.0", "template"); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
 
@@ -111,6 +114,90 @@ func TestPersistenceAcrossManagers(t *testing.T) {
 	}
 	if registries[0].Name != "acme" {
 		t.Errorf("expected 'acme', got %q", registries[0].Name)
+	}
+	if registries[0].Token != "tok_abc" {
+		t.Errorf("expected token 'tok_abc', got %q", registries[0].Token)
+	}
+	if registries[0].Version != "1.0.0" {
+		t.Errorf("expected version '1.0.0', got %q", registries[0].Version)
+	}
+	if registries[0].Subdirectory != "template" {
+		t.Errorf("expected subdirectory 'template', got %q", registries[0].Subdirectory)
+	}
+}
+
+func TestAddWithAllFields(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	if err := m.Add("acme", "https://templates.acme.com/v1", "tok_xyz", "2.0.0", "scbake-template"); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	r := m.Get("acme")
+	if r == nil {
+		t.Fatal("Get returned nil")
+	}
+	if r.URL != "https://templates.acme.com/v1" {
+		t.Errorf("expected URL, got %q", r.URL)
+	}
+	if r.Token != "tok_xyz" {
+		t.Errorf("expected token 'tok_xyz', got %q", r.Token)
+	}
+	if r.Version != "2.0.0" {
+		t.Errorf("expected version '2.0.0', got %q", r.Version)
+	}
+	if r.Subdirectory != "scbake-template" {
+		t.Errorf("expected subdirectory 'scbake-template', got %q", r.Subdirectory)
+	}
+}
+
+func TestSetToken(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	if err := m.Add("acme", "https://templates.acme.com/v1", "", "", ""); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	if err := m.SetToken("acme", "new_token"); err != nil {
+		t.Fatalf("SetToken failed: %v", err)
+	}
+
+	r := m.Get("acme")
+	if r == nil {
+		t.Fatal("Get returned nil after SetToken")
+	}
+	if r.Token != "new_token" {
+		t.Errorf("expected 'new_token', got %q", r.Token)
+	}
+
+	// Verify persistence
+	m2 := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+	if err := m2.load(); err != nil {
+		t.Fatalf("reload failed: %v", err)
+	}
+	r2 := m2.Get("acme")
+	if r2.Token != "new_token" {
+		t.Errorf("persisted token expected 'new_token', got %q", r2.Token)
+	}
+}
+
+func TestSetTokenNotFound(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	if err := m.SetToken("nonexistent", "token"); err == nil {
+		t.Fatal("expected error for SetToken on non-existent registry")
+	}
+}
+
+func TestGetNotFound(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	if r := m.Get("nonexistent"); r != nil {
+		t.Fatalf("expected nil, got %+v", r)
 	}
 }
 

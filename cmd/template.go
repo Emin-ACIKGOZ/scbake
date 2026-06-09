@@ -27,19 +27,37 @@ var registryCmd = &cobra.Command{
 	Short: "Manage template registries",
 }
 
+var (
+	registryAddToken        string
+	registryAddVersion      string
+	registryAddSubdirectory string
+)
+
 var registryAddCmd = &cobra.Command{
 	Use:   "add <name> <url>",
 	Short: "Add a template registry",
-	Args:  cobra.ExactArgs(2), //nolint:mnd // 2 is the expected arg count for name+url
+	Long: `Add a named template registry with optional authentication token,
+default version, and subdirectory for template extraction.
+
+Token can also be provided via SCBAKE_REGISTRY_TOKEN_<NAME> env var at pull time.
+The --token flag stores the token in the config file; use the env var to avoid that.`,
+	Args: cobra.ExactArgs(2), //nolint:mnd // 2 is the expected arg count for name+url
 	RunE: func(_ *cobra.Command, args []string) error {
 		m, err := templateregistry.NewManager()
 		if err != nil {
 			return err
 		}
-		if err := m.Add(args[0], args[1]); err != nil {
+		if err := m.Add(args[0], args[1], registryAddToken, registryAddVersion, registryAddSubdirectory); err != nil {
 			return err
 		}
-		fmt.Printf("Added registry %q (%s)\n", args[0], args[1])
+		msg := fmt.Sprintf("Added registry %q (%s)", args[0], args[1])
+		if registryAddVersion != "" {
+			msg += fmt.Sprintf(" [version: %s]", registryAddVersion)
+		}
+		if registryAddSubdirectory != "" {
+			msg += fmt.Sprintf(" [subdir: %s]", registryAddSubdirectory)
+		}
+		fmt.Println(msg)
 		return nil
 	},
 }
@@ -77,7 +95,17 @@ var registryListCmd = &cobra.Command{
 		}
 		fmt.Println("Template Registries:")
 		for _, r := range registries {
-			fmt.Printf("  %s (%s)\n", r.Name, r.URL)
+			extra := ""
+			if r.Version != "" {
+				extra += " version=" + r.Version
+			}
+			if r.Subdirectory != "" {
+				extra += " subdir=" + r.Subdirectory
+			}
+			if r.Token != "" {
+				extra += " [token set]"
+			}
+			fmt.Printf("  %s (%s)%s\n", r.Name, r.URL, extra)
 		}
 		return nil
 	},
@@ -88,6 +116,7 @@ var pullCmd = &cobra.Command{
 	Short: "Pull a template from a registry",
 	Long: `Downloads a template archive from a registry and caches it locally.
 Use --registry to specify which registry to pull from.
+Authentication uses the stored token or the SCBAKE_REGISTRY_TOKEN_<NAME> env var.
 The template is then available as an override for scbake new/apply.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
@@ -127,6 +156,9 @@ var pullRegistryName string
 
 func init() {
 	pullCmd.Flags().StringVarP(&pullRegistryName, "registry", "r", "", "Registry to pull from")
+	registryAddCmd.Flags().StringVar(&registryAddToken, "token", "", "Authentication token for the registry")
+	registryAddCmd.Flags().StringVar(&registryAddVersion, "version", "", "Default template version")
+	registryAddCmd.Flags().StringVar(&registryAddSubdirectory, "subdirectory", "", "Subdirectory within template archives")
 
 	registryCmd.AddCommand(registryAddCmd)
 	registryCmd.AddCommand(registryRemoveCmd)
