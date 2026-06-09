@@ -24,11 +24,11 @@ var templates embed.FS
 type Handler struct{}
 
 // GetTasks returns the list of tasks to set up a Rust project.
-func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 	// Create a priority sequence for language setup tasks
 	seq, err := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
+		return nil, fmt.Errorf("created priority sequence: %w", err)
 	}
 
 	var plan []types.Task
@@ -44,7 +44,8 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	// Task 2: Create .gitignore for Rust projects
 	p, _ = seq.Next()
 	plan = append(plan, &tasks.CreateTemplateTask{
-		TemplatePath: string(mustRead("templates/gitignore.tpl")),
+		TemplateFS:   templates,
+		TemplatePath: "templates/gitignore.tpl",
 		OutputPath:   ".gitignore",
 		TaskPrio:     int(p),
 		Desc:         "Create .gitignore",
@@ -53,7 +54,8 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	// Task 3: Create Cargo.toml from template
 	p, _ = seq.Next()
 	plan = append(plan, &tasks.CreateTemplateTask{
-		TemplatePath: string(mustRead("templates/Cargo.toml.tpl")),
+		TemplateFS:   templates,
+		TemplatePath: "templates/Cargo.toml.tpl",
 		OutputPath:   "Cargo.toml",
 		TaskPrio:     int(p),
 		Desc:         "Create Cargo.toml",
@@ -62,21 +64,12 @@ func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
 	// Task 4: Create main.rs
 	p, _ = seq.Next()
 	plan = append(plan, &tasks.CreateTemplateTask{
-		TemplatePath: string(mustRead("templates/main.rs.tpl")),
+		TemplateFS:   templates,
+		TemplatePath: "templates/main.rs.tpl",
 		OutputPath:   "src/main.rs",
 		TaskPrio:     int(p),
 		Desc:         "Create main.rs",
 	})
 
 	return plan, nil
-}
-
-// mustRead reads a template file and panics if it fails.
-// In production, you'd handle this error more gracefully.
-func mustRead(path string) []byte {
-	data, err := templates.ReadFile(path)
-	if err != nil {
-		panic(fmt.Sprintf("failed to read template %s: %v", path, err))
-	}
-	return data
 }
