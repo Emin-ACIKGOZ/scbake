@@ -95,11 +95,8 @@ gh release create v0.1.0 --title "v0.1.0" --notes-file <(sed -n '/^## \[0.1.0\]/
 
 ## Version Numbering Examples
 
-### v0.0.1 → v0.0.2 (Patch: bug fix)
-- Fixed symlink traversal in path validation
-- Fixed race condition in manifest loading
-- Performance optimization for XML insertion
-
+### v0.1.0 → v0.1.1 (Patch: bug fix)
+Bug fixes that are backward-compatible.
 ### v0.0.1 → v0.1.0 (Minor: new features)
 - Added config-driven extension discovery
 - Added new `python_linter` template
@@ -116,17 +113,17 @@ For urgent bug fixes:
 
 1. Create branch from tag:
    ```bash
-   git checkout -b hotfix/v0.0.2 v0.0.1
+   git checkout -b hotfix/v0.1.1 v0.1.0
    ```
 
 2. Fix the bug, commit, push
 
-3. Tag and release: `v0.0.2`
+3. Tag and release: `v0.1.1`
 
 4. Merge back to main:
    ```bash
    git checkout main
-   git merge hotfix/v0.0.2
+   git merge hotfix/v0.1.1
    git push origin main
    ```
 
@@ -180,7 +177,7 @@ For now, releases are source-only.
 
 Maintain backward compatibility:
 
-- **v0.0.1 projects** must work with v0.1.0, v0.2.0, etc.
+- **v0.1.0 projects** must work with v0.2.0, v0.3.0, etc.
 - `scbake.toml` format changes require migration tooling
 - Command interface changes require deprecation warnings
 - Handler API changes (rare) should follow Go compatibility rules

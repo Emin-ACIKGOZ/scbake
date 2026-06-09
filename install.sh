@@ -4,7 +4,7 @@
 # Or:    bash install.sh [version] [install-dir] [--quiet]
 # Examples:
 #   bash install.sh                          # Latest version, interactive
-#   bash install.sh v0.0.1 /opt/scbake       # Specific version to custom path
+#   bash install.sh v0.1.0 /opt/scbake       # Specific version to custom path
 #   bash install.sh latest --quiet           # Latest, automation-friendly (no output)
 
 set -euo pipefail
@@ -133,8 +133,8 @@ get_latest_version() {
 
     # Check for rate limit error (output warning to stderr, not stdout)
     if echo "$response" | grep -q "API rate limit exceeded"; then
-        [ "$QUIET" -eq 0 ] && echo -e "${YELLOW}⚠${NC} GitHub API rate limited. Using fallback version v0.0.1" >&2
-        echo "v0.0.1"
+        [ "$QUIET" -eq 0 ] && echo -e "${YELLOW}⚠${NC} GitHub API rate limited. Using fallback version v0.1.0" >&2
+        echo "v0.1.0"
         return
     fi
 
@@ -156,7 +156,7 @@ get_latest_version() {
     fi
 
     if [ -z "$version" ]; then
-        die "Failed to fetch latest version from GitHub. Try: bash install.sh v0.0.1 <path>"
+        die "Failed to fetch latest version from GitHub. Try: bash install.sh v0.1.0 <path>"
     fi
 
     echo "$version"
