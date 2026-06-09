@@ -16,8 +16,8 @@ import (
 
 // Handler is the interface all language handlers must implement.
 type Handler interface {
-	// GetTasks takes a targetPath to be context-aware
-	GetTasks(targetPath string) ([]types.Task, error)
+	// GetTasks takes a targetPath to be context-aware, and an optional templateDir for overrides
+	GetTasks(targetPath string, templateDir string) ([]types.Task, error)
 }
 
 var (

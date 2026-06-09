@@ -51,7 +51,7 @@ func (h *mavenTestHelper) executeTasks(t *testing.T, dryRun, force bool) {
 		t.Fatalf("Failed to get maven_linter handler: %v", err)
 	}
 
-	tasks, err := handler.GetTasks(h.tmpDir)
+	tasks, err := handler.GetTasks(h.tmpDir, "")
 	if err != nil {
 		t.Fatalf("Failed to get tasks: %v", err)
 	}
@@ -78,7 +78,7 @@ func (h *mavenTestHelper) executeTasksWithTx(t *testing.T) *transaction.Manager 
 		t.Fatalf("Failed to get maven_linter handler: %v", err)
 	}
 
-	tasks, err := handler.GetTasks(h.tmpDir)
+	tasks, err := handler.GetTasks(h.tmpDir, "")
 	if err != nil {
 		t.Fatalf("Failed to get tasks: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestMavenLinterMissingPluginsSection(t *testing.T) {
 		t.Fatalf("Failed to get maven_linter handler: %v", err)
 	}
 
-	tasks, err := handler.GetTasks(tmpDir)
+	tasks, err := handler.GetTasks(tmpDir, "")
 	if err != nil {
 		t.Fatalf("Failed to get tasks: %v", err)
 	}

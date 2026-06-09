@@ -51,6 +51,7 @@ var applyCmd = &cobra.Command{
 			DryRun:           dryRun,          // dryRun is the global flag.
 			Force:            force,           // force is the global flag.
 			ConflictStrategy: conflictStrategyFlag,
+			TemplateDir:      templateDirFlag,
 			License:          licenseFlag,
 			CopyrightHolder:  copyrightHolderFlag,
 		}

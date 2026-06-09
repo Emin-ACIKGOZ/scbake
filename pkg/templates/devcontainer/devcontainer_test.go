@@ -16,7 +16,7 @@ import (
 func TestGetTasks_DevContainer(t *testing.T) {
 	handler := &Handler{}
 
-	plan, err := handler.GetTasks("")
+	plan, err := handler.GetTasks("", "")
 	if err != nil {
 		t.Fatalf("Failed to get tasks: %v", err)
 	}
@@ -83,7 +83,7 @@ func assertDevContainerPriorities(t *testing.T, plan []types.Task) {
 // TestDevContainer_TemplateIntegrity ensures embedded files are physically present in the FS.
 func TestDevContainer_TemplateIntegrity(t *testing.T) {
 	handler := &Handler{}
-	plan, _ := handler.GetTasks("")
+	plan, _ := handler.GetTasks("", "")
 
 	for _, task := range plan {
 		tmplTask := task.(*tasks.CreateTemplateTask)

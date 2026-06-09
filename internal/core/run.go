@@ -35,6 +35,7 @@ type RunContext struct {
 	DryRun           bool
 	Force            bool
 	ConflictStrategy string
+	TemplateDir      string
 	License          string
 	CopyrightHolder  string
 }
@@ -118,6 +119,7 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 		TargetPath:       rc.TargetPath,
 		Force:            rc.Force,
 		ConflictStrategy: rc.ConflictStrategy,
+		TemplateDir:      rc.TemplateDir,
 		Tx:               tx,
 	}
 
@@ -284,7 +286,7 @@ func handleLangFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) (
 		return "", err
 	}
 
-	langTasks, err := handler.GetTasks(rc.TargetPath)
+	langTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to get tasks for lang '%s': %w", rc.LangFlag, err)
 	}
@@ -317,7 +319,7 @@ func handleWithFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) e
 			return err
 		}
 
-		tmplTasks, err := handler.GetTasks(rc.TargetPath)
+		tmplTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir)
 		if err != nil {
 			return fmt.Errorf("failed to get tasks for template '%s': %w", tmplName, err)
 		}

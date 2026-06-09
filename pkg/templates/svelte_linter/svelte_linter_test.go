@@ -17,7 +17,7 @@ import (
 func TestGetTasks_SvelteLinter(t *testing.T) {
 	handler := &Handler{}
 
-	plan, err := handler.GetTasks("")
+	plan, err := handler.GetTasks("", "")
 	if err != nil {
 		t.Fatalf("Failed to get tasks: %v", err)
 	}
@@ -89,7 +89,7 @@ func assertDependencyExists(t *testing.T, args []string, pkg string) {
 // TestSvelteLinter_TemplateIntegrity ensures the embedded file is readable.
 func TestSvelteLinter_TemplateIntegrity(t *testing.T) {
 	handler := &Handler{}
-	plan, _ := handler.GetTasks("")
+	plan, _ := handler.GetTasks("", "")
 	task := plan[0].(*tasks.CreateTemplateTask)
 
 	if _, err := task.TemplateFS.ReadFile(task.TemplatePath); err != nil {

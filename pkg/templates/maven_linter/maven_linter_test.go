@@ -18,7 +18,7 @@ import (
 
 func TestHandler_GetTasks(t *testing.T) {
 	handler := &Handler{}
-	taskList, err := handler.GetTasks(".")
+	taskList, err := handler.GetTasks(".", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestHandler_GetTasks(t *testing.T) {
 
 func TestHandler_TaskPriorities(t *testing.T) {
 	handler := &Handler{}
-	taskList, err := handler.GetTasks(".")
+	taskList, err := handler.GetTasks(".", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestHandler_TaskPriorities(t *testing.T) {
 
 func TestHandler_TaskDescriptions(t *testing.T) {
 	handler := &Handler{}
-	taskList, err := handler.GetTasks(".")
+	taskList, err := handler.GetTasks(".", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -119,7 +119,7 @@ func newTestExecutionHelper(t *testing.T) *testExecutionHelper {
 
 func (h *testExecutionHelper) executeTasks(t *testing.T) {
 	handler := &Handler{}
-	taskList, err := handler.GetTasks(h.projectDir)
+	taskList, err := handler.GetTasks(h.projectDir, "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestHandler_FullExecution_NoOrphanedFile(t *testing.T) {
 
 func TestHandler_PluginSnippetContent(t *testing.T) {
 	handler := &Handler{}
-	taskList, err := handler.GetTasks(".")
+	taskList, err := handler.GetTasks(".", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}

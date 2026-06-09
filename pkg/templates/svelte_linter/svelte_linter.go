@@ -17,7 +17,7 @@ var templates embed.FS
 type Handler struct{}
 
 // GetTasks returns the plan to add ESLint configuration and dependencies for Svelte.
-func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequence for the Linter band (1200-1399)

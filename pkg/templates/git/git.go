@@ -15,7 +15,7 @@ type Handler struct{}
 
 // GetTasks returns the plan to initialize a Git repository.
 // It performs `git init`, `git add .`, and `git commit`.
-func (h *Handler) GetTasks(_ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Use PrioritySequence to avoid magic numbers and ensure strictly ordered execution

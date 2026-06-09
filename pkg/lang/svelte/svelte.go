@@ -15,7 +15,7 @@ import (
 type Handler struct{}
 
 // GetTasks returns the list of tasks required to set up a Svelte project.
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(targetPath string, _ string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Initialize sequences
