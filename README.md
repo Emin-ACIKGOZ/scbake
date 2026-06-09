@@ -158,6 +158,15 @@ Lists available or applied resources.
 scbake list [langs|templates|projects]
 ```
 
+### Monorepo Management
+
+`scbake` is natively monorepo-aware. It uses a **Recursive Root Discovery** algorithm to find the nearest `scbake.toml` or `.git` folder, allowing you to manage a fleet of projects from a single central manifest.
+
+- **Central Manifest**: Initialize your monorepo root with `scbake new <root-name>`.
+- **Add Projects**: Run `scbake apply <path> --lang <lang>` to add a new project in a subdirectory. `scbake` will find the root manifest and add the project to the central tracking list.
+- **Scoped Templates**: Apply templates to specific sub-directories by passing the path: `scbake apply services/api --with go_linter`.
+- **Fleet-wide Governance**: Run `scbake apply --with makefile` at the root to generate a unified build system that orchestrates all sub-projects.
+
 
 ## Supported Language Packs
 

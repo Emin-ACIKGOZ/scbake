@@ -47,6 +47,15 @@ cat scbake.toml
 cat scbake.toml
 ```
 
+> **Pro Tip: Monorepos**
+> `scbake` is natively monorepo-aware! You can add sub-projects to a central root:
+> ```bash
+> # From the root directory:
+> ./scbake apply services/api --lang go
+> ./scbake apply apps/web --lang svelte
+> ```
+> All projects will be tracked in the single `scbake.toml` at the root.
+
 If something goes wrong:
 ```bash
 # Undo the last operation

@@ -115,19 +115,19 @@ Project restored to original state
 func RunApply(rc RunContext, reporter types.Reporter) error {
     // 1. Discover project root & load manifest
     m, rootPath, err := manifest.Load(rc.TargetPath)
-    
+
     // 2. Initialize transaction system
     tx, err := transaction.New(rootPath)
-    
+
     // 3. Build execution plan
     plan, _, changes, err := buildPlan(rc)
 }
 ```
 
 **What happens**:
-1. Find `scbake.toml` (or create empty manifest if new project)
-2. Create backup system (`.scbake/tmp/` directory)
-3. Build list of tasks to execute
+1. **Recursive Root Discovery**: `manifest.Load` uses a recursive algorithm to walk up the directory tree from `TargetPath` until it finds an `scbake.toml` or a `.git` folder. This enables **Native Monorepo Support**, where a single root manifest manages projects in subdirectories.
+2. Initialize transaction system at the discovered `rootPath` to ensure cross-project atomicity.
+3. Build list of tasks to execute.
 
 ### Phase 2: Planning
 
