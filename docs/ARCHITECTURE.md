@@ -34,11 +34,18 @@ On failure: Rollback (restore backups, LIFO order)
 All language packs and templates implement this interface:
 
 ```go
-// internal/types/plan.go
+// pkg/lang/registry.go or pkg/templates/registry.go
 type Handler interface {
-    GetTasks(targetPath string) ([]types.Task, error)
+    GetTasks(targetPath string, templateDir string, registryCacheDir string) ([]types.Task, error)
 }
 ```
+
+The three parameters support the **template resolution chain**:
+1. `targetPath` — project root directory
+2. `templateDir` — local override directory (`--template-dir` or `$SCBAKE_TEMPLATE_DIR`)
+3. `registryCacheDir` — pulled template cache (`~/.cache/scbake/templates/`)
+
+Tasks created at plan time use `registryCacheDir` later at execution time via `TaskContext` to resolve template files through the chain: **local overrides → registry cache → embedded defaults**.
 
 **Responsibility**: Given a project path, return a list of tasks to execute.
 
@@ -248,7 +255,39 @@ name = "ci_github"
 - ✅ Audit trail: Git history shows what was applied, when
 - ✅ Team coordination: Everyone uses same manifest
 
-### 3. Optimistic Locking
+### 3. Template Resolution Chain
+
+Template files are resolved at execution time through a 3-tier fallback chain:
+
+```
+ReadTemplate(efs, tplPath, overrideDir, registryCacheDir)
+    │
+    ├── 1. overrideDir (--template-dir or $SCBAKE_TEMPLATE_DIR)
+    │      First check: local filesystem overrides
+    │      Found → return immediately
+    │      Permission error → propagate (no fallthrough)
+    │      Not found → fall through
+    │
+    ├── 2. registryCacheDir (~/.cache/scbake/templates/)
+    │      Second check: pulled template archives
+    │      Searches all registry subdirectories
+    │      Found → return immediately
+    │      Not found → fall through
+    │
+    └── 3. efs (embedded filesystem in the Go binary)
+           Final fallback: compiled-in defaults
+           Found → return content
+           Not found → error
+```
+
+**How the cache is populated:**
+1. `scbake template registry add <name> <url>` — registers a remote source
+2. `scbake template pull <name> --registry <name>` — downloads and caches the archive
+3. Archives are extracted to `<cacheDir>/<registry>/<templateName>/<files...>`
+4. On subsequent pulls, the cache exists and redownload is skipped (idempotent)
+5. Token auth supported via stored config or `SCBAKE_REGISTRY_TOKEN_<NAME>` env var
+
+### 4. Optimistic Locking
 
 scbake detects concurrent modifications via file modification time:
 
@@ -291,6 +330,13 @@ scbake/
 │   ├── filesystem/
 │   │   └── transaction/             # LIFO rollback system
 │   ├── manifest/                    # Manifest I/O & conflict detection
+│   ├── templateregistry/            # Private registry system
+│   │   ├── config.go                # Registry CRUD, JSON persistence
+│   │   ├── pull.go                  # HTTP download, tar.gz extraction
+│   │   ├── resolver.go              # Cache path resolution
+│   │   ├── config_test.go           # Unit tests
+│   │   ├── pull_test.go             # Unit tests
+│   │   └── resolver_test.go         # Unit tests
 │   ├── ui/                          # CLI output (spinners, messages)
 │   ├── types/                       # Core data structures
 │   │   ├── plan.go                  # Handler, Task interfaces

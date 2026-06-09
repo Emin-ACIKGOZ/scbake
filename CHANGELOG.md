@@ -7,15 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Config-driven extension discovery (`scbake.ext.toml`)
-- Built-in handler refactoring (unified extension system)
-- Architecture documentation improvements
 - Installation via Homebrew
 - Subprocess-based plugin system (if demand exists)
 - Command allowlisting for security
 - Audit logging
 - Plugin registry
 - Hot-reload capabilities (unlikely)
+
+---
+
+## [0.4.0] - 2025-06-09
+
+**Private template registries: distribute and version templates across teams.**
+
+### Added
+
+#### Private Template Registries
+- **`scbake template registry add/remove/list`** — Manage named remote template registries with optional auth tokens, version pinning, and archive subdirectory extraction
+- **`scbake template pull <name>`** — Download and cache template archives from registries to `~/.cache/scbake/templates/`; skips redownload if already cached
+- **3-tier template resolution chain**: `--template-dir` overrides → registry cache → embedded defaults, configurable per template file
+- **`RegistryCacheDir` propagation** from CLI (`cmd/new.go`, `cmd/apply.go`) through `RunContext` → `TaskContext` → `CreateTemplateTask.Execute` → `ReadTemplate`
+- **`ResolveCachePath`** searches all cached registries for a template file, including nested template-name subdirectories
+- **Auth support** via stored tokens in config or `SCBAKE_REGISTRY_TOKEN_<NAME>` env var override
+- **Archive extraction** with path traversal protection, subdirectory promotion, and cache validation
+- **Config persisted** to `~/.config/scbake/registries.json` with `0600` permissions
+
+#### Handler Interface Update
+- All `GetTasks` signatures updated to `(targetPath, templateDir, registryCacheDir string)` to support the resolution chain at task execution time
+
+#### Tests
+- End-to-end integration tests for registry pull, versioned pull, and subdirectory-based pull (`tests/registry_integration_test.go`)
+- Full unit test coverage for config CRUD, resolver, pull/extraction, and the template resolution chain
+
+#### Documentation
+- New `template registry` and `template pull` command docs in README
+- Updated architecture docs with resolution chain and registry file structure
+- Updated extending guide with correct 3-param `GetTasks` signatures
+
+### Fixed
+- `ResolveCachePath` now searches one level deeper within template subdirectories (pull stores `<cacheDir>/<registry>/<templateName>/<file>`)
+- Example Rust handler in `docs/examples/rust-handler/` updated to match 3-param `GetTasks` interface and use proper `TemplateFS` + `TemplatePath` pattern
 
 ---
 

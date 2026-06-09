@@ -36,13 +36,17 @@ Create your handler by implementing the `Handler` interface. Here's the simplest
 package rust
 
 import (
+	"embed"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
 
+//go:embed templates/*
+var templates embed.FS
+
 type Handler struct{}
 
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 	seq, _ := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
 	var plan []types.Task
 
@@ -57,7 +61,8 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 	// Task 2: Create Cargo.toml
 	p, _ = seq.Next()
 	plan = append(plan, &tasks.CreateTemplateTask{
-		TemplatePath: "pkg/lang/rust/templates/Cargo.toml.tpl",
+		TemplateFS:   templates,
+		TemplatePath: "templates/Cargo.toml.tpl",
 		OutputPath:   "Cargo.toml",
 		TaskPrio:     int(p),
 		Desc:         "Create Cargo.toml",
@@ -78,7 +83,7 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 ```
 
 That's it. Your handler is a single Go struct that implements two methods:
-- `GetTasks(targetPath string) ([]types.Task, error)` - Returns the tasks to execute
+- `GetTasks(targetPath string, templateDir string, registryCacheDir string) ([]types.Task, error)` - Returns the tasks to execute
 
 ### Step 4: Register Your Handler
 
@@ -144,7 +149,8 @@ Use this to create new files with variable substitution:
 
 ```go
 plan = append(plan, &tasks.CreateTemplateTask{
-	TemplatePath: "pkg/lang/rust/templates/main.rs.tpl",
+	TemplateFS:   templates,
+	TemplatePath: "templates/main.rs.tpl",
 	OutputPath:   "src/main.rs",
 	TaskPrio:     int(p),
 	Desc:         "Create main.rs",
@@ -228,7 +234,6 @@ import (
 	"fmt"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
-	"text/template"
 )
 
 //go:embed templates/*
@@ -236,7 +241,7 @@ var templates embed.FS
 
 type Handler struct{}
 
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 	seq, err := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
@@ -254,13 +259,9 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 
 	// Task 2: Create Cargo.toml from template
 	p, _ = seq.Next()
-	cargoTmpl, err := templates.ReadFile("templates/Cargo.toml.tpl")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read Cargo.toml template: %w", err)
-	}
-
 	plan = append(plan, &tasks.CreateTemplateTask{
-		TemplatePath: string(cargoTmpl),
+		TemplateFS:   templates,
+		TemplatePath: "templates/Cargo.toml.tpl",
 		OutputPath:   "Cargo.toml",
 		TaskPrio:     int(p),
 		Desc:         "Create Cargo.toml",
@@ -268,21 +269,13 @@ func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
 
 	// Task 3: Create main.rs
 	p, _ = seq.Next()
-	mainTmpl, err := templates.ReadFile("templates/main.rs.tpl")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read main.rs template: %w", err)
-	}
-
 	plan = append(plan, &tasks.CreateTemplateTask{
-		TemplatePath: string(mainTmpl),
+		TemplateFS:   templates,
+		TemplatePath: "templates/main.rs.tpl",
 		OutputPath:   "src/main.rs",
 		TaskPrio:     int(p),
 		Desc:         "Create main.rs",
 	})
-
-	// Task 4: Initialize Cargo (optional, only if cargo is available)
-	// For a production handler, you might check if `cargo` is available first
-	// (See internal/preflight/preflight.go for how to do this)
 
 	return plan, nil
 }
@@ -377,7 +370,7 @@ import (
 
 func TestHandler_GetTasks(t *testing.T) {
 	h := &Handler{}
-	tasks, err := h.GetTasks("/tmp/test")
+	tasks, err := h.GetTasks("/tmp/test", "", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -408,19 +401,24 @@ touch pkg/templates/python_linter/python_linter.go
 package python_linter
 
 import (
+	"embed"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
 
+//go:embed templates/*
+var templates embed.FS
+
 type Handler struct{}
 
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 	seq, _ := types.NewPrioritySequence(types.PrioLinter, types.MaxLinter)
 	var plan []types.Task
 
 	p, _ := seq.Next()
 	plan = append(plan, &tasks.CreateTemplateTask{
-		TemplatePath: "pkg/templates/python_linter/templates/pyproject.toml.tpl",
+		TemplateFS:   templates,
+		TemplatePath: "templates/pyproject.toml.tpl",
 		OutputPath:   "pyproject.toml",
 		TaskPrio:     int(p),
 		Desc:         "Create pyproject.toml with linting config",
@@ -471,7 +469,7 @@ If your handler requires a binary (like `cargo` or `npm`), check for it:
 ```go
 import "scbake/internal/preflight"
 
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 	if err := preflight.CheckBinaries("cargo"); err != nil {
 		return nil, fmt.Errorf("cargo not found: %w", err)
 	}
@@ -515,7 +513,7 @@ var templates embed.FS
 data, _ := templates.ReadFile("templates/Cargo.toml.tpl")
 ```
 
-This ensures templates are included in the binary.
+Then pass `TemplateFS` to `CreateTemplateTask` so the template is resolved through the full resolution chain (override dir → registry cache → embedded).
 
 ---
 

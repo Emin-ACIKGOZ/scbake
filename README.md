@@ -25,6 +25,9 @@
 - **Custom Template Overrides (BYOT)**  
   Override any embedded `.tpl` file with your own version by passing `--template-dir` or setting the `SCBAKE_TEMPLATE_DIR` environment variable. Files in the override directory shadow the compiled-in defaults, enabling team-specific customizations without recompiling.
 
+- **Private Template Registries**  
+  Define named remote registries to host and distribute team templates. Use `scbake template registry add` to register a source, then `scbake template pull` to cache templates locally. The resolution chain checks **local overrides → registry cache → embedded defaults**, so you can layer customizations at every level.
+
 - **Explicit & Non-Interactive**  
   No "magic" defaults or hidden prompts—reproducible results every time via explicit flags and manifest configuration.
 
@@ -117,6 +120,32 @@ scbake apply --with maven_linter
 ```
 
 
+### `template registry`: Manage Remote Registries
+
+Define and manage remote template registries for sharing templates across teams.
+
+```bash
+scbake template registry add <name> <url> [--token <token>] [--version <version>] [--subdirectory <dir>]
+scbake template registry remove <name>
+scbake template registry list
+```
+
+| Command | Description |
+| :------ | :---------- |
+| `add <name> <url>` | Register a new template registry with optional auth token, default version, and archive subdirectory |
+| `remove <name>` | Remove a registered registry |
+| `list` | List all configured registries |
+
+#### `template pull`: Cache Templates Locally
+
+Downloads a template archive from a registry to the local cache (`~/.cache/scbake/templates/`), making it available as an override for `scbake new/apply`.
+
+```bash
+scbake template pull <name> [--registry <name>]
+```
+
+If `--registry` is omitted, all configured registries are tried in order.
+
 ### `list`: View Available Resources
 
 Lists available or applied resources.
@@ -160,7 +189,7 @@ scbake list [langs|templates|projects]
 
 ### Available Task Types
 
-- **CreateTemplateTask**: Creates new files from embedded templates (with manifest data available); supports template overrides via `--template-dir`
+- **CreateTemplateTask**: Creates new files from templates using a 3-tier resolution chain: **local overrides** (`--template-dir`) → **registry cache** (pulled templates) → **embedded defaults** (compiled-in)
 - **AppendFileTask**: Appends content to existing files with idempotency checks
 - **ExecCommandTask**: Executes shell commands with optional output tracking
 - **CreateDirectoryTask**: Creates directories with transaction tracking
@@ -214,4 +243,4 @@ task := &tasks.InsertXMLTask{
 | `--force`             | Override safety checks                               |
 | `--template-dir`      | Directory with custom template overrides (env: `SCBAKE_TEMPLATE_DIR`) |
 | `--conflict-strategy` | How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` |
-| `-v`, `--version`     | Show version (`v0.3.0`)                               |
+| `-v`, `--version`     | Show version (`v0.4.0`)                               |
