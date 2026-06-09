@@ -1,6 +1,3 @@
-// Copyright 2025 Emin Salih Açıkgöz
-// SPDX-License-Identifier: gpl3-or-later
-
 package integration
 
 import (
@@ -10,11 +7,6 @@ import (
 	"testing"
 )
 
-// TestGovernanceLifecycle tests a complex, realistic lifecycle for compliance and community templates:
-// 1. Initial creation (new repo)
-// 2. Simulating user drift/modifications
-// 3. Updating standards via apply
-// 4. Overwriting templates vs surgical appending
 //nolint:cyclop // Integration tests naturally have high complexity
 func TestGovernanceLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -31,8 +23,7 @@ func TestGovernanceLifecycle(t *testing.T) {
 			t.Fatalf("Failed to create project: %v\nOutput: %s", err, output)
 		}
 
-		// Verify License
-		//nolint:gosec // Test code
+		//nolint:gosec // Test project path
 		licenseBytes, err := os.ReadFile(filepath.Join(projectPath, "LICENSE"))
 		if err != nil {
 			t.Fatalf("LICENSE not created: %v", err)
@@ -45,8 +36,7 @@ func TestGovernanceLifecycle(t *testing.T) {
 			t.Errorf("LICENSE missing copyright holder")
 		}
 
-		// Verify CODEOWNERS
-		//nolint:gosec // Test code
+		//nolint:gosec // Test project path
 		ownersBytes, err := os.ReadFile(filepath.Join(projectPath, ".github", "CODEOWNERS"))
 		if err != nil {
 			t.Fatalf("CODEOWNERS not created: %v", err)
@@ -57,23 +47,20 @@ func TestGovernanceLifecycle(t *testing.T) {
 	})
 
 	t.Run("2. Simulate Drift and Customization", func(_ *testing.T) {
-		// User adds a custom team to CODEOWNERS
 		ownersPath := filepath.Join(projectPath, ".github", "CODEOWNERS")
-		//nolint:gosec // Just a test
+		//nolint:gosec // Test project path
 		f, _ := os.OpenFile(ownersPath, os.O_APPEND|os.O_WRONLY, 0644)
 		_, _ = f.WriteString("docs/ @tech-writers\n")
 		_ = f.Close()
 
-		// User modifies SECURITY.md
 		secPath := filepath.Join(projectPath, "SECURITY.md")
-		//nolint:gosec // Just a test
+		//nolint:gosec // Test project path
 		_ = os.WriteFile(secPath, []byte("# Custom Security\nContact us directly."), 0644)
 	})
 
 	t.Run("3. Failed Update (Safety Check)", func(t *testing.T) {
 		_ = os.Chdir(projectPath)
 
-		// Try to apply an update without --force. Should fail because SECURITY.md and LICENSE exist.
 		output, err := runCLI("apply", "--with", "compliance", "--license", "Apache-2.0", "--copyright-holder", "Bob Corp")
 		if err == nil {
 			t.Fatalf("Expected apply to fail due to existing files, but it succeeded.")
@@ -86,13 +73,11 @@ func TestGovernanceLifecycle(t *testing.T) {
 	t.Run("4. Successful Force Update", func(t *testing.T) {
 		_ = os.Chdir(projectPath)
 
-		// Apply update with --force
 		output, err := runCLI("apply", "--with", "compliance", "--force", "--license", "Apache-2.0", "--copyright-holder", "Bob Corp")
 		if err != nil {
 			t.Fatalf("Failed to apply update: %v\nOutput: %s", err, output)
 		}
 
-		// Verify License changed to Apache and new holder
 		licenseBytes, _ := os.ReadFile("LICENSE")
 		licenseText := string(licenseBytes)
 		if !strings.Contains(licenseText, "Apache License") {
@@ -105,14 +90,12 @@ func TestGovernanceLifecycle(t *testing.T) {
 			t.Errorf("Old copyright holder still present in LICENSE")
 		}
 
-		// Verify SECURITY.md was reset to template standard
 		secBytes, _ := os.ReadFile("SECURITY.md")
 		secText := string(secBytes)
 		if !strings.Contains(secText, "Reporting a Vulnerability") {
 			t.Errorf("SECURITY.md was not reset to standard template")
 		}
 
-		// Verify CODEOWNERS preserved custom lines but didn't duplicate the base line
 		ownersBytes, _ := os.ReadFile(filepath.Join(".github", "CODEOWNERS"))
 		ownersText := string(ownersBytes)
 		if !strings.Contains(ownersText, "docs/ @tech-writers") {
@@ -122,4 +105,63 @@ func TestGovernanceLifecycle(t *testing.T) {
 			t.Errorf("CODEOWNERS duplicated base entry")
 		}
 	})
+}
+
+func TestGovernance_DryRunNoChanges(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(originalWd) })
+	_ = os.Chdir(tmpDir)
+
+	output, err := runCLI("new", "dryrun-proj", "--dry-run", "--with", "compliance,community", "--license", "MIT", "--copyright-holder", "Test Corp")
+	if err != nil {
+		t.Fatalf("Dry-run new failed: %v\nOutput: %s", err, output)
+	}
+
+	projectPath := filepath.Join(tmpDir, "dryrun-proj")
+	if _, err := os.Stat(projectPath); !os.IsNotExist(err) {
+		t.Error("Dry-run should not create the project directory")
+	}
+}
+
+func TestGovernance_MissingLicenseFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(originalWd) })
+	_ = os.Chdir(tmpDir)
+
+	output, err := runCLI("new", "no-license-proj", "--with", "compliance", "--copyright-holder", "Test Corp")
+	if err == nil {
+		t.Fatal("Expected error when --license is missing with compliance")
+	}
+	if !strings.Contains(output, "license") {
+		t.Errorf("Error should mention license, got: %s", output)
+	}
+}
+
+func TestGovernance_MissingCopyrightHolderFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(originalWd) })
+	_ = os.Chdir(tmpDir)
+
+	output, err := runCLI("new", "no-holder-proj", "--with", "compliance", "--license", "MIT")
+	if err == nil {
+		t.Fatal("Expected error when --copyright-holder is missing with compliance")
+	}
+	if !strings.Contains(output, "copyright") {
+		t.Errorf("Error should mention copyright, got: %s", output)
+	}
+}
+
+func TestGovernance_UnsupportedSPDX(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(originalWd) })
+	_ = os.Chdir(tmpDir)
+
+	_, err := runCLI("new", "badspdx-proj", "--with", "compliance", "--license", "NOT-A-REAL-LICENSE", "--copyright-holder", "Test Corp")
+	if err == nil {
+		t.Fatal("Expected error for unsupported SPDX identifier")
+	}
 }

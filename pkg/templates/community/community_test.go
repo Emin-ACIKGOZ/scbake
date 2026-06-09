@@ -1,9 +1,10 @@
-// Copyright 2025 Emin Salih Açıkgöz
-// SPDX-License-Identifier: gpl3-or-later
-
 package community
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"scbake/internal/types"
 	"testing"
 )
 
@@ -36,6 +37,86 @@ func TestCommunityHandler_GetTasks(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("Unexpected task: %s", desc)
+		}
+	}
+}
+
+func TestCommunityHandler_ExecuteCreateContributing(t *testing.T) {
+	h := &Handler{}
+	plan, err := h.GetTasks(".")
+	if err != nil {
+		t.Fatalf("GetTasks failed: %v", err)
+	}
+
+	if len(plan) == 0 {
+		t.Fatal("Expected at least one task")
+	}
+
+	tmpDir := t.TempDir()
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		Projects: []types.Project{
+			{Name: "TestProject"},
+		},
+	}
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: tmpDir,
+		Manifest:   manifest,
+		DryRun:     false,
+		Force:      false,
+	}
+
+	for _, task := range plan {
+		if err := task.Execute(tc); err != nil {
+			t.Fatalf("Execute(%s) failed: %v", task.Description(), err)
+		}
+	}
+
+	for _, file := range []string{"CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SUPPORT.md", "GOVERNANCE.md"} {
+		path := filepath.Join(tmpDir, file)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			t.Errorf("%s was not created", file)
+		}
+	}
+}
+
+func TestCommunityHandler_ExecuteDryRun(t *testing.T) {
+	h := &Handler{}
+	plan, err := h.GetTasks(".")
+	if err != nil {
+		t.Fatalf("GetTasks failed: %v", err)
+	}
+
+	if len(plan) == 0 {
+		t.Fatal("Expected at least one task")
+	}
+
+	tmpDir := t.TempDir()
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		Projects: []types.Project{
+			{Name: "TestProject"},
+		},
+	}
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: tmpDir,
+		Manifest:   manifest,
+		DryRun:     true,
+		Force:      false,
+	}
+
+	for _, task := range plan {
+		if err := task.Execute(tc); err != nil {
+			t.Fatalf("Execute(%s) in dry-run failed: %v", task.Description(), err)
+		}
+	}
+
+	for _, file := range []string{"CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SUPPORT.md", "GOVERNANCE.md"} {
+		path := filepath.Join(tmpDir, file)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s was created in dry-run mode", file)
 		}
 	}
 }

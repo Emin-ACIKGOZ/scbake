@@ -1,11 +1,9 @@
-// Copyright 2025 Emin Salih Açıkgöz
-// SPDX-License-Identifier: gpl3-or-later
-
 package tasks
 
 import (
 	"os"
 	"path/filepath"
+	"scbake/internal/filesystem/transaction"
 	"scbake/internal/types"
 	"testing"
 )
@@ -80,6 +78,148 @@ func TestAppendFileTask_Execute(t *testing.T) {
 				t.Errorf("Content mismatch. Want %q, Got %q", tt.want, string(got))
 			}
 		})
+	}
+}
+
+func TestAppendFileTask_DryRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "dryrun.txt")
+
+	task := &AppendFileTask{
+		FilePath: "dryrun.txt",
+		Content:  "should not appear",
+		Desc:     "Dry run test",
+		TaskPrio: 100,
+	}
+
+	tc := types.TaskContext{
+		TargetPath: tmpDir,
+		DryRun:     true,
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() with dry-run failed: %v", err)
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("Dry-run should not create the file")
+	}
+}
+
+func TestAppendFileTask_DryRunExistingFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "dryrun-existing.txt")
+	//nolint:gosec // Test file
+	_ = os.WriteFile(path, []byte("initial"), 0644)
+
+	task := &AppendFileTask{
+		FilePath: "dryrun-existing.txt",
+		Content:  "should not appear",
+		Desc:     "Dry run existing",
+		TaskPrio: 100,
+	}
+
+	tc := types.TaskContext{
+		TargetPath: tmpDir,
+		DryRun:     true,
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() with dry-run failed: %v", err)
+	}
+
+	//nolint:gosec // Test file
+	got, _ := os.ReadFile(path)
+	if string(got) != "initial" {
+		t.Errorf("Dry-run should not modify existing file. Got %q", string(got))
+	}
+}
+
+func TestAppendFileTask_EmptyContent(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "empty.txt")
+
+	task := &AppendFileTask{
+		FilePath: "empty.txt",
+		Content:  "",
+		Desc:     "Empty content",
+		TaskPrio: 100,
+	}
+
+	tc := types.TaskContext{
+		TargetPath: tmpDir,
+		DryRun:     false,
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() with empty content failed: %v", err)
+	}
+
+	//nolint:gosec // Test file
+	got, _ := os.ReadFile(path)
+	if string(got) != "" {
+		t.Errorf("Expected empty file, got %q", string(got))
+	}
+}
+
+func TestAppendFileTask_MultipleAppends(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	task1 := &AppendFileTask{FilePath: "multi.txt", Content: "first", Desc: "first", TaskPrio: 100}
+	task2 := &AppendFileTask{FilePath: "multi.txt", Content: "second", Desc: "second", TaskPrio: 101}
+
+	tc := types.TaskContext{TargetPath: tmpDir, DryRun: false}
+
+	if err := task1.Execute(tc); err != nil {
+		t.Fatalf("First append failed: %v", err)
+	}
+	if err := task2.Execute(tc); err != nil {
+		t.Fatalf("Second append failed: %v", err)
+	}
+
+	path := filepath.Join(tmpDir, "multi.txt")
+	//nolint:gosec // Test file
+	got, _ := os.ReadFile(path)
+	if string(got) != "first\nsecond" {
+		t.Errorf("Multiple appends produced wrong content %q", string(got))
+	}
+}
+
+func TestAppendFileTask_TransactionRollback(t *testing.T) {
+	rootDir := t.TempDir()
+	tx, err := transaction.New(rootDir)
+	if err != nil {
+		t.Fatalf("Failed to create transaction: %v", err)
+	}
+
+	task := &AppendFileTask{
+		FilePath: "tracked.txt",
+		Content:  "tracked content",
+		Desc:     "Transaction test",
+		TaskPrio: 100,
+	}
+
+	tc := types.TaskContext{
+		TargetPath: rootDir,
+		Tx:         tx,
+		DryRun:     false,
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() failed: %v", err)
+	}
+
+	path := filepath.Join(rootDir, "tracked.txt")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Fatal("File should exist before rollback")
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback failed: %v", err)
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("File should be removed after rollback")
 	}
 }
 
