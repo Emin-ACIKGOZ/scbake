@@ -7,14 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for v0.1.0
 - Config-driven extension discovery (`scbake.ext.toml`)
 - Built-in handler refactoring (unified extension system)
 - Architecture documentation improvements
 - Installation via Homebrew
-- GitHub releases with multi-platform binaries
-
-### Planned for v0.2.0+
 - Subprocess-based plugin system (if demand exists)
 - Command allowlisting for security
 - Audit logging

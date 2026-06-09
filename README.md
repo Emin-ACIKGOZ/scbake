@@ -208,4 +208,4 @@ task := &tasks.InsertXMLTask{
 | `--dry-run`           | Show planned changes without applying them            |
 | `--force`             | Override safety checks                               |
 | `--conflict-strategy` | How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` |
-| `-v`, `--version`     | Show version (`v0.1.0`)                               |
+| `-v`, `--version`     | Show version (`v0.2.0`)                               |
