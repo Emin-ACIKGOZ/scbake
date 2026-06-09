@@ -76,7 +76,7 @@ Creates a new directory, bootstraps the `scbake.toml` manifest, and applies lang
 **Note:** Git initialization can be added via the `--with git` template.
 
 ```bash
-scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spdx>] [--copyright-holder <name>]
+scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spdx>] [--copyright-holder <name>] [--conflict-strategy <strategy>]
 ```
 
 | Flag                 | Description                                      | Example                     |
@@ -85,6 +85,7 @@ scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spd
 | `--with`             | Comma-separated tooling templates                | `--with makefile,ci_github` |
 | `--license`          | SPDX License ID (required for `compliance`)      | `--license MIT`             |
 | `--copyright-holder` | Copyright holder name (required for `compliance`) | `--copyright-holder "Acme Corp"` |
+| `--conflict-strategy`| How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` | `--conflict-strategy overwrite` |
 
 **Example:**
 
@@ -202,8 +203,9 @@ task := &tasks.InsertXMLTask{
 
 ### Global Flags
 
-| Flag              | Description                                |
-| :---------------- | :----------------------------------------- |
-| `--dry-run`       | Show planned changes without applying them |
-| `--force`         | Override safety checks                     |
-| `-v`, `--version` | Show version (`v0.1.0`)                     |
+| Flag                  | Description                                          |
+| :-------------------- | :--------------------------------------------------- |
+| `--dry-run`           | Show planned changes without applying them            |
+| `--force`             | Override safety checks                               |
+| `--conflict-strategy` | How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` |
+| `-v`, `--version`     | Show version (`v0.1.0`)                               |
