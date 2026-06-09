@@ -23,7 +23,7 @@ wget -qO- https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.s
 bash install.sh
 
 # Install specific version
-bash install.sh v0.0.1
+bash install.sh v0.1.0
 
 # Install to custom directory
 bash install.sh latest /opt/bin
@@ -32,7 +32,7 @@ bash install.sh latest /opt/bin
 bash install.sh latest --quiet
 
 # Combined: specific version, custom path, quiet
-bash install.sh v0.0.1 ~/.local/bin --quiet
+bash install.sh v0.1.0 ~/.local/bin --quiet
 ```
 
 The installer will:

@@ -21,8 +21,10 @@ import (
 const newCmdTotalSteps = 8
 
 var (
-	newLangFlag string
-	newWithFlag []string
+	newLangFlag            string
+	newWithFlag            []string
+	newLicenseFlag         string
+	newCopyrightHolderFlag string
 )
 
 var newCmd = &cobra.Command{
@@ -94,12 +96,14 @@ func runNew(projectName string, dirCreated *bool) error {
 	// Delegate template and language pack application to the core executor
 	reporter.Step("🚀", "Applying templates...")
 	rc := core.RunContext{
-		LangFlag:        newLangFlag,
-		WithFlag:        newWithFlag,
-		TargetPath:      ".",
-		DryRun:          dryRun,
-		Force:           force,
-		ManifestPathArg: ".",
+		LangFlag:         newLangFlag,
+		WithFlag:         newWithFlag,
+		TargetPath:       ".",
+		DryRun:           dryRun,
+		Force:            force,
+		ManifestPathArg:  ".",
+		License:          newLicenseFlag,
+		CopyrightHolder:  newCopyrightHolderFlag,
 	}
 
 	if err := core.RunApply(rc, reporter); err != nil {
@@ -115,4 +119,6 @@ func init() {
 	// The rootCmd registration is handled in cmd/root.go init()
 	newCmd.Flags().StringVar(&newLangFlag, "lang", "", "Language project pack to apply")
 	newCmd.Flags().StringSliceVar(&newWithFlag, "with", []string{}, "Tooling template(s) to apply")
+	newCmd.Flags().StringVar(&newLicenseFlag, "license", "", "SPDX License ID (required for compliance)")
+	newCmd.Flags().StringVar(&newCopyrightHolderFlag, "copyright-holder", "", "Copyright holder name (required for compliance)")
 }

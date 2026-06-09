@@ -17,8 +17,10 @@ const (
 )
 
 var (
-	langFlag string
-	withFlag []string
+	langFlag            string
+	withFlag            []string
+	licenseFlag         string
+	copyrightHolderFlag string
 )
 
 var applyCmd = &cobra.Command{
@@ -41,12 +43,14 @@ var applyCmd = &cobra.Command{
 		}
 
 		rc := core.RunContext{
-			LangFlag:        langFlag,
-			WithFlag:        withFlag,
-			TargetPath:      absPath,         // Pass absolute path for execution stability.
-			ManifestPathArg: manifestPathArg, // Pass Arg for manifest portability.
-			DryRun:          dryRun,          // dryRun is the global flag.
-			Force:           force,           // force is the global flag.
+			LangFlag:         langFlag,
+			WithFlag:         withFlag,
+			TargetPath:       absPath,         // Pass absolute path for execution stability.
+			ManifestPathArg:  manifestPathArg, // Pass Arg for manifest portability.
+			DryRun:           dryRun,          // dryRun is the global flag.
+			Force:            force,           // force is the global flag.
+			License:          licenseFlag,
+			CopyrightHolder:  copyrightHolderFlag,
 		}
 
 		// Initialize modular UI reporter using the factory
@@ -64,4 +68,6 @@ func init() {
 	rootCmd.AddCommand(applyCmd)
 	applyCmd.PersistentFlags().StringVar(&langFlag, "lang", "", "Language pack")
 	applyCmd.PersistentFlags().StringSliceVar(&withFlag, "with", []string{}, "Tooling templates")
+	applyCmd.PersistentFlags().StringVar(&licenseFlag, "license", "", "SPDX License ID")
+	applyCmd.PersistentFlags().StringVar(&copyrightHolderFlag, "copyright-holder", "", "Copyright holder name")
 }

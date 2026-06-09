@@ -19,6 +19,12 @@
 - **Prioritized Execution**  
   Tasks run in a defined order using **Priority Bands** (e.g., directory creation → language setup → universal config) to ensure dependencies are met.
 
+- **Professional Governance**  
+  Built-in support for enterprise-grade and open-source compliance standards (Licenses, Code Owners, Security Policies).
+
+- **Explicit & Non-Interactive**  
+  No "magic" defaults or hidden prompts—reproducible results every time via explicit flags and manifest configuration.
+
 
 
 ## Installation
@@ -70,13 +76,15 @@ Creates a new directory, bootstraps the `scbake.toml` manifest, and applies lang
 **Note:** Git initialization can be added via the `--with git` template.
 
 ```bash
-scbake new <project-name> [--lang <lang>] [--with <template...>]
+scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spdx>] [--copyright-holder <name>]
 ```
 
-| Flag     | Description                                      | Example                     |
-| :------- | :----------------------------------------------- | :-------------------------- |
-| `--lang` | Primary language pack (`go`, `svelte`, `spring`) | `--lang go`                 |
-| `--with` | Comma-separated tooling templates                | `--with makefile,ci_github` |
+| Flag                 | Description                                      | Example                     |
+| :------------------- | :----------------------------------------------- | :-------------------------- |
+| `--lang`             | Primary language pack (`go`, `svelte`, `spring`) | `--lang go`                 |
+| `--with`             | Comma-separated tooling templates                | `--with makefile,ci_github` |
+| `--license`          | SPDX License ID (required for `compliance`)      | `--license MIT`             |
+| `--copyright-holder` | Copyright holder name (required for `compliance`) | `--copyright-holder "Acme Corp"` |
 
 **Example:**
 
@@ -126,8 +134,10 @@ scbake list [langs|templates|projects]
 
 | Template        | Priority Band           | Features                                       |
 | :-------------- | :---------------------- | :--------------------------------------------- |
+| `community`     | Universal Config (1000) | Scaffolds `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, and `GOVERNANCE.md` |
 | `editorconfig`  | Universal Config (1000) | Standard file formatting across the project                       |
 | `ci_github`     | CI (1100)               | Conditional CI setup based on detected languages          |
+| `compliance`    | Linter (1200)           | Adds `SECURITY.md`, `dependabot.yml`, `CODEOWNERS`, and dynamic `LICENSE` |
 | `go_linter`     | Linter (1200)           | Standard `golangci-lint` configuration                     |
 | `maven_linter`  | Linter (1200)           | Checkstyle config + automatic pom.xml plugin integration                       |
 | `svelte_linter` | Linter (1200)           | ESLint 9 integration for Svelte projects          |
@@ -196,4 +206,4 @@ task := &tasks.InsertXMLTask{
 | :---------------- | :----------------------------------------- |
 | `--dry-run`       | Show planned changes without applying them |
 | `--force`         | Override safety checks                     |
-| `-v`, `--version` | Show version (`v0.0.1-dev`)                |
+| `-v`, `--version` | Show version (`v0.1.0`)                     |

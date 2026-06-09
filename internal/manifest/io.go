@@ -91,7 +91,7 @@ func Load(startPath string) (*types.Manifest, string, error) {
 		if os.IsNotExist(err) {
 			// File doesn't exist, return a new one
 			m := &types.Manifest{
-				SbakeVersion: "v0.0.1", // TODO: inject this from build flags
+				SbakeVersion: "v0.1.0", // TODO: inject this from build flags
 				Projects:     []types.Project{},
 				Templates:    []types.Template{},
 			}

@@ -6,9 +6,10 @@ package types
 // Manifest is the root structure of the scbake.toml file.
 // It's the "source of truth" for the project.
 type Manifest struct {
-	SbakeVersion string     `toml:"scbake_version"`
-	Projects     []Project  `toml:"projects"`
-	Templates    []Template `toml:"templates"`
+	SbakeVersion string            `toml:"scbake_version"`
+	Projects     []Project         `toml:"projects"`
+	Templates    []Template        `toml:"templates"`
+	Metadata     map[string]string `toml:"metadata,omitempty"`
 }
 
 // Project represents a distinct code unit, like a Go backend or a React frontend.
@@ -36,6 +37,12 @@ func (m *Manifest) DeepCopy() *Manifest {
 		SbakeVersion: m.SbakeVersion,
 		Projects:     make([]Project, len(m.Projects)),
 		Templates:    make([]Template, len(m.Templates)),
+		Metadata:     make(map[string]string),
+	}
+
+	// Deep copy metadata
+	for k, v := range m.Metadata {
+		result.Metadata[k] = v
 	}
 
 	// Deep copy projects

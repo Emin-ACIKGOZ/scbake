@@ -32,8 +32,10 @@ type RunContext struct {
 	WithFlag        []string
 	TargetPath      string // Absolute path for execution stability.
 	ManifestPathArg string // Relative path for manifest portability.
-	DryRun          bool
-	Force           bool
+	DryRun           bool
+	Force            bool
+	License          string
+	CopyrightHolder  string
 }
 
 // A struct to hold all proposed manifest changes
@@ -43,6 +45,7 @@ type manifestChanges struct {
 }
 
 // RunApply orchestrates the template application process.
+//nolint:cyclop // Complex orchestration logic requires multiple linear steps
 func RunApply(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
@@ -87,6 +90,20 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	// Prepare task context with timeout
 	// Deep copy manifest to ensure modifications don't affect original
 	futureManifest := m.DeepCopy()
+
+	// Update metadata from context if provided
+	if rc.License != "" || rc.CopyrightHolder != "" {
+		if futureManifest.Metadata == nil {
+			futureManifest.Metadata = make(map[string]string)
+		}
+		if rc.License != "" {
+			futureManifest.Metadata["license"] = rc.License
+		}
+		if rc.CopyrightHolder != "" {
+			futureManifest.Metadata["copyright_holder"] = rc.CopyrightHolder
+		}
+	}
+
 	futureManifest.Projects = append(futureManifest.Projects, changes.Projects...)
 	futureManifest.Templates = append(futureManifest.Templates, changes.Templates...)
 
@@ -94,12 +111,12 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	defer cancel()
 
 	tc := types.TaskContext{
-		Ctx:        ctx,
-		DryRun:     rc.DryRun,
-		Manifest:   futureManifest,
-		TargetPath: rc.TargetPath,
-		Force:      rc.Force,
-		Tx:         tx,
+		Ctx:              ctx,
+		DryRun:           rc.DryRun,
+		Manifest:         futureManifest,
+		TargetPath:       rc.TargetPath,
+		Force:            rc.Force,
+		Tx:               tx,
 	}
 
 	if rc.DryRun {
@@ -125,6 +142,16 @@ func executeAndFinalize(
 
 	reporter.Step("✍️", "Updating manifest...")
 	updateManifest(m, changes)
+
+	// Persist metadata
+	if tc.Manifest.Metadata != nil {
+		if m.Metadata == nil {
+			m.Metadata = make(map[string]string)
+		}
+		for k, v := range tc.Manifest.Metadata {
+			m.Metadata[k] = v
+		}
+	}
 
 	// We track the manifest file itself before saving.
 	// This ensures that if the Save succeeds but a subsequent step crashes (unlikely),

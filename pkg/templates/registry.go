@@ -10,7 +10,9 @@ import (
 
 	"scbake/internal/types"
 	cighub "scbake/pkg/templates/ci_github"
-	devcontainer "scbake/pkg/templates/devcontainer"
+	"scbake/pkg/templates/community"
+	"scbake/pkg/templates/compliance"
+	"scbake/pkg/templates/devcontainer"
 	"scbake/pkg/templates/editorconfig"
 	"scbake/pkg/templates/git"
 	golinter "scbake/pkg/templates/go_linter"
@@ -34,6 +36,8 @@ var (
 		"go_linter":     &golinter.Handler{},
 		"maven_linter":  &mavenlinter.Handler{},
 		"svelte_linter": &sveltelinter.Handler{},
+		"community":     &community.Handler{},
+		"compliance":    &compliance.Handler{},
 		"devcontainer":  &devcontainer.Handler{},
 		"git":           &git.Handler{},
 	}
