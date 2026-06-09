@@ -71,6 +71,29 @@ func TestResolveCachePath_SearchesAllRegistries(t *testing.T) {
 	}
 }
 
+func TestResolveCachePath_NestedTemplateDir(t *testing.T) {
+	dir := t.TempDir()
+	registryDir := filepath.Join(dir, "acme")
+	tplDir := filepath.Join(registryDir, "editorconfig")
+	tplPath := filepath.Join(tplDir, "main.go.tpl")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(tplDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(tplPath, []byte("content"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	result := ResolveCachePath(dir, "main.go.tpl")
+	if result == "" {
+		t.Fatal("expected non-empty result for file in nested template dir")
+	}
+	if result != tplPath {
+		t.Errorf("expected %q, got %q", tplPath, result)
+	}
+}
+
 func TestLookupPath_Found(t *testing.T) {
 	dir := t.TempDir()
 	registryDir := filepath.Join(dir, "my-registry")

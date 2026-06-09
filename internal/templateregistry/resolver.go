@@ -28,6 +28,23 @@ func ResolveCachePath(cacheDir, tplPath string) string {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
+
+		// Template caches are stored as <cacheDir>/<registry>/<templateName>/<file>.
+		// If not found directly under the registry dir, search one level deeper
+		// within each template subdirectory.
+		tplEntries, err := os.ReadDir(filepath.Dir(candidate))
+		if err != nil {
+			continue
+		}
+		for _, tplEntry := range tplEntries {
+			if !tplEntry.IsDir() {
+				continue
+			}
+			nested := filepath.Join(cacheDir, registryDir, tplEntry.Name(), cleanPath)
+			if _, err := os.Stat(nested); err == nil {
+				return nested
+			}
+		}
 	}
 
 	return ""
