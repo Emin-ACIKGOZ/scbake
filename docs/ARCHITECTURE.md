@@ -83,16 +83,21 @@ type Task interface {
 
 scbake's transaction system provides **LIFO rollback** for atomicity:
 
-```
-Execute Task 1 → Backup created files
-Execute Task 2 → Backup created files
-Execute Task 3 → FAILS
-    ↓
-Rollback Task 3 (remove files)
-Rollback Task 2 (restore from backup)
-Rollback Task 1 (restore from backup)
-    ↓
-Project restored to original state
+```mermaid
+sequenceDiagram
+    participant E as Executor
+    participant T as Transaction Manager
+    participant FS as Filesystem
+
+    E->>T: Execute Task 1
+    T->>FS: Backup/Track File 1
+    E->>T: Execute Task 2
+    T->>FS: Backup/Track File 2
+    E->>T: Execute Task 3 (FAILS)
+    Note over E,FS: Failure detected, starting rollback
+    T->>FS: Rollback Task 2 (Restore Backup)
+    T->>FS: Rollback Task 1 (Restore Backup/Delete)
+    Note over E,FS: Original state restored
 ```
 
 **Location**: `internal/filesystem/transaction/`

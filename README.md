@@ -7,6 +7,30 @@
 
 `scbake` provides a safe, composable, and customizable way to manage project infrastructure.
 
+```mermaid
+graph LR
+    subgraph Input
+    M[scbake.toml]
+    F[Flags --lang, --with]
+    end
+
+    subgraph Core Engine
+    P[Planner]
+    E[Executor]
+    TX[LIFO Transaction Manager]
+    end
+
+    subgraph Output
+    FS[Atomic Filesystem Changes]
+    end
+
+    M --> P
+    F --> P
+    P --> E
+    E <--> TX
+    E --> FS
+```
+
 - **Atomic Layering and Composition**  
   Projects are built by applying independent **layers** (language packs and tooling templates). You can **mix and match** templates to achieve the desired setup.
 
