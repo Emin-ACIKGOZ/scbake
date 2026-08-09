@@ -225,6 +225,46 @@ func TestCommit_Cleanup(t *testing.T) {
 	}
 }
 
+func TestCommit_DisablesRollback_NoBackups(t *testing.T) {
+	rootDir := t.TempDir()
+	tx, err := New(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Track a file that does not exist yet (the "created" case). No backup is
+	// made, so tempDir stays empty — previously Commit() returned early
+	// without finalizing the transaction and a subsequent Rollback() deleted
+	// the created file, silently discarding successful work.
+	created := filepath.Join(rootDir, "created.txt")
+	if err := tx.Track(created); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(created, []byte("data"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The deferred rollback safety net runs after Commit even on success;
+	// it must not undo the committed changes.
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(created); os.IsNotExist(err) {
+		t.Error("Rollback after Commit deleted a committed file (atomicity violation)")
+	}
+
+	// Commit must be idempotent.
+	if err := tx.Commit(); err != nil {
+		t.Errorf("second Commit failed: %v", err)
+	}
+}
+
 func TestTrack_ExistingDirectory_NoBackup(t *testing.T) {
 	rootDir := t.TempDir()
 	tx, err := New(rootDir)

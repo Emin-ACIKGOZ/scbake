@@ -36,6 +36,11 @@ type Manager struct {
 	// created tracks absolute paths of files/dirs created during the transaction.
 	// They are stored in order of creation (append-only) for LIFO deletion.
 	created []string
+
+	// committed records that the transaction was finalized with Commit().
+	// After a commit, Rollback() must be a no-op: the deferred rollback safety
+	// net (RunApply) runs after Commit() even on success.
+	committed bool
 }
 
 // New creates a new transaction manager scoped to the given project root.
@@ -54,24 +59,28 @@ func New(rootPath string) (*Manager, error) {
 
 // Commit finalizes the transaction by deleting the temporary backup directory and pruning structural scaffolding.
 // This should be called only after all tasks have succeeded.
+// After Commit, Rollback is a no-op: the transaction's changes are permanent.
 func (m *Manager) Commit() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// If tempDir was never created, there is nothing to clean up.
-	if m.tempDir == "" {
+	if m.committed {
 		return nil
 	}
+	m.committed = true
 
-	// Remove the temp directory and all backed-up files.
-	if err := os.RemoveAll(m.tempDir); err != nil {
-		return fmt.Errorf("failed to cleanup transaction temp dir: %w", err)
+	// If tempDir was never created, there is nothing to clean up.
+	if m.tempDir != "" {
+		// Remove the temp directory and all backed-up files.
+		if err := os.RemoveAll(m.tempDir); err != nil {
+			return fmt.Errorf("failed to cleanup transaction temp dir: %w", err)
+		}
+
+		// Prune parent scaffolding if empty (.scbake/tmp and .scbake)
+		m.cleanupStructure()
 	}
 
-	// Prune parent scaffolding if empty (.scbake/tmp and .scbake)
-	m.cleanupStructure()
-
-	// Reset internal state
+	// Reset internal state so a trailing Rollback cannot undo committed changes.
 	m.resetState()
 
 	return nil

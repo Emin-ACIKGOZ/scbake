@@ -12,9 +12,16 @@ import (
 // 1. Deletes created files/directories (LIFO order).
 // 2. Restores backed-up files (overwriting current state).
 // 3. Deletes the temp directory and structural scaffolding.
+//
+// After a successful Commit the rollback is disabled: the transaction's
+// changes are permanent and Rollback is a no-op.
 func (m *Manager) Rollback() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.committed {
+		return nil
+	}
 
 	var errs []error
 
