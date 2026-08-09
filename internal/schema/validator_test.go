@@ -199,10 +199,10 @@ func TestValidate_PatternAndEnumCombined(t *testing.T) {
 	s := &Schema{
 		Variables: map[string]VariableDef{
 			"runner_os": {
-				Type:    TypeString,
+				Type:     TypeString,
 				Required: true,
-				Enum:    []string{"ubuntu-latest", "macos-latest", "windows-latest"},
-				Pattern: "^(ubuntu|macos|windows)-latest$",
+				Enum:     []string{"ubuntu-latest", "macos-latest", "windows-latest"},
+				Pattern:  "^(ubuntu|macos|windows)-latest$",
 			},
 		},
 	}

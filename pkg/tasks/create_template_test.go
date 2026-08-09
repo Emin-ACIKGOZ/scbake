@@ -253,9 +253,9 @@ func TestCreateTemplateTask_FileNeverManaged(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	manifest := &types.Manifest{
-		SbakeVersion:  "v1.0.0",
-		Projects:      []types.Project{{Name: "UnmanagedTest"}},
-		ManagedFiles:  nil,
+		SbakeVersion: "v1.0.0",
+		Projects:     []types.Project{{Name: "UnmanagedTest"}},
+		ManagedFiles: nil,
 	}
 	tc := types.TaskContext{
 		TargetPath: tmpDir,

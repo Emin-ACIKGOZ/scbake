@@ -21,12 +21,12 @@ import (
 const newCmdTotalSteps = 8
 
 var (
-	newLangFlag            string
-	newWithFlag            []string
-	newLicenseFlag         string
-	newCopyrightHolderFlag string
+	newLangFlag             string
+	newWithFlag             []string
+	newLicenseFlag          string
+	newCopyrightHolderFlag  string
 	newConflictStrategyFlag string
-	newSetFlag             []string
+	newSetFlag              []string
 )
 
 var newCmd = &cobra.Command{
@@ -106,18 +106,18 @@ func runNew(projectName string, dirCreated *bool) error {
 	// Delegate template and language pack application to the core executor
 	reporter.Step("🚀", "Applying templates...")
 	rc := core.RunContext{
-		LangFlag:          newLangFlag,
-		WithFlag:          newWithFlag,
-		TargetPath:        ".",
-		DryRun:            dryRun,
-		Force:             force,
-		ConflictStrategy:  newConflictStrategyFlag,
-		TemplateDir:       templateDirFlag,
-		RegistryCacheDir:   GetRegistryCacheDir(),
-		ManifestPathArg:   ".",
-		License:           newLicenseFlag,
-		CopyrightHolder:   newCopyrightHolderFlag,
-		SetVars:           setVars,
+		LangFlag:         newLangFlag,
+		WithFlag:         newWithFlag,
+		TargetPath:       ".",
+		DryRun:           dryRun,
+		Force:            force,
+		ConflictStrategy: newConflictStrategyFlag,
+		TemplateDir:      templateDirFlag,
+		RegistryCacheDir: GetRegistryCacheDir(),
+		ManifestPathArg:  ".",
+		License:          newLicenseFlag,
+		CopyrightHolder:  newCopyrightHolderFlag,
+		SetVars:          setVars,
 	}
 
 	if err := core.RunApply(rc, reporter); err != nil {

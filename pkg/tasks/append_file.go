@@ -21,6 +21,7 @@ type AppendFileTask struct {
 }
 
 // Execute performs the task of appending content to the file.
+//
 //nolint:cyclop // Complex file operations require linear error checks
 func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 	absPath, err := filepath.Abs(filepath.Join(tc.TargetPath, t.FilePath))

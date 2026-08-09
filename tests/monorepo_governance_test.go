@@ -59,7 +59,7 @@ func TestMonorepoGovernance(t *testing.T) {
 
 	t.Run("3. Verify Centralized Manifest", func(t *testing.T) {
 		_ = os.Chdir(repoPath)
-		
+
 		output, err := runCLI("list", "projects")
 		if err != nil {
 			t.Fatalf("Failed to list projects: %v\nOutput: %s", err, output)
@@ -95,10 +95,10 @@ func TestMonorepoGovernance(t *testing.T) {
 		// This should roll back any changes made during the process.
 		// We use a known failure case: applying a template with a required var missing (if we had one)
 		// Or just applying something to a path that isn't a directory.
-		
+
 		dummyFile := filepath.Join(repoPath, "dummy.txt")
 		_ = os.WriteFile(dummyFile, []byte("i am a file"), 0644)
-		
+
 		_, err := runCLI("apply", "--lang", "go", "dummy.txt")
 		if err == nil {
 			t.Fatal("Expected failure when applying to a file path")

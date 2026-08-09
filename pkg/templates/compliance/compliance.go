@@ -87,6 +87,7 @@ func (t *LicenseTask) Description() string { return "Generate LICENSE file" }
 func (t *LicenseTask) Priority() int { return t.TaskPrio }
 
 // Execute performs the license generation task.
+//
 //nolint:cyclop // Complex string replacement and file operations
 func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	if tc.Manifest.Metadata == nil {

@@ -30,18 +30,18 @@ const (
 
 // RunContext holds the flags and arguments for a single execution run.
 type RunContext struct {
-	LangFlag          string
-	WithFlag          []string
-	TargetPath        string // Absolute path for execution stability.
-	ManifestPathArg   string // Relative path for manifest portability.
-	DryRun             bool
-	Force              bool
-	ConflictStrategy   string
-	TemplateDir        string
-	RegistryCacheDir   string
-	License            string
-	CopyrightHolder    string
-	SetVars           map[string]string
+	LangFlag         string
+	WithFlag         []string
+	TargetPath       string // Absolute path for execution stability.
+	ManifestPathArg  string // Relative path for manifest portability.
+	DryRun           bool
+	Force            bool
+	ConflictStrategy string
+	TemplateDir      string
+	RegistryCacheDir string
+	License          string
+	CopyrightHolder  string
+	SetVars          map[string]string
 }
 
 // A struct to hold all proposed manifest changes
@@ -51,6 +51,7 @@ type manifestChanges struct {
 }
 
 // RunApply orchestrates the template application process.
+//
 //nolint:cyclop // Complex orchestration logic requires multiple linear steps
 func RunApply(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
@@ -125,15 +126,15 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	defer cancel()
 
 	tc := types.TaskContext{
-		Ctx:               ctx,
-		DryRun:            rc.DryRun,
-		Manifest:          futureManifest,
-		TargetPath:        rc.TargetPath,
-		Force:             rc.Force,
-		ConflictStrategy:  rc.ConflictStrategy,
-		TemplateDir:       rc.TemplateDir,
-		RegistryCacheDir:   rc.RegistryCacheDir,
-		Tx:                tx,
+		Ctx:              ctx,
+		DryRun:           rc.DryRun,
+		Manifest:         futureManifest,
+		TargetPath:       rc.TargetPath,
+		Force:            rc.Force,
+		ConflictStrategy: rc.ConflictStrategy,
+		TemplateDir:      rc.TemplateDir,
+		RegistryCacheDir: rc.RegistryCacheDir,
+		Tx:               tx,
 	}
 
 	if rc.DryRun {

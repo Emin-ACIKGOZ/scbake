@@ -186,6 +186,7 @@ func checkFilePreconditions(finalPath, output, target string) error {
 }
 
 // Execute performs the template creation task.
+//
 //nolint:cyclop // Complex precondition checks and file ops are linear
 func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 	// 1. Read and parse the template using the override-aware helper

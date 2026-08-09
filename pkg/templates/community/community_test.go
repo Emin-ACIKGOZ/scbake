@@ -16,7 +16,7 @@ func TestCommunityHandler_GetTasks(t *testing.T) {
 	}
 
 	expectedFiles := map[string]bool{
-		"CONTRIBUTING.md":   true,
+		"CONTRIBUTING.md":    true,
 		"CODE_OF_CONDUCT.md": true,
 		"SUPPORT.md":         true,
 		"GOVERNANCE.md":      true,
