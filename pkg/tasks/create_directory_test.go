@@ -23,8 +23,9 @@ func TestCreateDirTask(t *testing.T) {
 	}
 
 	tc := types.TaskContext{
-		Ctx:    context.Background(),
-		DryRun: false,
+		Ctx:        context.Background(),
+		TargetPath: tmpDir,
+		DryRun:     false,
 	}
 
 	// 1. Run first time

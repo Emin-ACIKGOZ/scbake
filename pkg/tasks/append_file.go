@@ -24,9 +24,15 @@ type AppendFileTask struct {
 //
 //nolint:cyclop // Complex file operations require linear error checks
 func (t *AppendFileTask) Execute(tc types.TaskContext) error {
-	absPath, err := filepath.Abs(filepath.Join(tc.TargetPath, t.FilePath))
+	// Security: reject absolute or escaping paths before any filesystem access,
+	// independent of dry-run or transaction state.
+	if !filepath.IsLocal(t.FilePath) {
+		return fmt.Errorf("invalid file path %q: must be a relative path inside the target directory", t.FilePath)
+	}
+
+	absPath, err := resolveTaskPath(tc.TargetPath, t.FilePath, "file")
 	if err != nil {
-		return fmt.Errorf("failed to resolve path %s: %w", t.FilePath, err)
+		return err
 	}
 
 	// Safety Tracking: Register the path for transaction management.
@@ -37,7 +43,7 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 	}
 
 	// Check if file exists
-	//nolint:gosec // Path is validated by filepath.Abs and tracked by tx manager
+	//nolint:gosec // Path is validated by resolveTaskPath and tracked by tx manager
 	existingContent, err := os.ReadFile(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -60,7 +66,7 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 	}
 
 	// Append content
-	//nolint:gosec // Path is validated by filepath.Abs and tracked by tx manager
+	//nolint:gosec // Path is validated by resolveTaskPath and tracked by tx manager
 	f, err := os.OpenFile(absPath, os.O_APPEND|os.O_WRONLY, fileutil.FilePerms)
 	if err != nil {
 		return fmt.Errorf("failed to open file %s for appending: %w", t.FilePath, err)
