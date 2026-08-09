@@ -80,3 +80,33 @@ func TestCreateDirTask_Transaction(t *testing.T) {
 		t.Error("Directory was not removed by rollback, likely wasn't tracked via absolute path")
 	}
 }
+
+func TestCreateDirTask_PathTraversalRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	traversalPayloads := []string{
+		"../outside",
+		"../../escaped",
+		"sub/../../outside",
+	}
+
+	for _, payload := range traversalPayloads {
+		t.Run(payload, func(t *testing.T) {
+			task := &CreateDirTask{
+				Path:     payload,
+				Desc:     "Path traversal dir safety test",
+				TaskPrio: 50,
+			}
+
+			tc := types.TaskContext{
+				Ctx:        context.Background(),
+				TargetPath: tmpDir,
+				DryRun:     true, // DryRun prevents directory creation outside test area
+			}
+
+			err := task.Execute(tc)
+			if err == nil {
+				t.Errorf("Path traversal contract violation: CreateDirTask unexpectedly accepted directory traversal payload %q", payload)
+			}
+		})
+	}
+}

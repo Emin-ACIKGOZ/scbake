@@ -238,3 +238,34 @@ func TestAppendFileTask_Metadata(t *testing.T) {
 		t.Errorf("Priority() mismatch")
 	}
 }
+
+func TestAppendFileTask_PathTraversalRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	traversalPayloads := []string{
+		"../secret.txt",
+		"../../etc/passwd",
+		"/etc/passwd",
+		"sub/../../secret.txt",
+	}
+
+	for _, payload := range traversalPayloads {
+		t.Run(payload, func(t *testing.T) {
+			task := &AppendFileTask{
+				FilePath: payload,
+				Content:  "unauthorized content",
+				Desc:     "Path traversal append safety test",
+				TaskPrio: 100,
+			}
+
+			tc := types.TaskContext{
+				TargetPath: tmpDir,
+				DryRun:     true, // DryRun ensures zero filesystem modification
+			}
+
+			err := task.Execute(tc)
+			if err == nil {
+				t.Errorf("Path traversal contract violation: AppendFileTask unexpectedly accepted traversal payload %q", payload)
+			}
+		})
+	}
+}

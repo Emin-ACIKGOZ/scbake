@@ -333,3 +333,39 @@ func TestCreateTemplateTask_Transaction(t *testing.T) {
 		t.Error("File was not removed by rollback")
 	}
 }
+
+func TestCreateTemplateTask_PathTraversal(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		Projects:     []types.Project{{Name: "TraversalTest"}},
+	}
+
+	tc := types.TaskContext{
+		TargetPath: tmpDir,
+		Manifest:   manifest,
+	}
+
+	traversalOutputs := []string{
+		"../../etc/passwd",
+		"../secret.txt",
+		"sub/../../secret.txt",
+	}
+
+	for _, output := range traversalOutputs {
+		t.Run(output, func(t *testing.T) {
+			task := &CreateTemplateTask{
+				TemplateFS:   testTemplates,
+				TemplatePath: "testdata/simple.tpl",
+				OutputPath:   output,
+				Desc:         "Path traversal output test",
+				TaskPrio:     100,
+			}
+
+			if err := task.Execute(tc); err == nil {
+				t.Errorf("Expected error for output path traversal payload %q, got nil", output)
+			}
+		})
+	}
+}
