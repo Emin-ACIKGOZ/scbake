@@ -16,6 +16,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] - 2026-08-10
+
+**Hardened path handling and structural XML insertion; monorepo workflows documented and verified.**
+
+### Added
+
+#### Monorepo Management
+- **Monorepo workflows documented and verified** — README and QUICK_START now cover managing multiple subprojects from a central `scbake.toml` via recursive root discovery: scoped template application per subdirectory and fleet-wide governance from the root, verified by monorepo governance integration tests
+
+#### Documentation
+- **Execution flow and transaction diagrams** — mermaid diagrams for plan execution, rollback, and the transaction lifecycle in README and ARCHITECTURE
+
+#### Tests
+- **Security and boundary regression suite** — path traversal contracts for all file tasks, XML parsing boundary cases, and schema variable fuzz testing
+- **Transaction priority-band tests** — LIFO rollback across priority bands, byte-exact file restoration, and zero transaction residue on failure
+
+### Security
+- **Target containment for file tasks** — AppendFileTask, CreateDirTask, and CreateTemplateTask now reject paths that resolve outside the target directory before any file operation, including paths that merely share a directory-name prefix (e.g. `<target>/root-evil` vs. `<target>/root`). CreateDirTask resolves relative paths against the target directory instead of the process working directory, and validation now also applies in dry-run mode
+- **Structural XML target selection** — InsertXMLTask verifies the complete element ancestry via the XML token stream: paths with nonexistent ancestors (e.g. `/project/nonexistent/plugins`) or undeclared namespace prefixes are rejected instead of silently matching a same-named element elsewhere in the file. Matching is fail-closed: a self-closing first match is rejected rather than skipping to a later element
+
+---
+
 ## [0.4.1] - 2025-06-09
 
 **Template schema & input validation: fail early when required variables are missing.**
