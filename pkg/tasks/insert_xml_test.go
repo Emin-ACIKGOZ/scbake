@@ -5,6 +5,9 @@ package tasks
 
 import (
 	"context"
+	"encoding/xml"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -651,5 +654,216 @@ func TestInsertXMLTask_Boundary_PathTraversalValidation(t *testing.T) {
 				t.Errorf("Path traversal payload %q was unexpectedly accepted", payload)
 			}
 		})
+	}
+}
+
+//nolint:cyclop // Offset verification requires separate start/end checks per token type
+func TestInsertXMLElement_SelfClosingTargetOffsets(t *testing.T) {
+	content := `<root><target/></root>`
+	dec := xml.NewDecoder(strings.NewReader(content))
+
+	var targetStart, targetEnd int64
+	for {
+		start := dec.InputOffset()
+		tok, err := dec.Token()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatalf("Token() failed: %v", err)
+		}
+
+		switch e := tok.(type) {
+		case xml.StartElement:
+			if e.Name.Local != "target" {
+				continue
+			}
+			targetStart, targetEnd = start, dec.InputOffset()
+			if targetStart >= targetEnd {
+				t.Errorf("StartElement for <target/> must span real source bytes: [%d,%d)", targetStart, targetEnd)
+			}
+			if got := content[targetStart:targetEnd]; got != "<target/>" {
+				t.Errorf("start tag span = %q, want %q", got, "<target/>")
+			}
+		case xml.EndElement:
+			if e.Name.Local != "target" {
+				continue
+			}
+			// Token() expands self-closing elements into a zero-width EndElement
+			// that does not advance the input position.
+			if start != targetEnd {
+				t.Errorf("synthesized EndElement must be zero-width at the end of the start tag: got %d, want %d", start, targetEnd)
+			}
+			if after := dec.InputOffset(); after != targetEnd {
+				t.Errorf("synthesized EndElement must not advance the decoder: got %d, want %d", after, targetEnd)
+			}
+		}
+	}
+
+	if _, err := insertXMLElement(content, "/root/target", "<new/>"); err == nil {
+		t.Error("expected error when inserting into a self-closing target")
+	}
+}
+
+func TestLocateXMLElement_SpliceBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		path string
+		// want is a unique substring of file that pins the insertion point.
+		// When atEnd is true the insertion lands immediately after want;
+		// otherwise it lands at the start of want.
+		want  string
+		atEnd bool
+	}{
+		{
+			name: "normal closing tag",
+			file: "<root><a><b>content</b></a></root>",
+			path: "/root/a/b",
+			want: "content",
+			atEnd: true,
+		},
+		{
+			name: "attributes on target and ancestors",
+			file: `<root version="1.0"><a id="1"><b enabled="true">text</b></a></root>`,
+			path: "/root/a/b",
+			want: "text",
+			atEnd: true,
+		},
+		{
+			name: "nested same-name elements",
+			file: "<a><b><b>inner</b></b></a>",
+			path: "/a/b/b",
+			want: "inner",
+			atEnd: true,
+		},
+		{
+			name: "first sibling wins",
+			file: "<a><b>first</b><b>second</b></a>",
+			path: "/a/b",
+			want: "first",
+			atEnd: true,
+		},
+		{
+			name: "comment inside target",
+			file: "<root><a><!-- keep me --></a></root>",
+			path: "/root/a",
+			want: "<!-- keep me -->",
+			atEnd: true,
+		},
+		{
+			name: "cdata inside target",
+			file: "<root><a><![CDATA[raw <data>]]></a></root>",
+			path: "/root/a",
+			want: "<![CDATA[raw <data>]]>",
+			atEnd: true,
+		},
+		{
+			name: "whitespace-only body",
+			file: "<root>\n  <a>\n    \n  </a>\n</root>",
+			path: "/root/a",
+			want: "</a>",
+		},
+		{
+			name: "empty element body",
+			file: "<root><a></a></root>",
+			path: "/root/a",
+			want: "</a>",
+		},
+		{
+			name: "empty first match inserts into empty element",
+			file: "<root><a></a><a>second</a></root>",
+			path: "/root/a",
+			want: "</a>",
+		},
+		{
+			name: "namespace-qualified ancestors and target",
+			file: `<r xmlns="urn:d" xmlns:q="urn:q"><p><q:x>v</q:x></p></r>`,
+			path: "/r/p/q:x",
+			want: "v",
+			atEnd: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			segments, err := parseElementPath(tt.path)
+			if err != nil {
+				t.Fatalf("parseElementPath() failed: %v", err)
+			}
+
+			got, err := locateXMLElement(tt.file, segments)
+			if err != nil {
+				t.Fatalf("locateXMLElement() failed: %v", err)
+			}
+			if got < 0 || got > int64(len(tt.file)) {
+				t.Fatalf("insertion offset %d out of range for %q", got, tt.file)
+			}
+
+			want := int64(strings.Index(tt.file, tt.want))
+			if want < 0 {
+				t.Fatalf("marker %q not found in fixture", tt.want)
+			}
+			if tt.atEnd {
+				want += int64(len(tt.want))
+			}
+			if got != want {
+				t.Errorf("insertion offset = %d, want %d", got, want)
+			}
+
+			// The insertion point must be exactly at the target's closing tag.
+			last := segments[len(segments)-1]
+			if closeTag := "</" + last + ">"; !strings.HasPrefix(tt.file[got:], closeTag) {
+				t.Errorf("insertion point is not at the target's closing tag %q: %q", closeTag, tt.file[got:])
+			}
+		})
+	}
+}
+
+func TestLocateXMLElement_ScopedNamespaceRebinding(t *testing.T) {
+	file := `<root xmlns:x="urn:A">
+  <x:item>one</x:item>
+  <nested xmlns:x="urn:B">
+    <x:item>two</x:item>
+  </nested>
+</root>`
+
+	first, err := locateXMLElement(file, []string{"root", "x:item"})
+	if err != nil {
+		t.Fatalf("locate(/root/x:item) failed: %v", err)
+	}
+	wantFirst := int64(strings.Index(file, "one") + len("one"))
+	if first != wantFirst {
+		t.Errorf("first x:item insertion offset = %d, want %d", first, wantFirst)
+	}
+
+	// The prefix must resolve per scope: nested re-declares x to urn:B.
+	// A global prefix map (x → urn:A) would fail to match the second item.
+	second, err := locateXMLElement(file, []string{"root", "nested", "x:item"})
+	if err != nil {
+		t.Fatalf("locate(/root/nested/x:item) failed: %v", err)
+	}
+	wantSecond := int64(strings.Index(file, "two") + len("two"))
+	if second != wantSecond {
+		t.Errorf("nested x:item insertion offset = %d, want %d", second, wantSecond)
+	}
+
+	if first >= second {
+		t.Error("document order violated: first item must precede nested item")
+	}
+}
+
+func TestLocateXMLElement_UnprefixedDefaultNamespace(t *testing.T) {
+	file := `<root xmlns="urn:d"><a>default</a><x:a xmlns:x="urn:o">other</x:a></root>`
+
+	got, err := locateXMLElement(file, []string{"root", "a"})
+	if err != nil {
+		t.Fatalf("locate(/root/a) failed: %v", err)
+	}
+	// The unprefixed segment matches the element in the default namespace,
+	// not the x-prefixed element in urn:o.
+	want := int64(strings.Index(file, "default") + len("default"))
+	if got != want {
+		t.Errorf("insertion offset = %d, want %d", got, want)
 	}
 }
