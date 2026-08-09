@@ -313,8 +313,16 @@ func segmentMatches(segment string, ns map[string]string, name xml.Name) bool {
 	local := segment
 	space := ns[""]
 	if idx := strings.IndexByte(segment, ':'); idx >= 0 {
+		prefix := segment[:idx]
 		local = segment[idx+1:]
-		space = ns[segment[:idx]]
+
+		// An undeclared prefix must never fall back to the default or empty
+		// namespace; only explicit declarations resolve.
+		resolved, ok := ns[prefix]
+		if !ok {
+			return false
+		}
+		space = resolved
 	}
 	return name.Local == local && name.Space == space
 }

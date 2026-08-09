@@ -867,3 +867,24 @@ func TestLocateXMLElement_UnprefixedDefaultNamespace(t *testing.T) {
 		t.Errorf("insertion offset = %d, want %d", got, want)
 	}
 }
+
+func TestLocateXMLElement_UndeclaredPrefixRejected(t *testing.T) {
+	// foo is declared nowhere: /root/foo:bar must not silently fall back to
+	// the empty namespace and match the empty-namespace <bar> element.
+	// (bar is non-self-closing so a match would be reported as found.)
+	file := `<root><bar>value</bar></root>`
+
+	if _, err := locateXMLElement(file, []string{"root", "foo:bar"}); err == nil {
+		t.Error("undeclared prefix unexpectedly matched; target must not be found")
+	}
+
+	if _, err := insertXMLElement(file, "/root/foo:bar", "<new/>"); err == nil {
+		t.Error("insertXMLElement() must error for an undeclared prefix")
+	}
+
+	// A declared prefix must still resolve through the scoped environment.
+	declared := `<root xmlns:p="urn:x"><p:bar>value</p:bar></root>`
+	if _, err := locateXMLElement(declared, []string{"root", "p:bar"}); err != nil {
+		t.Errorf("declared prefix must still resolve: %v", err)
+	}
+}
