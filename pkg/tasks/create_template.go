@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
-	"strings"
 	"text/template"
 )
 
@@ -156,33 +155,22 @@ func handleConflict(absFinalPath, outputRelPath, strategy string) (string, error
 	}
 }
 
-// checkFilePreconditions handles path safety and directory creation.
-func checkFilePreconditions(finalPath, output, target string) error {
-	// 1. Path Safety Check (Canonicalization)
-	absTarget, err := filepath.Abs(target)
+// checkFilePreconditions validates that the output path stays inside the target
+// directory and ensures its parent directory exists. It returns the resolved
+// absolute output path.
+func checkFilePreconditions(output, target string) (string, error) {
+	absPath, err := resolveTaskPath(target, output, "output")
 	if err != nil {
-		return fmt.Errorf("failed to resolve target path: %w", err)
-	}
-	absFinal, err := filepath.Abs(finalPath)
-	if err != nil {
-		return fmt.Errorf("failed to resolve output path: %w", err)
+		return "", err
 	}
 
-	cleanTarget := filepath.Clean(absTarget)
-	cleanFinalPath := filepath.Clean(absFinal)
-
-	if !strings.HasPrefix(cleanFinalPath, cleanTarget) {
-		return fmt.Errorf("task failed (%s): output path '%s' is outside the target path '%s'",
-			filepath.Base(output), output, target)
-	}
-
-	// 2. Ensure the directory exists
-	dir := filepath.Dir(cleanFinalPath)
+	// Ensure the directory exists
+	dir := filepath.Dir(absPath)
 	if err := os.MkdirAll(dir, fileutil.DirPerms); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+		return "", fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	return nil
+	return absPath, nil
 }
 
 // Execute performs the template creation task.
@@ -215,12 +203,10 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 	newHash := HashContent(renderedBytes)
 
 	// 3. Determine and check the final output path
-	finalPath := filepath.Join(tc.TargetPath, t.OutputPath)
-	if err = checkFilePreconditions(finalPath, t.OutputPath, tc.TargetPath); err != nil {
+	absPath, err := checkFilePreconditions(t.OutputPath, tc.TargetPath)
+	if err != nil {
 		return err
 	}
-
-	absPath, _ := filepath.Abs(finalPath)
 
 	// 4. State-Aware Reconciliation
 	writePath, err := checkReconciliation(absPath, t.OutputPath, newHash, tc)
