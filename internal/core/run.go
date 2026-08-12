@@ -51,8 +51,6 @@ type manifestChanges struct {
 }
 
 // RunApply orchestrates the template application process.
-//
-//nolint:cyclop // Complex orchestration logic requires multiple linear steps
 func RunApply(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
@@ -63,39 +61,68 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	}
 
 	// 2. Initialize Transaction Engine
-	// This is the safety net. We defer Rollback() immediately.
-	// If the program panics or returns an error at any point,
-	// the filesystem is restored to its original state.
-	// If we succeed, we call tx.Commit() explicitly at the end, which disables the rollback.
-	var tx *transaction.Manager
-	if !rc.DryRun {
-		tx, err = transaction.New(rootPath)
-		if err != nil {
-			return fmt.Errorf("failed to initialize transaction manager: %w", err)
-		}
-		// SAFETY: The defer ensures atomicity.
-		defer func() {
-			if rErr := tx.Rollback(); rErr != nil {
-				// We log this to stderr because we can't return it easily from defer
-				// without named return parameters, and panic recovery is complex.
-				// In a normal failure flow, Rollback is expected to succeed silently.
-				fmt.Fprintf(os.Stderr, "⚠️  Transaction rollback warning: %v\n", rErr)
-			}
-		}()
+	tx, cleanupTx, err := setupTransaction(rootPath, rc.DryRun)
+	if err != nil {
+		return err
 	}
+	defer cleanupTx()
 
 	reporter.Step("📝", "Building execution plan...")
 
-	// Deduplicate requested templates to ensure idempotency
+	// 3. Execution Plan Construction
 	rc.WithFlag = deduplicateTemplates(rc.WithFlag)
-
 	plan, _, changes, err := buildPlan(rc)
 	if err != nil {
 		return err
 	}
 
-	// Prepare task context with timeout
-	// Deep copy manifest to ensure modifications don't affect original
+	// 4. Build Task Context & Validate Schemas
+	tc, cancelCtx, err := buildTaskContext(rc, m, changes, tx)
+	if err != nil {
+		return err
+	}
+	defer cancelCtx()
+
+	if rc.DryRun {
+		return Execute(plan, tc, reporter)
+	}
+
+	return executeAndFinalize(reporter, plan, tc, m, changes, rootPath, tx)
+}
+
+// setupTransaction initializes the transaction safety net and returns a cleanup rollback deferral.
+// If the program panics or returns an error at any point, the filesystem is restored to its original state.
+// Calling tx.Commit() explicitly at the end disables the rollback safety net.
+func setupTransaction(rootPath string, dryRun bool) (*transaction.Manager, func(), error) {
+	if dryRun {
+		return nil, func() {}, nil
+	}
+
+	tx, err := transaction.New(rootPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to initialize transaction manager: %w", err)
+	}
+
+	// SAFETY: The defer ensures atomicity.
+	cleanup := func() {
+		if rErr := tx.Rollback(); rErr != nil {
+			// We log this to stderr because we can't return it easily from defer
+			// without named return parameters, and panic recovery is complex.
+			// In a normal failure flow, Rollback is expected to succeed silently.
+			fmt.Fprintf(os.Stderr, "⚠️  Transaction rollback warning: %v\n", rErr)
+		}
+	}
+	return tx, cleanup, nil
+}
+
+// buildTaskContext constructs future manifest state and validates template schemas against metadata.
+func buildTaskContext(
+	rc RunContext,
+	m *types.Manifest,
+	changes *manifestChanges,
+	tx *transaction.Manager,
+) (types.TaskContext, func(), error) {
+	// Deep copy manifest to ensure modifications don't affect original until finalization
 	futureManifest := m.DeepCopy()
 
 	// Update metadata from context if provided
@@ -119,12 +146,11 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 
 	// Validate all selected templates against their schemas before executing
 	if err := validateSelectedTemplates(rc, futureManifest.Metadata); err != nil {
-		return err
+		return types.TaskContext{}, nil, err
 	}
 
+	// Prepare task context with default timeout
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
-	defer cancel()
-
 	tc := types.TaskContext{
 		Ctx:              ctx,
 		DryRun:           rc.DryRun,
@@ -137,14 +163,10 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 		Tx:               tx,
 	}
 
-	if rc.DryRun {
-		return Execute(plan, tc, reporter)
-	}
-
-	return executeAndFinalize(reporter, plan, tc, m, changes, rootPath, tx)
+	return tc, cancel, nil
 }
 
-//nolint:cyclop // Complex finalization logic requires multiple linear steps
+// executeAndFinalize executes the planned tasks, updates the manifest, and commits the transaction.
 func executeAndFinalize(
 	reporter types.Reporter,
 	plan *types.Plan,
@@ -160,6 +182,27 @@ func executeAndFinalize(
 	}
 
 	reporter.Step("✍️", "Updating manifest...")
+	if err := persistManifestState(m, tc, changes, rootPath, tx); err != nil {
+		return err
+	}
+
+	reporter.Step("✅", "Committing transaction...")
+	// Point of No Return: We delete the backups.
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// persistManifestState updates metadata, tracks scbake.toml in transaction, and saves manifest to disk.
+func persistManifestState(
+	m *types.Manifest,
+	tc types.TaskContext,
+	changes *manifestChanges,
+	rootPath string,
+	tx *transaction.Manager,
+) error {
 	updateManifest(m, changes)
 
 	// Persist metadata
@@ -193,13 +236,6 @@ func executeAndFinalize(
 	if err := manifest.Save(m, rootPath); err != nil {
 		return fmt.Errorf("manifest save failed: %w", err)
 	}
-
-	reporter.Step("✅", "Committing transaction...")
-	// Point of No Return: We delete the backups.
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
 	return nil
 }
 
