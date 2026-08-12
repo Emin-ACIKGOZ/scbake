@@ -8,8 +8,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
@@ -129,16 +127,11 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 		return nil
 	}
 
-	finalPath := filepath.Join(tc.TargetPath, "LICENSE")
-	absPath, _ := filepath.Abs(finalPath)
-
 	newHash := tasks.HashContent([]byte(text))
 
-	// Re-implement reconciliation logic here to avoid circular dependency
-	writePath := absPath
+	writePath := "LICENSE"
 	if !tc.Force {
-		//nolint:gosec
-		existingContent, err := os.ReadFile(absPath)
+		existingContent, err := fileutil.SafeReadFile(tc.TargetPath, "LICENSE")
 		if err == nil {
 			existingHash := tasks.HashContent(existingContent)
 			var originalHash string
@@ -150,10 +143,10 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 				// Drift detected
 				switch tc.ConflictStrategy {
 				case "overwrite":
-					writePath = absPath
+					writePath = "LICENSE"
 				case "artifact":
 					fmt.Printf("⚠️  Conflict in LICENSE (user modifications detected). Writing new template to artifact.\n")
-					writePath = absPath + ".scbake-new"
+					writePath = "LICENSE.scbake-new"
 				case "keep-local":
 					fmt.Printf("⚠️  Conflict in LICENSE (user modifications detected). Skipping update (--strategy=keep-local).\n")
 					return nil
@@ -166,13 +159,18 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 		}
 	}
 
+	absWritePath, err := fileutil.SafePath(tc.TargetPath, writePath)
+	if err != nil {
+		return fmt.Errorf("invalid write path: %w", err)
+	}
+
 	if tc.Tx != nil {
-		if err := tc.Tx.Track(writePath); err != nil {
+		if err := tc.Tx.Track(absWritePath); err != nil {
 			return fmt.Errorf("failed to track LICENSE file: %w", err)
 		}
 	}
 
-	if err := os.WriteFile(writePath, []byte(text), fileutil.FilePerms); err != nil {
+	if err := fileutil.SafeWriteFile(tc.TargetPath, writePath, []byte(text), fileutil.FilePerms); err != nil {
 		return fmt.Errorf("failed to write LICENSE: %w", err)
 	}
 

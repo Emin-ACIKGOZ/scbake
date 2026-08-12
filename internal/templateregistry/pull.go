@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"scbake/internal/util/fileutil"
 	"strings"
 	"time"
 )
@@ -231,13 +232,11 @@ func extractTarGz(r io.Reader, destDir string) error {
 			if err := os.MkdirAll(filepath.Dir(target), cacheDirPerm); err != nil {
 				return fmt.Errorf("creating directory for %s: %w", target, err)
 			}
-			//nolint:gosec // We control destDir within our cache
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, cacheFilePerm)
+			f, err := fileutil.SafeOpenFile(destDir, name, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, cacheFilePerm)
 			if err != nil {
 				return fmt.Errorf("creating file %s: %w", target, err)
 			}
-			//nolint:gosec // Limited to maxArchiveBytes, DOS not feasible
-			if _, err := io.Copy(f, tr); err != nil {
+			if _, err := io.Copy(f, io.LimitReader(tr, maxArchiveBytes)); err != nil {
 				_ = f.Close()
 				return fmt.Errorf("writing file %s: %w", target, err)
 			}

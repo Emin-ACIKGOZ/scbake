@@ -43,15 +43,14 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 	}
 
 	// Check if file exists
-	//nolint:gosec // Path is validated by resolveTaskPath and tracked by tx manager
-	existingContent, err := os.ReadFile(absPath)
+	existingContent, err := fileutil.SafeReadFile(tc.TargetPath, t.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// If file doesn't exist, create it with the content
 			if tc.DryRun {
 				return nil
 			}
-			return os.WriteFile(absPath, []byte(t.Content), fileutil.FilePerms)
+			return fileutil.SafeWriteFile(tc.TargetPath, t.FilePath, []byte(t.Content), fileutil.FilePerms)
 		}
 		return fmt.Errorf("failed to read file %s: %w", t.FilePath, err)
 	}
@@ -66,8 +65,7 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 	}
 
 	// Append content
-	//nolint:gosec // Path is validated by resolveTaskPath and tracked by tx manager
-	f, err := os.OpenFile(absPath, os.O_APPEND|os.O_WRONLY, fileutil.FilePerms)
+	f, err := fileutil.SafeOpenFile(tc.TargetPath, t.FilePath, os.O_APPEND|os.O_WRONLY, fileutil.FilePerms)
 	if err != nil {
 		return fmt.Errorf("failed to open file %s for appending: %w", t.FilePath, err)
 	}

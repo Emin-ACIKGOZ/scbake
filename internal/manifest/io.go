@@ -81,12 +81,8 @@ func Load(startPath string) (*types.Manifest, string, error) {
 	}
 
 	// Try to read the file at the discovered root
-	manifestPath := filepath.Join(rootPath, fileutil.ManifestFileName)
-
-	// G304: The path is constructed from user input but sanitized via filepath.Join/Abs.
-	// Reading the manifest file from the target directory is the intended behavior of this CLI tool.
-	//nolint:gosec // Intended file read
-	data, err := os.ReadFile(manifestPath)
+	data, err := fileutil.SafeReadFile(rootPath, fileutil.ManifestFileName)
+	manifestPath, _ := fileutil.SafePath(rootPath, fileutil.ManifestFileName)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// File doesn't exist, return a new one
@@ -162,7 +158,10 @@ func checkManifestConflict(manifestPath string) error {
 // It writes to a temporary file first, syncs, then renames to ensure data integrity.
 // Implements optimistic locking: detects if file was modified by another process.
 func Save(m *types.Manifest, rootPath string) (err error) {
-	finalPath := filepath.Join(rootPath, fileutil.ManifestFileName)
+	finalPath, err := fileutil.SafePath(rootPath, fileutil.ManifestFileName)
+	if err != nil {
+		return fmt.Errorf("invalid manifest path: %w", err)
+	}
 	tempPath := finalPath + ".tmp"
 
 	// Conflict detection: Check if file has been modified by another process
@@ -171,10 +170,7 @@ func Save(m *types.Manifest, rootPath string) (err error) {
 	}
 
 	// Create temp file using PrivateFilePerms (0600)
-	// G304: The path is constructed from user input but sanitized.
-	// Creating the temp manifest file in the target directory is intended behavior.
-	//nolint:gosec // Intended file creation
-	f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileutil.PrivateFilePerms)
+	f, err := fileutil.SafeOpenFile(rootPath, fileutil.ManifestFileName+".tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileutil.PrivateFilePerms)
 	if err != nil {
 		return fmt.Errorf("failed to create temp manifest: %w", err)
 	}

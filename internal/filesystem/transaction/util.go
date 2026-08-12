@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"scbake/internal/util/fileutil"
 )
 
 // copyFile copies a file from src to dst, preserving the specified mode.
@@ -16,7 +17,9 @@ func copyFile(src, dst string, mode os.FileMode) (err error) {
 	src = filepath.Clean(src)
 	dst = filepath.Clean(dst)
 
-	sourceFile, err := os.Open(src) // #nosec G304 -- path validated by Manager.Track
+	dir := filepath.Dir(src)
+	base := filepath.Base(src)
+	sourceFile, err := fileutil.SafeOpenFile(dir, base, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
@@ -27,8 +30,9 @@ func copyFile(src, dst string, mode os.FileMode) (err error) {
 	}()
 
 	// Create destination with the original mode
-	// #nosec G304 -- Path validated by Manager.Track
-	destFile, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_TRUNC, mode)
+	dstDir := filepath.Dir(dst)
+	dstBase := filepath.Base(dst)
+	destFile, err := fileutil.SafeOpenFile(dstDir, dstBase, os.O_RDWR|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}

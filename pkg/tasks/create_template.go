@@ -102,8 +102,7 @@ func checkReconciliation(absFinalPath string, outputRelPath string, newContentHa
 	}
 
 	// Read existing file
-	//nolint:gosec // Path is canonicalized
-	existingContent, err := os.ReadFile(absFinalPath)
+	existingContent, err := fileutil.SafeReadFile(tc.TargetPath, outputRelPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return absFinalPath, nil // Safe to write, file doesn't exist
@@ -228,9 +227,10 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 		}
 	}
 
-	// 6. Create the output file
-	//nolint:gosec
-	f, err := os.OpenFile(writePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileutil.FilePerms)
+	// 6. Write the output file
+	dir := filepath.Dir(writePath)
+	base := filepath.Base(writePath)
+	f, err := fileutil.SafeOpenFile(dir, base, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileutil.FilePerms)
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", writePath, err)
 	}

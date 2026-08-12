@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"scbake/internal/util/fileutil"
 	"strings"
 	"testing"
 )
@@ -18,16 +19,16 @@ func createTarGz(files map[string]string) []byte {
 	tw := tar.NewWriter(gz)
 
 	for name, content := range files {
-		tw.WriteHeader(&tar.Header{
+		_ = tw.WriteHeader(&tar.Header{
 			Name: name,
 			Size: int64(len(content)),
 			Mode: 0644,
 		})
-		tw.Write([]byte(content))
+		_, _ = tw.Write([]byte(content))
 	}
 
-	tw.Close()
-	gz.Close()
+	_ = tw.Close()
+	_ = gz.Close()
 	return buf.Bytes()
 }
 
@@ -43,7 +44,7 @@ func TestRegistryPullEndToEnd(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".tar.gz") {
-			w.Write(archive)
+			_, _ = w.Write(archive)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -76,7 +77,7 @@ func TestRegistryPullEndToEnd(t *testing.T) {
 		t.Fatalf("scbake new: %v\n%s", err, out)
 	}
 
-	content, err := os.ReadFile(filepath.Join(projectPath, ".editorconfig"))
+	content, err := fileutil.SafeReadFile(projectPath, ".editorconfig")
 	if err != nil {
 		t.Fatalf(".editorconfig not created: %v", err)
 	}
@@ -97,7 +98,7 @@ func TestRegistryPull_WithVersion(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".tar.gz") {
-			w.Write(archive)
+			_, _ = w.Write(archive)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -125,7 +126,7 @@ func TestRegistryPull_WithVersion(t *testing.T) {
 		t.Fatalf("scbake new: %v\n%s", err, out)
 	}
 
-	content, err := os.ReadFile(filepath.Join(projectPath, "Makefile"))
+	content, err := fileutil.SafeReadFile(projectPath, "Makefile")
 	if err != nil {
 		t.Fatalf("Makefile not created: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestRegistryPull_WithSubdirectory(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".tar.gz") {
-			w.Write(archive)
+			_, _ = w.Write(archive)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -179,7 +180,7 @@ func TestRegistryPull_WithSubdirectory(t *testing.T) {
 		t.Fatalf("scbake new: %v\n%s", err, out)
 	}
 
-	content, err := os.ReadFile(filepath.Join(projectPath, ".editorconfig"))
+	content, err := fileutil.SafeReadFile(projectPath, ".editorconfig")
 	if err != nil {
 		t.Fatalf(".editorconfig not created: %v", err)
 	}

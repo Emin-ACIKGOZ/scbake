@@ -294,3 +294,39 @@ func TestValidateTemplateCache_Empty(t *testing.T) {
 		t.Error("expected error for empty cache directory")
 	}
 }
+
+func TestExtractTarGz_DecompressionBombLimiter(t *testing.T) {
+	destDir := t.TempDir()
+
+	// Construct an oversized payload (> maxArchiveBytes)
+	oversizedBytes := int64(maxArchiveBytes) + 1024
+	payload := bytes.Repeat([]byte("A"), int(oversizedBytes))
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+
+	hdr := &tar.Header{
+		Name: "large_file.txt",
+		Size: oversizedBytes,
+		Mode: 0644,
+	}
+	_ = tw.WriteHeader(hdr)
+	_, _ = tw.Write(payload)
+	_ = tw.Close()
+	_ = gz.Close()
+
+	// Extract archive
+	_ = extractTarGz(bytes.NewReader(buf.Bytes()), destDir)
+
+	// Verify extracted file size on disk is capped at maxArchiveBytes
+	extractedPath := filepath.Join(destDir, "large_file.txt")
+	info, err := os.Stat(extractedPath)
+	if err != nil {
+		t.Fatalf("failed to stat extracted file: %v", err)
+	}
+
+	if info.Size() > int64(maxArchiveBytes) {
+		t.Errorf("decompression limiter failed: extracted size %d exceeds maxArchiveBytes %d", info.Size(), maxArchiveBytes)
+	}
+}
