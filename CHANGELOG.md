@@ -16,6 +16,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.1] - 2026-08-12
+
+**Transaction finalization fixed; security hardening consolidated into central path helpers; internal refactors.**
+
+### Fixed
+
+- **Transaction Commit finalization** — `Commit` now properly finalizes transactions that produced no backups, instead of leaving them in an unfinished state
+- **CI** — golangci-lint pinned to v2.11.4
+
+### Security
+
+- **Central `fileutil.SafePath` helpers** — path validation consolidated into reusable helpers, resolving G304/G110 lint findings
+
+### Changed
+
+- **Refactors** — `tasks.BuildTemplateTasks` factory deduplicates handler boilerplate; `WriteManagedFile` and `ExtractTarGz` centralize file creation/extraction; `runNew` and `RunApply` modularized into step helpers; `parseSetFlags` uses `strings.SplitN`; test helpers consolidated into `internal/testutil`
+
+---
+
 ## [0.5.0] - 2026-08-10
 
 **Hardened path handling and structural XML insertion; monorepo workflows documented and verified.**
