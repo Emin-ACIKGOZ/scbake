@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"scbake/internal/core"
+	"scbake/internal/types"
 	"scbake/internal/ui"
 	"scbake/internal/util/fileutil"
 
@@ -53,49 +54,14 @@ var newCmd = &cobra.Command{
 }
 
 // runNew coordinates the project directory setup and delegates template application to the core engine.
-//
-//nolint:cyclop // Sequential setup steps (mkdir, chdir, bootstrap) are inherently linear.
 func runNew(projectName string, dirCreated *bool) error {
 	reporter := ui.NewReporter(newCmdTotalSteps, dryRun)
 
-	// Capture original working directory before any changes.
-	cwd, err := os.Getwd()
+	restoreWD, err := bootstrapProjectDir(projectName, dryRun, reporter, dirCreated)
 	if err != nil {
-		return fmt.Errorf("failed to get cwd: %w", err)
+		return err
 	}
-
-	// Verify target directory availability
-	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
-		return fmt.Errorf("directory '%s' already exists", projectName)
-	}
-
-	// Initialize project directory
-	reporter.Step("📁", "Creating directory: "+projectName)
-	if !dryRun {
-		if err := os.Mkdir(projectName, fileutil.DirPerms); err != nil {
-			return err
-		}
-		*dirCreated = true
-	}
-
-	// Relocate to target directory for atomic scaffolding
-	if !dryRun {
-		if err := os.Chdir(projectName); err != nil {
-			return err
-		}
-
-		// Defer a function to return to the original CWD
-		defer func() {
-			_ = os.Chdir(cwd)
-		}()
-	}
-
-	// Bootstrap manifest for project root discovery
-	if !dryRun {
-		if err := os.WriteFile(fileutil.ManifestFileName, []byte(""), fileutil.PrivateFilePerms); err != nil {
-			return fmt.Errorf("failed to bootstrap manifest: %w", err)
-		}
-	}
+	defer restoreWD()
 
 	// Parse --set key=value pairs
 	setVars, err := parseSetFlags(newSetFlag)
@@ -127,6 +93,39 @@ func runNew(projectName string, dirCreated *bool) error {
 	// Finalize output
 	reporter.Step("✨", "Finalizing project...")
 	return nil
+}
+
+// bootstrapProjectDir creates the project directory, changes working directory, and writes an initial manifest.
+// Returns a cleanup closure that restores the original working directory upon completion.
+func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporter, dirCreated *bool) (func(), error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cwd: %w", err)
+	}
+
+	restoreWD := func() { _ = os.Chdir(cwd) }
+
+	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
+		return nil, fmt.Errorf("directory '%s' already exists", projectName)
+	}
+
+	reporter.Step("📁", "Creating directory: "+projectName)
+	if !dryRun {
+		if err := os.Mkdir(projectName, fileutil.DirPerms); err != nil {
+			return nil, err
+		}
+		*dirCreated = true
+
+		if err := os.Chdir(projectName); err != nil {
+			return nil, err
+		}
+
+		if err := os.WriteFile(fileutil.ManifestFileName, []byte(""), fileutil.PrivateFilePerms); err != nil {
+			return restoreWD, fmt.Errorf("failed to bootstrap manifest: %w", err)
+		}
+	}
+
+	return restoreWD, nil
 }
 
 // parseSetFlags converts --set key=value entries into a map.
