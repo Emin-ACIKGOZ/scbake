@@ -10,6 +10,7 @@ import (
 	"scbake/internal/types"
 	"scbake/internal/ui"
 	"scbake/internal/util/fileutil"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -128,27 +129,19 @@ func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporte
 	return restoreWD, nil
 }
 
+const maxKeyValueParts = 2
+
 // parseSetFlags converts --set key=value entries into a map.
 func parseSetFlags(flags []string) (map[string]string, error) {
 	setVars := make(map[string]string, len(flags))
 	for _, kv := range flags {
-		parts := splitOnce(kv, "=")
-		if len(parts) != 2 || parts[0] == "" {
+		parts := strings.SplitN(kv, "=", maxKeyValueParts)
+		if len(parts) != maxKeyValueParts || parts[0] == "" {
 			return nil, fmt.Errorf("invalid --set value %q: expected key=value", kv)
 		}
 		setVars[parts[0]] = parts[1]
 	}
 	return setVars, nil
-}
-
-// splitOnce splits a string on the first occurrence of sep.
-func splitOnce(s, sep string) []string {
-	for i := 0; i < len(s); i++ {
-		if s[i:i+1] == sep {
-			return []string{s[:i], s[i+1:]}
-		}
-	}
-	return []string{s}
 }
 
 func init() {
