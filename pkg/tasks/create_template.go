@@ -172,43 +172,17 @@ func checkFilePreconditions(output, target string) (string, error) {
 	return absPath, nil
 }
 
-// Execute performs the template creation task.
-//
-//nolint:cyclop // Complex precondition checks and file ops are linear
-func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
-	// 1. Read and parse the template using the override-aware helper
-	tplContent, err := ReadTemplate(t.TemplateFS, t.TemplatePath, tc.TemplateDir, tc.RegistryCacheDir)
-	if err != nil {
-		return fmt.Errorf("failed to read template %s: %w", t.TemplatePath, err)
-	}
+// WriteManagedFile performs state-aware reconciliation, transaction tracking,
+// safe file writing, and manifest state updating for a generated file.
+func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte, perm os.FileMode) error {
+	newHash := HashContent(content)
 
-	tpl, err := template.New(t.TemplatePath).Funcs(templateFuncs).Parse(string(tplContent))
-	if err != nil {
-		return fmt.Errorf("failed to parse template %s: %w", t.TemplatePath, err)
-	}
-
-	// 2. Render template to memory buffer first (to calculate hash)
-	data := interface{}(tc.Manifest)
-	if t.TemplateData != nil {
-		data = t.TemplateData
-	}
-
-	var buf bytes.Buffer
-	if err = tpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to render template %s: %w", t.TemplatePath, err)
-	}
-
-	renderedBytes := buf.Bytes()
-	newHash := HashContent(renderedBytes)
-
-	// 3. Determine and check the final output path
-	absPath, err := checkFilePreconditions(t.OutputPath, tc.TargetPath)
+	absPath, err := checkFilePreconditions(outputRelPath, tc.TargetPath)
 	if err != nil {
 		return err
 	}
 
-	// 4. State-Aware Reconciliation
-	writePath, err := checkReconciliation(absPath, t.OutputPath, newHash, tc)
+	writePath, err := checkReconciliation(absPath, outputRelPath, newHash, tc)
 	if err != nil {
 		return err // Conflict strategy is 'fail'
 	}
@@ -220,38 +194,55 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) (err error) {
 		return nil
 	}
 
-	// 5. Safety Tracking: Register the file with the transaction manager.
 	if tc.Tx != nil {
 		if err := tc.Tx.Track(writePath); err != nil {
 			return fmt.Errorf("failed to track file %s: %w", writePath, err)
 		}
 	}
 
-	// 6. Write the output file
 	dir := filepath.Dir(writePath)
 	base := filepath.Base(writePath)
-	f, err := fileutil.SafeOpenFile(dir, base, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileutil.FilePerms)
+	f, err := fileutil.SafeOpenFile(dir, base, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", writePath, err)
 	}
+	defer func() { _ = f.Close() }()
 
-	defer func() {
-		if closeErr := f.Close(); err == nil {
-			err = closeErr
-		}
-	}()
-
-	// 7. Write the rendered buffer
-	if _, err = f.Write(renderedBytes); err != nil {
+	if _, err = f.Write(content); err != nil {
 		return fmt.Errorf("failed to write to %s: %w", writePath, err)
 	}
 
-	// 8. Record State
 	if tc.Manifest.ManagedFiles == nil {
 		tc.Manifest.ManagedFiles = make(map[string]string)
 	}
-	// Always record the hash against the original output path, even if we wrote an artifact
-	tc.Manifest.ManagedFiles[t.OutputPath] = newHash
-
+	tc.Manifest.ManagedFiles[outputRelPath] = newHash
 	return nil
+}
+
+// Execute performs the template creation task.
+func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
+	// 1. Read and parse the template using the override-aware helper
+	tplContent, err := ReadTemplate(t.TemplateFS, t.TemplatePath, tc.TemplateDir, tc.RegistryCacheDir)
+	if err != nil {
+		return fmt.Errorf("failed to read template %s: %w", t.TemplatePath, err)
+	}
+
+	tpl, err := template.New(t.TemplatePath).Funcs(templateFuncs).Parse(string(tplContent))
+	if err != nil {
+		return fmt.Errorf("failed to parse template %s: %w", t.TemplatePath, err)
+	}
+
+	// 2. Render template to memory buffer first
+	data := interface{}(tc.Manifest)
+	if t.TemplateData != nil {
+		data = t.TemplateData
+	}
+
+	var buf bytes.Buffer
+	if err = tpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to render template %s: %w", t.TemplatePath, err)
+	}
+
+	// 3. Delegate state reconciliation, transaction tracking, and writing to WriteManagedFile
+	return WriteManagedFile(tc, t.OutputPath, buf.Bytes(), fileutil.FilePerms)
 }

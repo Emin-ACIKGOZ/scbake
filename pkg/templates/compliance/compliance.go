@@ -85,8 +85,6 @@ func (t *LicenseTask) Description() string { return "Generate LICENSE file" }
 func (t *LicenseTask) Priority() int { return t.TaskPrio }
 
 // Execute performs the license generation task.
-//
-//nolint:cyclop // Complex string replacement and file operations
 func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	if tc.Manifest.Metadata == nil {
 		return errors.New("missing compliance metadata (license and copyright_holder) in manifest")
@@ -122,63 +120,6 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	)
 	text = replacer.Replace(text)
 
-	// 3. Manual write with State-Aware Reconciliation
-	if tc.DryRun {
-		return nil
-	}
-
-	newHash := tasks.HashContent([]byte(text))
-
-	writePath := "LICENSE"
-	if !tc.Force {
-		existingContent, err := fileutil.SafeReadFile(tc.TargetPath, "LICENSE")
-		if err == nil {
-			existingHash := tasks.HashContent(existingContent)
-			var originalHash string
-			if tc.Manifest.ManagedFiles != nil {
-				originalHash = tc.Manifest.ManagedFiles["LICENSE"]
-			}
-
-			if originalHash == "" || (existingHash != originalHash && existingHash != newHash) {
-				// Drift detected
-				switch tc.ConflictStrategy {
-				case "overwrite":
-					writePath = "LICENSE"
-				case "artifact":
-					fmt.Printf("⚠️  Conflict in LICENSE (user modifications detected). Writing new template to artifact.\n")
-					writePath = "LICENSE.scbake-new"
-				case "keep-local":
-					fmt.Printf("⚠️  Conflict in LICENSE (user modifications detected). Skipping update (--strategy=keep-local).\n")
-					return nil
-				case "fail":
-					fallthrough
-				default:
-					return errors.New("file LICENSE has manual modifications (drift detected). Use --conflict-strategy to resolve")
-				}
-			}
-		}
-	}
-
-	absWritePath, err := fileutil.SafePath(tc.TargetPath, writePath)
-	if err != nil {
-		return fmt.Errorf("invalid write path: %w", err)
-	}
-
-	if tc.Tx != nil {
-		if err := tc.Tx.Track(absWritePath); err != nil {
-			return fmt.Errorf("failed to track LICENSE file: %w", err)
-		}
-	}
-
-	if err := fileutil.SafeWriteFile(tc.TargetPath, writePath, []byte(text), fileutil.FilePerms); err != nil {
-		return fmt.Errorf("failed to write LICENSE: %w", err)
-	}
-
-	// Record State
-	if tc.Manifest.ManagedFiles == nil {
-		tc.Manifest.ManagedFiles = make(map[string]string)
-	}
-	tc.Manifest.ManagedFiles["LICENSE"] = newHash
-
-	return nil
+	// 3. Write license file with state-aware reconciliation and transaction tracking
+	return tasks.WriteManagedFile(tc, "LICENSE", []byte(text), fileutil.FilePerms)
 }
