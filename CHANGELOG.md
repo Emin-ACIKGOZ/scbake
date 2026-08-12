@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.2] - 2026-08-12
+
+**Conflict warnings routed to stderr; stdout kept clean for piped consumers.**
+
+### Fixed
+
+- **Conflict warnings to stderr** — drift warnings in `CreateTemplateTask` (`--conflict-strategy=artifact`/`keep-local`) now write to `stderr` like all other diagnostics, so piped stdout stays a clean result stream
+
+---
+
 ## [0.5.1] - 2026-08-12
 
 **Transaction finalization fixed; security hardening consolidated into central path helpers; internal refactors.**
