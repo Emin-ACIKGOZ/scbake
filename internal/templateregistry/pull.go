@@ -1,8 +1,6 @@
 package templateregistry
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -193,56 +191,6 @@ func validateTemplateCache(dir string) error {
 	return errors.New("template archive is empty or has no files")
 }
 
-//nolint:cyclop // Archive extraction requires multiple sequential steps
 func extractTarGz(r io.Reader, destDir string) error {
-	gzr, err := gzip.NewReader(r)
-	if err != nil {
-		return fmt.Errorf("decompressing archive: %w", err)
-	}
-	defer func() {
-		_ = gzr.Close()
-	}()
-
-	tr := tar.NewReader(gzr)
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("reading archive: %w", err)
-		}
-
-		name := filepath.Clean(header.Name)
-		if strings.Contains(name, "..") || filepath.IsAbs(name) {
-			return fmt.Errorf("path traversal detected in archive: %s", header.Name)
-		}
-
-		target := filepath.Join(destDir, name)
-		if !strings.HasPrefix(target, filepath.Clean(destDir)+string(filepath.Separator)) {
-			return fmt.Errorf("path traversal detected: %s", header.Name)
-		}
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(target, cacheDirPerm); err != nil {
-				return fmt.Errorf("creating directory %s: %w", target, err)
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), cacheDirPerm); err != nil {
-				return fmt.Errorf("creating directory for %s: %w", target, err)
-			}
-			f, err := fileutil.SafeOpenFile(destDir, name, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, cacheFilePerm)
-			if err != nil {
-				return fmt.Errorf("creating file %s: %w", target, err)
-			}
-			if _, err := io.Copy(f, io.LimitReader(tr, maxArchiveBytes)); err != nil {
-				_ = f.Close()
-				return fmt.Errorf("writing file %s: %w", target, err)
-			}
-			_ = f.Close()
-		}
-	}
-
-	return nil
+	return fileutil.ExtractTarGz(r, destDir, maxArchiveBytes)
 }
