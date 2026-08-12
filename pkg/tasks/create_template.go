@@ -142,10 +142,10 @@ func handleConflict(absFinalPath, outputRelPath, strategy string) (string, error
 	case "overwrite":
 		return absFinalPath, nil
 	case "artifact":
-		fmt.Printf("⚠️  Conflict in %s (user modifications detected). Writing new template to artifact.\n", outputRelPath)
+		fmt.Fprintf(os.Stderr, "⚠️  Conflict in %s (user modifications detected). Writing new template to artifact.\n", outputRelPath)
 		return absFinalPath + ".scbake-new", nil
 	case "keep-local":
-		fmt.Printf("⚠️  Conflict in %s (user modifications detected). Skipping update (--strategy=keep-local).\n", outputRelPath)
+		fmt.Fprintf(os.Stderr, "⚠️  Conflict in %s (user modifications detected). Skipping update (--strategy=keep-local).\n", outputRelPath)
 		return "", nil // Signal to skip
 	case "fail":
 		fallthrough
