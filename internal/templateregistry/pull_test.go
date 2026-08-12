@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"scbake/internal/testutil"
 	"testing"
 )
 
@@ -16,29 +17,9 @@ const (
 	testHandler    = "func handler() {}"
 )
 
-func createTarGz(files map[string]string) []byte {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-
-	for name, content := range files {
-		hdr := &tar.Header{
-			Name: name,
-			Size: int64(len(content)),
-			Mode: 0644,
-		}
-		_ = tw.WriteHeader(hdr)
-		_, _ = tw.Write([]byte(content))
-	}
-
-	_ = tw.Close()
-	_ = gz.Close()
-	return buf.Bytes()
-}
-
 func TestExtractTarGz_Basic(t *testing.T) {
 	destDir := t.TempDir()
-	archive := createTarGz(map[string]string{
+	archive := testutil.CreateTarGz(map[string]string{
 		"templates/main.go.tpl": testTplContent,
 		"templates/handler.tpl": testHandler,
 	})
@@ -68,7 +49,7 @@ func TestExtractTarGz_Basic(t *testing.T) {
 
 func TestExtractTarGz_DirectoryStructure(t *testing.T) {
 	destDir := t.TempDir()
-	archive := createTarGz(map[string]string{
+	archive := testutil.CreateTarGz(map[string]string{
 		"templates/nested/deep/file.tpl": "deep content",
 	})
 
@@ -103,7 +84,7 @@ func TestExtractTarGz_PathTraversal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			archive := createTarGz(map[string]string{
+			archive := testutil.CreateTarGz(map[string]string{
 				tt.filePath: "evil",
 			})
 
@@ -116,7 +97,7 @@ func TestExtractTarGz_PathTraversal(t *testing.T) {
 }
 
 func TestPullFromURL_Subdirectory(t *testing.T) {
-	archive := createTarGz(map[string]string{
+	archive := testutil.CreateTarGz(map[string]string{
 		"template/main.go.tpl":  testTplContent,
 		"template/handler.go":   "func handler() {}",
 		".github/workflows.yml": "ci config",
@@ -152,7 +133,7 @@ func TestPullFromURL_Subdirectory(t *testing.T) {
 
 func TestPullFromURL_SubdirectoryPromotion(t *testing.T) {
 	// Archive with content in a "template/" subdirectory
-	archive := createTarGz(map[string]string{
+	archive := testutil.CreateTarGz(map[string]string{
 		"template/main.go.tpl":  testTplContent,
 		"template/handler.go":   "func handler() {}",
 		".github/workflows.yml": "ci config",
@@ -203,7 +184,7 @@ func TestPullFromURL_SubdirectoryPromotion(t *testing.T) {
 }
 
 func TestPullFromURL_WithAuth(t *testing.T) {
-	archive := createTarGz(map[string]string{
+	archive := testutil.CreateTarGz(map[string]string{
 		"main.tpl": "authed content",
 	})
 
@@ -238,7 +219,7 @@ func TestPullFromURL_CachedSkipRedownload(t *testing.T) {
 	callCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		callCount++
-		_, _ = w.Write(createTarGz(map[string]string{"f.tpl": "content"}))
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"f.tpl": "content"}))
 	}))
 	defer srv.Close()
 

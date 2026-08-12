@@ -1,36 +1,15 @@
 package integration
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"scbake/internal/testutil"
 	"scbake/internal/util/fileutil"
 	"strings"
 	"testing"
 )
-
-func createTarGz(files map[string]string) []byte {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-
-	for name, content := range files {
-		_ = tw.WriteHeader(&tar.Header{
-			Name: name,
-			Size: int64(len(content)),
-			Mode: 0644,
-		})
-		_, _ = tw.Write([]byte(content))
-	}
-
-	_ = tw.Close()
-	_ = gz.Close()
-	return buf.Bytes()
-}
 
 func TestRegistryPullEndToEnd(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -38,7 +17,7 @@ func TestRegistryPullEndToEnd(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(origWd) })
 	_ = os.Chdir(tmpDir)
 
-	archive := createTarGz(map[string]string{
+	archive := testutil.CreateTarGz(map[string]string{
 		".editorconfig.tpl": "root = true\n[*]\nindent_style = registry_override\n",
 	})
 
@@ -92,7 +71,7 @@ func TestRegistryPull_WithVersion(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(origWd) })
 	_ = os.Chdir(tmpDir)
 
-	archive := createTarGz(map[string]string{
+	archive := testutil.CreateTarGz(map[string]string{
 		"makefile.tpl": "REGISTRY_OVERRIDE_MAKEFILE:\n\t@echo overridden\n",
 	})
 
@@ -141,7 +120,7 @@ func TestRegistryPull_WithSubdirectory(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(origWd) })
 	_ = os.Chdir(tmpDir)
 
-	archive := createTarGz(map[string]string{
+	archive := testutil.CreateTarGz(map[string]string{
 		"scbake-template/.editorconfig.tpl": "root = true\n[*]\nindent_style = subdir_override\n",
 	})
 

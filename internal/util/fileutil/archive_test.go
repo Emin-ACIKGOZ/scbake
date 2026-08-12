@@ -4,38 +4,17 @@
 package fileutil
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"os"
 	"path/filepath"
+	"scbake/internal/testutil"
 	"strings"
 	"testing"
 )
 
-func createTestTarGz(files map[string]string) []byte {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-
-	for name, content := range files {
-		hdr := &tar.Header{
-			Name: name,
-			Size: int64(len(content)),
-			Mode: 0644,
-		}
-		_ = tw.WriteHeader(hdr)
-		_, _ = tw.Write([]byte(content))
-	}
-
-	_ = tw.Close()
-	_ = gz.Close()
-	return buf.Bytes()
-}
-
 func TestExtractTarGz_Basic(t *testing.T) {
 	destDir := t.TempDir()
-	archive := createTestTarGz(map[string]string{
+	archive := testutil.CreateTarGz(map[string]string{
 		"templates/main.go.tpl": "package main",
 		"templates/handler.tpl": "func handler() {}",
 	})
@@ -55,7 +34,7 @@ func TestExtractTarGz_Basic(t *testing.T) {
 
 func TestExtractTarGz_PathTraversalRejection(t *testing.T) {
 	destDir := t.TempDir()
-	archive := createTestTarGz(map[string]string{
+	archive := testutil.CreateTarGz(map[string]string{
 		"../escape.txt": "secret data",
 	})
 
@@ -73,7 +52,7 @@ func TestExtractTarGz_DecompressionBombProtection(t *testing.T) {
 	const maxLimit = 100
 
 	oversizedPayload := bytes.Repeat([]byte("A"), 500)
-	archive := createTestTarGz(map[string]string{
+	archive := testutil.CreateTarGz(map[string]string{
 		"large.txt": string(oversizedPayload),
 	})
 
