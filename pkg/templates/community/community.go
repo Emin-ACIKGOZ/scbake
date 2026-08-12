@@ -6,7 +6,6 @@ package community
 
 import (
 	"embed"
-	"fmt"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
@@ -19,38 +18,10 @@ type Handler struct{}
 
 // GetTasks returns the plan to create community governance files.
 func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
-	var plan []types.Task
-
-	// Initialize sequence for the Community/Governance band (1000-1099 range, reusing PrioConfigUniversal)
-	seq, err := types.NewPrioritySequence(types.PrioConfigUniversal, types.MaxConfigUniversal)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
-	}
-
-	files := []struct {
-		tpl  string
-		dest string
-		desc string
-	}{
-		{"templates/CONTRIBUTING.md.tpl", "CONTRIBUTING.md", "Create CONTRIBUTING.md"},
-		{"templates/CODE_OF_CONDUCT.md.tpl", "CODE_OF_CONDUCT.md", "Create CODE_OF_CONDUCT.md"},
-		{"templates/SUPPORT.md.tpl", "SUPPORT.md", "Create SUPPORT.md"},
-		{"templates/GOVERNANCE.md.tpl", "GOVERNANCE.md", "Create GOVERNANCE.md"},
-	}
-
-	for _, f := range files {
-		p, err := seq.Next()
-		if err != nil {
-			return nil, err
-		}
-		plan = append(plan, &tasks.CreateTemplateTask{
-			TemplateFS:   templates,
-			TemplatePath: f.tpl,
-			OutputPath:   f.dest,
-			Desc:         f.desc,
-			TaskPrio:     int(p),
-		})
-	}
-
-	return plan, nil
+	return tasks.BuildTemplateTasks(templates, types.PrioConfigUniversal, types.MaxConfigUniversal,
+		tasks.TemplateFileSpec{TemplatePath: "templates/CONTRIBUTING.md.tpl", OutputPath: "CONTRIBUTING.md", Desc: "Create CONTRIBUTING.md"},
+		tasks.TemplateFileSpec{TemplatePath: "templates/CODE_OF_CONDUCT.md.tpl", OutputPath: "CODE_OF_CONDUCT.md", Desc: "Create CODE_OF_CONDUCT.md"},
+		tasks.TemplateFileSpec{TemplatePath: "templates/SUPPORT.md.tpl", OutputPath: "SUPPORT.md", Desc: "Create SUPPORT.md"},
+		tasks.TemplateFileSpec{TemplatePath: "templates/GOVERNANCE.md.tpl", OutputPath: "GOVERNANCE.md", Desc: "Create GOVERNANCE.md"},
+	)
 }

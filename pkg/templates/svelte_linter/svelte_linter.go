@@ -18,32 +18,25 @@ type Handler struct{}
 
 // GetTasks returns the plan to add ESLint configuration and dependencies for Svelte.
 func (h *Handler) GetTasks(_ string, _, _ string) ([]types.Task, error) {
-	var plan []types.Task
-
-	// Initialize sequence for the Linter band (1200-1399)
 	seq, err := types.NewPrioritySequence(types.PrioLinter, types.MaxLinter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
 	}
 
-	// Task 1: Create the ESLint config file (eslint.config.js)
-	p, err := seq.Next()
-	if err != nil {
-		return nil, err
-	}
+	p1, _ := seq.Next()
+	p2, _ := seq.Next()
+	p3, _ := seq.Next()
+
+	var plan []types.Task
 	plan = append(plan, &tasks.CreateTemplateTask{
 		TemplateFS:   templates,
 		TemplatePath: "eslint.config.js.tpl",
 		OutputPath:   "eslint.config.js",
 		Desc:         "Create Svelte ESLint 9 configuration",
-		TaskPrio:     int(p), // Now 1200
+		TaskPrio:     int(p1),
 	})
 
 	// Task 2: Install necessary ESLint dependencies
-	p, err = seq.Next()
-	if err != nil {
-		return nil, err
-	}
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd: "npm",
 		Args: []string{
@@ -57,15 +50,11 @@ func (h *Handler) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 			"eslint-config-prettier",
 		},
 		Desc:        "Install Svelte ESLint dependencies",
-		TaskPrio:    int(p), // Now 1201
+		TaskPrio:    int(p2),
 		RunInTarget: true,
 	})
 
 	// Task 3: Add robust 'lint' and 'lint:fix' scripts to package.json
-	p, err = seq.Next()
-	if err != nil {
-		return nil, err
-	}
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd: "npm",
 		Args: []string{
@@ -75,7 +64,7 @@ func (h *Handler) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 			"scripts.lint:fix=npx eslint . --fix",
 		},
 		Desc:        "Add standard lint scripts to package.json",
-		TaskPrio:    int(p), // Now 1202
+		TaskPrio:    int(p3),
 		RunInTarget: true,
 	})
 

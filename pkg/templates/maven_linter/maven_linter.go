@@ -5,7 +5,6 @@ package mavenlinter
 
 import (
 	"embed"
-	"fmt"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
@@ -18,34 +17,19 @@ type Handler struct{}
 
 // GetTasks returns the plan to create Checkstyle config and inject the plugin into pom.xml.
 func (h *Handler) GetTasks(_ string, templateDir string, registryCacheDir string) ([]types.Task, error) {
-	var plan []types.Task
-
-	// Initialize sequence for the Linter band (1200-1399)
-	seq, err := types.NewPrioritySequence(types.PrioLinter, types.MaxLinter)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
-	}
-
-	// Task 1: Create the Checkstyle config file
-	p, err := seq.Next()
+	// Task 1: Create the Checkstyle config file using BuildTemplateTasks
+	plan, err := tasks.BuildTemplateTasks(templates, types.PrioLinter, types.MaxLinter,
+		tasks.TemplateFileSpec{
+			TemplatePath: "checkstyle.xml.tpl",
+			OutputPath:   "checkstyle.xml",
+			Desc:         "Create Maven Checkstyle configuration",
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
-	plan = append(plan, &tasks.CreateTemplateTask{
-		TemplateFS:   templates,
-		TemplatePath: "checkstyle.xml.tpl",
-		OutputPath:   "checkstyle.xml",
-		Desc:         "Create Maven Checkstyle configuration",
-		TaskPrio:     int(p), // Now 1200
-	})
 
 	// Task 2: Inject the Checkstyle plugin into the existing pom.xml
-	p, err = seq.Next()
-	if err != nil {
-		return nil, err
-	}
-
-	// Read the plugin snippet to inject
 	pluginSnippet, err := tasks.ReadTemplate(templates, "pom_snippet.xml.tpl", templateDir, registryCacheDir)
 	if err != nil {
 		return nil, err
@@ -56,7 +40,7 @@ func (h *Handler) GetTasks(_ string, templateDir string, registryCacheDir string
 		ElementPath: "/project/build/plugins",
 		XMLContent:  string(pluginSnippet),
 		Desc:        "Inject Maven Checkstyle plugin into pom.xml",
-		TaskPrio:    int(p), // Now 1201
+		TaskPrio:    int(types.PrioLinter + 1),
 	})
 
 	return plan, nil

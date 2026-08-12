@@ -5,7 +5,6 @@ package cighub
 
 import (
 	"embed"
-	"fmt"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
@@ -24,28 +23,11 @@ func (h *Handler) SchemaPath() string { return "schema.json" }
 
 // GetTasks returns the plan to create the GitHub Actions workflow file.
 func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
-	var plan []types.Task
-
-	// Initialize sequence for the CI band (1100-1199)
-	seq, err := types.NewPrioritySequence(types.PrioCI, types.MaxCI)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
-	}
-
-	// This task creates the workflow file in the required GitHub location.
-	// Since no TemplateData is provided here, the template will receive the
-	// *full manifest* as its execution context, allowing conditional logic.
-	p, err := seq.Next()
-	if err != nil {
-		return nil, err
-	}
-	plan = append(plan, &tasks.CreateTemplateTask{
-		TemplateFS:   templates,
-		TemplatePath: "main.yml.tpl",
-		OutputPath:   ".github/workflows/main.yml",
-		Desc:         "Create GitHub Actions CI workflow",
-		TaskPrio:     int(p), // Now 1100
-	})
-
-	return plan, nil
+	return tasks.BuildTemplateTasks(templates, types.PrioCI, types.MaxCI,
+		tasks.TemplateFileSpec{
+			TemplatePath: "main.yml.tpl",
+			OutputPath:   ".github/workflows/main.yml",
+			Desc:         "Create GitHub Actions CI workflow",
+		},
+	)
 }

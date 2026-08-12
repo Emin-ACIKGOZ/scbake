@@ -5,7 +5,6 @@ package golinter
 
 import (
 	"embed"
-	"fmt"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
 )
@@ -18,25 +17,11 @@ type Handler struct{}
 
 // GetTasks returns the plan to create the Go linter configuration file.
 func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
-	var plan []types.Task
-
-	// Initialize sequence for the Linter band (1200-1399)
-	seq, err := types.NewPrioritySequence(types.PrioLinter, types.MaxLinter)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
-	}
-
-	p, err := seq.Next()
-	if err != nil {
-		return nil, err
-	}
-	plan = append(plan, &tasks.CreateTemplateTask{
-		TemplateFS:   templates,
-		TemplatePath: ".golangci.yml.tpl",
-		OutputPath:   ".golangci.yml",
-		Desc:         "Create Go linter configuration (.golangci.yml)",
-		TaskPrio:     int(p), // Now 1200
-	})
-
-	return plan, nil
+	return tasks.BuildTemplateTasks(templates, types.PrioLinter, types.MaxLinter,
+		tasks.TemplateFileSpec{
+			TemplatePath: ".golangci.yml.tpl",
+			OutputPath:   ".golangci.yml",
+			Desc:         "Create Go linter configuration (.golangci.yml)",
+		},
+	)
 }
