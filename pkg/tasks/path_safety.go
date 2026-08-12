@@ -5,6 +5,7 @@ package tasks
 
 import (
 	"fmt"
+	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 )
 
@@ -20,4 +21,15 @@ func resolveTaskPath(target, field, what string) (string, error) {
 		return "", fmt.Errorf("%s path %q is outside the target directory: %w", what, field, err)
 	}
 	return absPath, nil
+}
+
+// trackTaskFile registers the path with the transaction manager if transactions are active and not in dry-run mode.
+func trackTaskFile(tc types.TaskContext, absPath, relPath string) error {
+	if tc.DryRun || tc.Tx == nil {
+		return nil
+	}
+	if err := tc.Tx.Track(absPath); err != nil {
+		return fmt.Errorf("failed to track file %s: %w", relPath, err)
+	}
+	return nil
 }

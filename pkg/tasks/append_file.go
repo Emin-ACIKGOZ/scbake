@@ -21,8 +21,6 @@ type AppendFileTask struct {
 }
 
 // Execute performs the task of appending content to the file.
-//
-//nolint:cyclop // Complex file operations require linear error checks
 func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 	// Security: reject absolute or escaping paths before any filesystem access,
 	// independent of dry-run or transaction state.
@@ -35,11 +33,8 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 		return err
 	}
 
-	// Safety Tracking: Register the path for transaction management.
-	if !tc.DryRun && tc.Tx != nil {
-		if err := tc.Tx.Track(absPath); err != nil {
-			return fmt.Errorf("failed to track file %s: %w", t.FilePath, err)
-		}
+	if err := trackTaskFile(tc, absPath, t.FilePath); err != nil {
+		return err
 	}
 
 	// Check if file exists
@@ -56,18 +51,19 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 	}
 
 	// Idempotency check: Don't append if content is already present
-	if strings.Contains(string(existingContent), strings.TrimSpace(t.Content)) {
+	if strings.Contains(string(existingContent), strings.TrimSpace(t.Content)) || tc.DryRun {
 		return nil
 	}
 
-	if tc.DryRun {
-		return nil
-	}
+	return appendFileContent(tc.TargetPath, t.FilePath, existingContent, t.Content)
+}
 
-	// Append content
-	f, err := fileutil.SafeOpenFile(tc.TargetPath, t.FilePath, os.O_APPEND|os.O_WRONLY, fileutil.FilePerms)
+// appendFileContent opens a file in targetPath for appending, ensures proper trailing
+// newline padding, writes newContent, and safely closes the file.
+func appendFileContent(targetPath, relPath string, existing []byte, newContent string) (err error) {
+	f, err := fileutil.SafeOpenFile(targetPath, relPath, os.O_APPEND|os.O_WRONLY, fileutil.FilePerms)
 	if err != nil {
-		return fmt.Errorf("failed to open file %s for appending: %w", t.FilePath, err)
+		return fmt.Errorf("failed to open file %s for appending: %w", relPath, err)
 	}
 
 	// Ensure f.Close() is checked
@@ -78,14 +74,14 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 	}()
 
 	// Ensure there's a newline before appending if the file doesn't end with one
-	if len(existingContent) > 0 && existingContent[len(existingContent)-1] != '\n' {
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
 		if _, err = f.WriteString("\n"); err != nil {
-			return fmt.Errorf("failed to write newline to %s: %w", t.FilePath, err)
+			return fmt.Errorf("failed to write newline to %s: %w", relPath, err)
 		}
 	}
 
-	if _, err = f.WriteString(t.Content); err != nil {
-		return fmt.Errorf("failed to append to %s: %w", t.FilePath, err)
+	if _, err = f.WriteString(newContent); err != nil {
+		return fmt.Errorf("failed to append to %s: %w", relPath, err)
 	}
 
 	return nil
