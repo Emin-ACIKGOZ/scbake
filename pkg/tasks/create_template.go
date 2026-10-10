@@ -218,10 +218,16 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 		return fmt.Errorf("failed to write to %s: %w", writePath, err)
 	}
 
-	if tc.Manifest.ManagedFiles == nil {
-		tc.Manifest.ManagedFiles = make(map[string]string)
+	// Only record the ledger entry when we actually wrote the content to the
+	// reconciled original path. Under --conflict-strategy=artifact we write to
+	// a "<path>.scbake-new" sibling, leaving the original file untouched, so its
+	// previously recorded hash must be preserved.
+	if writePath == absPath {
+		if tc.Manifest.ManagedFiles == nil {
+			tc.Manifest.ManagedFiles = make(map[string]string)
+		}
+		tc.Manifest.ManagedFiles[outputRelPath] = newHash
 	}
-	tc.Manifest.ManagedFiles[outputRelPath] = newHash
 	return nil
 }
 

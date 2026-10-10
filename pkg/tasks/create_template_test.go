@@ -374,6 +374,119 @@ func TestWriteManagedFile_RollbackRemovesIntermediateDirs(t *testing.T) {
 	}
 }
 
+func TestWriteManagedFile_ArtifactDoesNotRecordNewHash(t *testing.T) {
+	tmpDir := t.TempDir()
+	rel := "config/app.yaml"
+
+	// scbake generates the file once and records the hash of that original file.
+	original := []byte("version: 1\n")
+	originalHash := HashContent(original)
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		ManagedFiles: make(map[string]string),
+	}
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: tmpDir,
+		Manifest:   manifest,
+	}
+	if err := WriteManagedFile(tc, rel, original, 0o644); err != nil {
+		t.Fatalf("initial WriteManagedFile() failed: %v", err)
+	}
+	if got := manifest.ManagedFiles[rel]; got != originalHash {
+		t.Fatalf("setup: ManagedFiles[%q] = %s, want %s", rel, got, originalHash)
+	}
+
+	// The user hand-edits the generated file, causing drift.
+	absPath := filepath.Join(tmpDir, rel)
+	drifted := []byte("version: 2 # hand edited\n")
+	if err := os.WriteFile(absPath, drifted, 0o644); err != nil {
+		t.Fatalf("failed to seed drift: %v", err)
+	}
+
+	// A later run wants to generate new content, but must not clobber the user's
+	// edit: the artifact strategy writes it next to the original instead.
+	newContent := []byte("version: 3\n")
+	newHash := HashContent(newContent)
+	tc.ConflictStrategy = "artifact"
+	if err := WriteManagedFile(tc, rel, newContent, 0o644); err != nil {
+		t.Fatalf("artifact WriteManagedFile() failed: %v", err)
+	}
+
+	// The artifact carries the freshly generated template.
+	artifact, err := os.ReadFile(absPath + ".scbake-new") //nolint:gosec // trusted temp dir
+	if err != nil {
+		t.Fatalf("artifact file was not created: %v", err)
+	}
+	if string(artifact) != string(newContent) {
+		t.Errorf("artifact content = %q, want %q", artifact, newContent)
+	}
+
+	// The original path is untouched.
+	onDisk, err := os.ReadFile(absPath) //nolint:gosec // trusted temp dir
+	if err != nil {
+		t.Fatalf("original file unreadable: %v", err)
+	}
+	if string(onDisk) != string(drifted) {
+		t.Errorf("original file was modified: got %q, want %q", onDisk, drifted)
+	}
+
+	// Regression (SCB-056): the ledger must keep the SHA-256 of the original
+	// file we did NOT overwrite, not the hash of the new template that was only
+	// written to the artifact.
+	if got := manifest.ManagedFiles[rel]; got != originalHash {
+		t.Errorf("ManagedFiles[%q] = %s, want original hash %s (new template hash is %s)", rel, got, originalHash, newHash)
+	}
+	if manifest.ManagedFiles[rel] == newHash {
+		t.Errorf("ManagedFiles[%q] was incorrectly overwritten with the new template hash %s", rel, newHash)
+	}
+}
+
+func TestWriteManagedFile_NormalWriteRecordsNewHash(t *testing.T) {
+	tmpDir := t.TempDir()
+	rel := "config/app.yaml"
+
+	// Seed a drifted file plus the old recorded hash so reconciliation decides
+	// to overwrite the original reconciled path.
+	oldContent := []byte("version: 1\n")
+	drifted := []byte("version: 2 # hand edited\n")
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		ManagedFiles: map[string]string{rel: HashContent(oldContent)},
+	}
+	absPath := filepath.Join(tmpDir, rel)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o750); err != nil {
+		t.Fatalf("failed to create parent dir: %v", err)
+	}
+	if err := os.WriteFile(absPath, drifted, 0o644); err != nil {
+		t.Fatalf("failed to seed drift: %v", err)
+	}
+
+	newContent := []byte("version: 3\n")
+	newHash := HashContent(newContent)
+	tc := types.TaskContext{
+		Ctx:              context.Background(),
+		TargetPath:       tmpDir,
+		Manifest:         manifest,
+		ConflictStrategy: "overwrite",
+	}
+	if err := WriteManagedFile(tc, rel, newContent, 0o644); err != nil {
+		t.Fatalf("WriteManagedFile() failed: %v", err)
+	}
+
+	// When the original path really is written, the new hash must be recorded.
+	if got := manifest.ManagedFiles[rel]; got != newHash {
+		t.Errorf("ManagedFiles[%q] = %s, want new hash %s", rel, got, newHash)
+	}
+	onDisk, err := os.ReadFile(absPath) //nolint:gosec // trusted temp dir
+	if err != nil {
+		t.Fatalf("original file unreadable: %v", err)
+	}
+	if string(onDisk) != string(newContent) {
+		t.Errorf("original file = %q, want overwritten content %q", onDisk, newContent)
+	}
+}
+
 func TestCreateTemplateTask_PathTraversal(t *testing.T) {
 	tmpDir := t.TempDir()
 
