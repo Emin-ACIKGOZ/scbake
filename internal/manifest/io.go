@@ -16,6 +16,10 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// DefaultSbakeVersion is the manifest schema version applied when a manifest
+// does not specify one (either absent or present but empty).
+const DefaultSbakeVersion = "v0.3.0"
+
 var (
 	// manifestModTimes tracks the modification time when a manifest was last loaded
 	// to detect concurrent modifications (optimistic locking)
@@ -87,7 +91,7 @@ func Load(startPath string) (*types.Manifest, string, error) {
 		if os.IsNotExist(err) {
 			// File doesn't exist, return a new one
 			m := &types.Manifest{
-				SbakeVersion: "v0.3.0", // TODO: inject this from build flags
+				SbakeVersion: DefaultSbakeVersion,
 				Projects:     []types.Project{},
 				Templates:    []types.Template{},
 			}
@@ -100,6 +104,13 @@ func Load(startPath string) (*types.Manifest, string, error) {
 	var m types.Manifest
 	if _, err := toml.Decode(string(data), &m); err != nil {
 		return nil, "", fmt.Errorf("failed to decode manifest: %w", err)
+	}
+
+	// An existing but empty (or version-less) manifest decodes to an empty
+	// SbakeVersion. Apply the default so `scbake new` cannot persist an empty
+	// version, matching the absent-file behavior.
+	if m.SbakeVersion == "" {
+		m.SbakeVersion = DefaultSbakeVersion
 	}
 
 	// Record the modification time for conflict detection during Save()

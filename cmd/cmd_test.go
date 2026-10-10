@@ -112,11 +112,20 @@ func (h *MockHandlerGeneric) GetTasks(_ string, _, _ string) ([]types.Task, erro
 
 // isolateXDGDirs points the registry config/cache at a temp dir so registry
 // commands do not touch the real user config.
+//
+// os.UserConfigDir/os.UserCacheDir resolve differently per platform: Linux
+// honours XDG_CONFIG_HOME/XDG_CACHE_HOME, macOS uses $HOME/Library/..., and
+// Windows uses %AppData%/%LocalAppData%. Setting all of them keeps these tests
+// isolated on every OS (relying on XDG alone made them share the real user
+// config on macOS/Windows).
 func isolateXDGDirs(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("AppData", filepath.Join(dir, "AppData"))
+	t.Setenv("LocalAppData", filepath.Join(dir, "LocalAppData"))
 }
 
 // captureStdout redirects os.Stdout for the duration of fn and returns what
@@ -187,6 +196,30 @@ func TestRegistryList_RedactsCredentials(t *testing.T) {
 	}
 	if !strings.Contains(out, "https://host/x") {
 		t.Errorf("registry list output should show the redacted URL, got %q", out)
+	}
+}
+
+// --- Registration Tests ---
+
+// Verifies that every subcommand is registered exactly once on rootCmd.
+// Cobra's AddCommand does not de-duplicate, so a duplicate registration
+// surfaces as a repeated name in rootCmd.Commands().
+func TestRootCmd_NoDuplicateSubcommands(t *testing.T) {
+	seen := make(map[string]int)
+	for _, c := range rootCmd.Commands() {
+		seen[c.Name()]++
+	}
+
+	for name, count := range seen {
+		if count != 1 {
+			t.Errorf("command %q registered %d times, want exactly 1", name, count)
+		}
+	}
+
+	for _, want := range []string{"apply", "list", "new"} {
+		if seen[want] != 1 {
+			t.Errorf("command %q registered %d times, want exactly 1", want, seen[want])
+		}
 	}
 }
 

@@ -36,6 +36,12 @@ func (t *CreateDirTask) Execute(tc types.TaskContext) error {
 		}
 	}
 
+	// Register any intermediate directories that MkdirAll is about to create
+	// implicitly so that rollback removes them as well.
+	if err := trackMissingAncestors(tc, absPath); err != nil {
+		return err
+	}
+
 	// Use the constant from the centralized location for secure permissions.
 	if err := os.MkdirAll(absPath, fileutil.DirPerms); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", t.Path, err)

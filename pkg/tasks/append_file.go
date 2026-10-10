@@ -50,12 +50,66 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 		return fmt.Errorf("failed to read file %s: %w", t.FilePath, err)
 	}
 
-	// Idempotency check: Don't append if content is already present
-	if strings.Contains(string(existingContent), strings.TrimSpace(t.Content)) || tc.DryRun {
+	// Idempotency check: Don't append if content is already present as its own
+	// standalone, line-aligned block. A plain substring match is not enough:
+	// content that merely occurs inside unrelated text must still be appended.
+	if contentAlreadyPresent(string(existingContent), t.Content) || tc.DryRun {
 		return nil
 	}
 
 	return appendFileContent(tc.TargetPath, t.FilePath, existingContent, t.Content)
+}
+
+// contentAlreadyPresent reports whether content already exists inside existing as
+// a standalone, line-aligned block. Each line is trimmed before comparison so
+// that indentation-only differences are ignored, and the trimmed content lines
+// must appear as a contiguous run of trimmed existing lines.
+//
+// Whitespace-only (or empty) content is treated as already present to preserve
+// the historic no-op behavior.
+func contentAlreadyPresent(existing, content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return true
+	}
+
+	contentLines := trimmedLines(content)
+	existingLines := trimmedLines(existing)
+	if len(contentLines) > len(existingLines) {
+		return false
+	}
+
+	for i := 0; i+len(contentLines) <= len(existingLines); i++ {
+		matched := true
+		for j, line := range contentLines {
+			if existingLines[i+j] != line {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+
+	return false
+}
+
+// trimmedLines splits s into lines and trims surrounding whitespace from each
+// line. A trailing newline does not produce a trailing empty element, so a block
+// written with or without a final newline is considered identical.
+func trimmedLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+
+	lines := strings.Split(s, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	for i, line := range lines {
+		lines[i] = strings.TrimSpace(line)
+	}
+	return lines
 }
 
 // appendFileContent opens a file in targetPath for appending, ensures proper trailing

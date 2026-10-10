@@ -57,6 +57,12 @@ func New(rootPath string) (*Manager, error) {
 	}, nil
 }
 
+// Root returns the absolute project root the transaction is scoped to. Callers
+// that create paths inside the root use it to bound ancestor tracking.
+func (m *Manager) Root() string {
+	return m.rootPath
+}
+
 // Commit finalizes the transaction by deleting the temporary backup directory and pruning structural scaffolding.
 // This should be called only after all tasks have succeeded.
 // After Commit, Rollback is a no-op: the transaction's changes are permanent.

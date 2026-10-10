@@ -53,7 +53,16 @@ func (m *Manager) Track(path string) error {
 }
 
 func (m *Manager) resolveAndValidate(path string) (string, error) {
-	absPath, err := filepath.Abs(path)
+	// Resolve relative paths against the manager's root, not the process
+	// working directory, so Track behaves consistently regardless of CWD.
+	// Absolute paths are validated against the root via the containment check
+	// below, exactly as before.
+	resolved := path
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(m.rootPath, resolved)
+	}
+
+	absPath, err := filepath.Abs(resolved)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve path %s: %w", path, err)
 	}
@@ -66,9 +75,11 @@ func (m *Manager) resolveAndValidate(path string) (string, error) {
 		return "", fmt.Errorf("failed to calculate relative path: %w", err)
 	}
 
-	// If the relative path starts with "..", it means absPath is outside m.rootPath.
-	// We also check for exactly ".." in case the path is the parent itself.
-	if strings.HasPrefix(rel, "..") || rel == ".." {
+	// If the relative path is ".." or starts with "..<separator>", it means
+	// absPath is outside m.rootPath. Checking for the separator boundary avoids
+	// rejecting legitimate in-root names that merely begin with dots, such as
+	// "..hidden.xml".
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf(
 			"security violation: attempting to track path '%s' outside project root '%s'",
 			absPath, m.rootPath,

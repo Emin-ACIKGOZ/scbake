@@ -82,6 +82,48 @@ func TestCreateDirTask_Transaction(t *testing.T) {
 	}
 }
 
+func TestCreateDirTask_RollbackRemovesIntermediateDirs(t *testing.T) {
+	rootDir := t.TempDir()
+	tx, err := transaction.New(rootDir)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+
+	task := &CreateDirTask{
+		Path:     "services/api",
+		Desc:     "Nested services dir",
+		TaskPrio: 50,
+	}
+
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: rootDir,
+		Tx:         tx,
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(rootDir, "services", "api")); err != nil {
+		t.Fatalf("nested directory was not created: %v", err)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback() failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(rootDir, "services", "api")); !os.IsNotExist(err) {
+		t.Errorf("nested directory was not removed by rollback")
+	}
+
+	// Regression (SCB-055): the implicitly-created intermediate directory must
+	// also be removed, not just the leaf directory that was explicitly tracked.
+	if _, err := os.Stat(filepath.Join(rootDir, "services")); !os.IsNotExist(err) {
+		t.Errorf("intermediate directory %q was left behind by rollback", "services")
+	}
+}
+
 func TestCreateDirTask_PathTraversalRejected(t *testing.T) {
 	tmpDir := t.TempDir()
 	traversalPayloads := []string{
@@ -109,5 +151,34 @@ func TestCreateDirTask_PathTraversalRejected(t *testing.T) {
 				t.Errorf("Path traversal contract violation: CreateDirTask unexpectedly accepted directory traversal payload %q", payload)
 			}
 		})
+	}
+}
+
+// TestCreateDirTask_RollbackRemovesMissingTargetSubdir is a regression test for
+// SCB-055: when the target directory itself does not exist yet (e.g.
+// `apply <subproject>` in a monorepo, where the transaction root is the existing
+// manifest root), the implicitly-created target and its intermediates must be
+// removed by rollback.
+func TestCreateDirTask_RollbackRemovesMissingTargetSubdir(t *testing.T) {
+	root := t.TempDir()
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+
+	// The subproject target does not exist yet.
+	target := filepath.Join(root, "services")
+	task := &CreateDirTask{Path: "api", Desc: "d"}
+	tc := types.TaskContext{TargetPath: target, Manifest: &types.Manifest{}, Tx: tx}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() failed: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback() failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "services")); !os.IsNotExist(err) {
+		t.Errorf("rollback left the implicitly-created target tree %q behind", filepath.Join(root, "services"))
 	}
 }
