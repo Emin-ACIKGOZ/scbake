@@ -21,7 +21,7 @@ Before cutting a release:
 - [ ] Code formatted: `go fmt ./...`
 - [ ] Coverage maintained: >75% across all packages
 - [ ] No uncommitted changes: `git status`
-- [ ] On main branch: `git branch`
+- [ ] On master branch: `git branch`
 
 ## Release Steps
 
@@ -73,7 +73,7 @@ git tag -a v0.3.0 -m "Release v0.3.0"
 ### 5. Push to GitHub
 
 ```bash
-git push origin main
+git push origin master
 git push origin v0.3.0
 ```
 
@@ -120,11 +120,11 @@ For urgent bug fixes:
 
 3. Tag and release: `v0.3.1`
 
-4. Merge back to main:
+4. Merge back to master:
    ```bash
-   git checkout main
+   git checkout master
    git merge hotfix/v0.3.1
-   git push origin main
+   git push origin master
    ```
 
 ## Post-Release
