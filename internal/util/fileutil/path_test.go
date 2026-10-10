@@ -55,6 +55,18 @@ func TestSafePath(t *testing.T) {
 			wantErr:    true,
 		},
 		{
+			name:       "foreign unix absolute path",
+			baseDir:    tmpDir,
+			targetPath: "/tmp/escape.tpl",
+			wantErr:    true,
+		},
+		{
+			name:       "foreign windows absolute path",
+			baseDir:    tmpDir,
+			targetPath: `\tmp\escape.tpl`,
+			wantErr:    true,
+		},
+		{
 			name:       "empty base directory",
 			baseDir:    "",
 			targetPath: "file.txt",

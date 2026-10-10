@@ -15,7 +15,11 @@ import (
 // absolute path remains strictly contained inside baseDir.
 //
 // Relative target paths are joined to baseDir; absolute target paths are checked
-// directly against baseDir containment.
+// directly against baseDir containment. Absoluteness is detected consistently
+// across platforms: a leading "/" or "\" is treated as absolute even on systems
+// (such as Windows) where filepath.IsAbs does not recognize it, so foreign-style
+// absolute paths are never silently joined under baseDir and can instead be
+// rejected by the containment check.
 func SafePath(baseDir, targetPath string) (string, error) {
 	if baseDir == "" {
 		return "", errors.New("base directory cannot be empty")
@@ -28,7 +32,7 @@ func SafePath(baseDir, targetPath string) (string, error) {
 	baseAbs = filepath.Clean(baseAbs)
 
 	absPath := filepath.Clean(targetPath)
-	if !filepath.IsAbs(targetPath) {
+	if !filepath.IsAbs(targetPath) && !strings.HasPrefix(targetPath, "/") && !strings.HasPrefix(targetPath, `\`) {
 		absPath = filepath.Clean(filepath.Join(baseAbs, targetPath))
 	}
 
