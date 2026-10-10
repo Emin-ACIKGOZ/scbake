@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/types"
+	"scbake/internal/util/fileutil"
 	"testing"
 )
 
@@ -236,6 +237,156 @@ func TestAppendFileTask_Metadata(t *testing.T) {
 	}
 	if task.Priority() != 150 {
 		t.Errorf("Priority() mismatch")
+	}
+}
+
+// TestAppendFileTask_SubstringIsNotIdempotent guards against the substring-based
+// idempotency bug: content that only appears as a substring of unrelated text
+// must still be appended, and a second run must be a no-op.
+func TestAppendFileTask_SubstringIsNotIdempotent(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// The task content ("content") appears inside "some-extra-content" but never
+	// as its own standalone block.
+	initial := "some-extra-content"
+	//nolint:gosec // Test file
+	if err := os.WriteFile(filepath.Join(tmpDir, "substring.txt"), []byte(initial), 0644); err != nil {
+		t.Fatalf("seeding file: %v", err)
+	}
+
+	task := &AppendFileTask{
+		FilePath: "substring.txt",
+		Content:  "content",
+		Desc:     "substring regression",
+		TaskPrio: 100,
+	}
+	tc := types.TaskContext{TargetPath: tmpDir, DryRun: false}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() failed: %v", err)
+	}
+
+	want := "some-extra-content\ncontent"
+	got, err := fileutil.SafeReadFile(tmpDir, "substring.txt")
+	if err != nil {
+		t.Fatalf("SafeReadFile() failed: %v", err)
+	}
+	if string(got) != want {
+		t.Fatalf("content was silently skipped. Want %q, got %q", want, string(got))
+	}
+
+	// Second execution must not append a duplicate.
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("second Execute() failed: %v", err)
+	}
+	got2, err := fileutil.SafeReadFile(tmpDir, "substring.txt")
+	if err != nil {
+		t.Fatalf("SafeReadFile() after second run failed: %v", err)
+	}
+	if string(got2) != want {
+		t.Errorf("second execution was not idempotent. Want %q, got %q", want, string(got2))
+	}
+}
+
+// TestAppendFileTask_StandaloneBlockIdempotent verifies that a block already
+// present as its own line is not appended again.
+func TestAppendFileTask_StandaloneBlockIdempotent(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	initial := "line 1\ncontent\nline 3"
+	//nolint:gosec // Test file
+	if err := os.WriteFile(filepath.Join(tmpDir, "block.txt"), []byte(initial), 0644); err != nil {
+		t.Fatalf("seeding file: %v", err)
+	}
+
+	task := &AppendFileTask{
+		FilePath: "block.txt",
+		Content:  "content",
+		Desc:     "standalone block",
+		TaskPrio: 100,
+	}
+	tc := types.TaskContext{TargetPath: tmpDir, DryRun: false}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() failed: %v", err)
+	}
+
+	got, err := fileutil.SafeReadFile(tmpDir, "block.txt")
+	if err != nil {
+		t.Fatalf("SafeReadFile() failed: %v", err)
+	}
+	if string(got) != initial {
+		t.Errorf("standalone block was duplicated. Want %q, got %q", initial, string(got))
+	}
+}
+
+// TestAppendFileTask_Multiline covers multi-line content that is not present as
+// a standalone block: either only its first line matches, or it matches as a
+// substring that spans unrelated line boundaries.
+func TestAppendFileTask_Multiline(t *testing.T) {
+	tests := []struct {
+		name    string
+		initial string
+		content string
+		want    string
+	}{
+		{
+			// Only the first line of the multi-line content already exists.
+			name:    "prefix line only",
+			initial: "alpha",
+			content: "alpha\nbeta",
+			want:    "alpha\nalpha\nbeta",
+		},
+		{
+			// The content appears as a raw substring across unrelated lines,
+			// but is not aligned to its own block.
+			name:    "substring spanning line boundary",
+			initial: "xalpha\nbeta y",
+			content: "alpha\nbeta",
+			want:    "xalpha\nbeta y\nalpha\nbeta",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			//nolint:gosec // Test file
+			if err := os.WriteFile(filepath.Join(tmpDir, "multiline.txt"), []byte(tt.initial), 0644); err != nil {
+				t.Fatalf("seeding file: %v", err)
+			}
+
+			task := &AppendFileTask{
+				FilePath: "multiline.txt",
+				Content:  tt.content,
+				Desc:     "multiline",
+				TaskPrio: 100,
+			}
+			tc := types.TaskContext{TargetPath: tmpDir, DryRun: false}
+
+			if err := task.Execute(tc); err != nil {
+				t.Fatalf("Execute() failed: %v", err)
+			}
+
+			got, err := fileutil.SafeReadFile(tmpDir, "multiline.txt")
+			if err != nil {
+				t.Fatalf("SafeReadFile() failed: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Fatalf("multi-line content was incorrectly skipped. Want %q, got %q", tt.want, string(got))
+			}
+
+			// Second execution must be a no-op.
+			if err := task.Execute(tc); err != nil {
+				t.Fatalf("second Execute() failed: %v", err)
+			}
+			got2, err := fileutil.SafeReadFile(tmpDir, "multiline.txt")
+			if err != nil {
+				t.Fatalf("SafeReadFile() after second run failed: %v", err)
+			}
+			if string(got2) != tt.want {
+				t.Errorf("second execution was not idempotent. Want %q, got %q", tt.want, string(got2))
+			}
+		})
 	}
 }
 

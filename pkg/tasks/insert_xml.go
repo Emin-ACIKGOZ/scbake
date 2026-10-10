@@ -96,7 +96,7 @@ func (t *InsertXMLTask) validatePath(targetPath string) (string, error) {
 
 	absTarget, _ := filepath.Abs(targetPath)
 	relPath, err := filepath.Rel(filepath.Clean(absTarget), filepath.Clean(absPath))
-	if err != nil || strings.HasPrefix(relPath, "..") {
+	if err != nil || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %s is outside target directory", t.FilePath)
 	}
 
