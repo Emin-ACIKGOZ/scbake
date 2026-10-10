@@ -615,12 +615,14 @@ func TestWriteManagedFile_StaleLegacyKeyNotTrusted(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	// The legacy flat key holds a DIFFERENT project's hash.
+	// The legacy flat key holds a DIFFERENT project's hash. The new content
+	// equals what is already on disk, which is the case where a blindly-trusted
+	// legacy key would take the idempotency path and silently accept the file.
 	manifest := &types.Manifest{ManagedFiles: map[string]string{"LICENSE": HashContent([]byte("bob license\n"))}}
 	tc := types.TaskContext{TargetPath: target, Manifest: manifest, Tx: tx}
 
-	if err := WriteManagedFile(tc, "LICENSE", []byte("new template\n"), 0o600); err == nil {
-		t.Fatal("expected a drift conflict when the legacy key does not match on-disk content")
+	if err := WriteManagedFile(tc, "LICENSE", onDisk, 0o600); err == nil {
+		t.Fatal("expected a conflict: a mismatched legacy key must not be trusted as a baseline")
 	}
 }
 
