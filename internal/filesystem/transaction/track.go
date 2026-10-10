@@ -53,7 +53,16 @@ func (m *Manager) Track(path string) error {
 }
 
 func (m *Manager) resolveAndValidate(path string) (string, error) {
-	absPath, err := filepath.Abs(path)
+	// Resolve relative paths against the manager's root, not the process
+	// working directory, so Track behaves consistently regardless of CWD.
+	// Absolute paths are validated against the root via the containment check
+	// below, exactly as before.
+	resolved := path
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(m.rootPath, resolved)
+	}
+
+	absPath, err := filepath.Abs(resolved)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve path %s: %w", path, err)
 	}

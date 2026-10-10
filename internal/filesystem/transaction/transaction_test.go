@@ -265,6 +265,57 @@ func TestCommit_DisablesRollback_NoBackups(t *testing.T) {
 	}
 }
 
+// TestTrack_RelativePathResolvedAgainstRoot is a regression test for issue #21
+// (SCB-005): a relative path passed to Track must be resolved against the
+// manager's root, not against the process working directory.
+func TestTrack_RelativePathResolvedAgainstRoot(t *testing.T) {
+	rootDir := t.TempDir()
+	tx, err := New(rootDir)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd() failed: %v", err)
+	}
+
+	// Move the process CWD to an unrelated directory. With CWD-relative
+	// resolution (the historical bug) "relfile.txt" resolves outside the root
+	// and is rejected as a traversal.
+	otherDir := t.TempDir()
+	if err := os.Chdir(otherDir); err != nil {
+		t.Fatalf("os.Chdir(%q) failed: %v", otherDir, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(origWD); err != nil {
+			t.Errorf("failed to restore working directory: %v", err)
+		}
+	})
+
+	const relPath = "relfile.txt"
+	if err := tx.Track(relPath); err != nil {
+		t.Fatalf("Track(%q) failed: %v", relPath, err)
+	}
+
+	want := filepath.Join(rootDir, relPath)
+	found := false
+	for _, created := range tx.created {
+		if created == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Track(%q) recorded %v; want the path resolved under root as %s", relPath, tx.created, want)
+	}
+
+	// A relative escape must still be rejected after joining to the root.
+	if err := tx.Track(filepath.Join("..", "outside.txt")); err == nil {
+		t.Error("Track(\"../outside.txt\") accepted a relative path escaping the root")
+	}
+}
+
 // TestTrack_InRootNameBeginningWithDots is a regression test for issue #20
 // (SCB-004): a legitimate in-root file whose name merely begins with ".."
 // (e.g. "..hidden.xml") must not be mistaken for a parent-directory traversal.
