@@ -10,8 +10,10 @@ type Manifest struct {
 	Projects     []Project         `toml:"projects"`
 	Templates    []Template        `toml:"templates"`
 	Metadata     map[string]string `toml:"metadata,omitempty"`
-	// ManagedFiles tracks files created by scbake and their SHA-256 hashes
-	// The key is the relative path (e.g., "SECURITY.md"), the value is the hash.
+	// ManagedFiles tracks files created by scbake and their SHA-256 hashes.
+	// Keys are paths relative to the manifest root (e.g. "services/api/LICENSE"),
+	// so monorepo subprojects that generate the same relative filename get
+	// distinct entries instead of colliding.
 	ManagedFiles map[string]string `toml:"managed_files,omitempty"`
 }
 

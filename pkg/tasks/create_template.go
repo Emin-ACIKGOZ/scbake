@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
+	"strings"
 	"text/template"
 )
 
@@ -95,7 +96,13 @@ func HashContent(content []byte) string {
 
 // checkReconciliation evaluates drift and conflict strategies.
 // Returns the path to write to, or an error if the operation should abort.
-func checkReconciliation(absFinalPath string, outputRelPath string, newContentHash string, tc types.TaskContext) (string, error) {
+//
+// outputRelPath is the target-relative path used to read the file; ledgerKey is
+// the project-scoped managed_files key used for state lookup.
+func checkReconciliation(
+	absFinalPath, outputRelPath, ledgerKey, newContentHash string,
+	tc types.TaskContext,
+) (string, error) {
 	// If force is enabled, we always overwrite the original file, ignoring state.
 	if tc.Force {
 		return absFinalPath, nil
@@ -113,10 +120,7 @@ func checkReconciliation(absFinalPath string, outputRelPath string, newContentHa
 	existingHash := HashContent(existingContent)
 
 	// Check state
-	var originalHash string
-	if tc.Manifest.ManagedFiles != nil {
-		originalHash = tc.Manifest.ManagedFiles[outputRelPath]
-	}
+	originalHash := recordedHash(tc.Manifest, ledgerKey, outputRelPath)
 
 	// If the file exists but we've never managed it (or didn't record it), it's a conflict
 	if originalHash == "" {
@@ -188,7 +192,8 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 		return err
 	}
 
-	writePath, err := checkReconciliation(absPath, outputRelPath, newHash, tc)
+	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
+	writePath, err := checkReconciliation(absPath, outputRelPath, ledgerKey, newHash, tc)
 	if err != nil {
 		return err // Conflict strategy is 'fail'
 	}
@@ -223,7 +228,7 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 	// a "<path>.scbake-new" sibling, leaving the original file untouched, so its
 	// previously recorded hash must be preserved.
 	if writePath == absPath {
-		recordManagedHash(tc.Manifest, outputRelPath, newHash)
+		recordManagedHash(tc.Manifest, ledgerKey, newHash)
 	}
 	return nil
 }
@@ -235,6 +240,44 @@ func recordManagedHash(m *types.Manifest, key, hash string) {
 		m.ManagedFiles = make(map[string]string)
 	}
 	m.ManagedFiles[key] = hash
+}
+
+// managedFilesKey derives the managed_files ledger key for a file: the path
+// relative to the transaction's project root. Scoping by the root (rather than
+// the target project) keeps monorepo subprojects that generate the same
+// relative filename from aliasing each other's entry. Without a transaction
+// manager, or when the file lies outside its root, it falls back to the
+// target-relative path.
+func managedFilesKey(tc types.TaskContext, absPath, outputRelPath string) string {
+	if tc.Tx == nil {
+		return outputRelPath
+	}
+	root := tc.Tx.Root()
+	if root == "" {
+		return outputRelPath
+	}
+	rel, err := filepath.Rel(root, absPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return outputRelPath
+	}
+	return rel
+}
+
+// recordedHash returns the hash scbake last recorded for a managed path. It
+// looks up the project-scoped key first and falls back to the legacy
+// project-relative key so manifests written before keys were scoped keep
+// working.
+func recordedHash(m *types.Manifest, ledgerKey, legacyKey string) string {
+	if m == nil || m.ManagedFiles == nil {
+		return ""
+	}
+	if h := m.ManagedFiles[ledgerKey]; h != "" {
+		return h
+	}
+	if ledgerKey != legacyKey {
+		return m.ManagedFiles[legacyKey]
+	}
+	return ""
 }
 
 // Execute performs the template creation task.

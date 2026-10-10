@@ -546,3 +546,74 @@ func TestWriteManagedFile_RollbackRemovesMissingTargetSubdir(t *testing.T) {
 		t.Errorf("rollback left the implicitly-created target tree %q behind", filepath.Join(root, "services"))
 	}
 }
+
+// TestWriteManagedFile_ManagedFilesScopedByProject is a regression test for
+// SCB-057: two monorepo subprojects that generate the same relative filename
+// must get distinct managed_files entries, so re-applying one does not report
+// the other subproject's content as drift.
+func TestWriteManagedFile_ManagedFilesScopedByProject(t *testing.T) {
+	root := t.TempDir()
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+
+	manifest := &types.Manifest{}
+	subA := types.TaskContext{TargetPath: filepath.Join(root, "services", "a"), Manifest: manifest, Tx: tx}
+	subB := types.TaskContext{TargetPath: filepath.Join(root, "services", "b"), Manifest: manifest, Tx: tx}
+
+	contentA := []byte("license for alice\n")
+	contentB := []byte("license for bob\n")
+	if err := WriteManagedFile(subA, "LICENSE", contentA, 0o600); err != nil {
+		t.Fatalf("writing subproject A failed: %v", err)
+	}
+	if err := WriteManagedFile(subB, "LICENSE", contentB, 0o600); err != nil {
+		t.Fatalf("writing subproject B failed: %v", err)
+	}
+
+	keyA := filepath.Join("services", "a", "LICENSE")
+	keyB := filepath.Join("services", "b", "LICENSE")
+	if got := manifest.ManagedFiles[keyA]; got != HashContent(contentA) {
+		t.Errorf("ManagedFiles[%q] = %q, want hash of A's content", keyA, got)
+	}
+	if got := manifest.ManagedFiles[keyB]; got != HashContent(contentB) {
+		t.Errorf("ManagedFiles[%q] = %q, want hash of B's content", keyB, got)
+	}
+	if len(manifest.ManagedFiles) != 2 {
+		t.Errorf("expected 2 distinct ledger entries, got %d: %v", len(manifest.ManagedFiles), manifest.ManagedFiles)
+	}
+
+	// Re-applying subproject A must not report drift. Before the fix both
+	// subprojects shared the "LICENSE" key, so B's hash overwrote A's and this
+	// re-apply failed with a false "manual modifications" error.
+	if err := WriteManagedFile(subA, "LICENSE", contentA, 0o600); err != nil {
+		t.Fatalf("re-applying subproject A reported drift: %v", err)
+	}
+}
+
+// TestWriteManagedFile_LegacyFlatKeyStillRecognized verifies backward
+// compatibility: manifests written before keys were scoped stored the
+// project-relative path, which must still be honored rather than treated as an
+// unmanaged (drifting) file.
+func TestWriteManagedFile_LegacyFlatKeyStillRecognized(t *testing.T) {
+	root := t.TempDir()
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+
+	target := filepath.Join(root, "services", "a")
+	if err := os.MkdirAll(target, 0o750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	content := []byte("license\n")
+	if err := os.WriteFile(filepath.Join(target, "LICENSE"), content, 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	manifest := &types.Manifest{ManagedFiles: map[string]string{"LICENSE": HashContent(content)}}
+	tc := types.TaskContext{TargetPath: target, Manifest: manifest, Tx: tx}
+	if err := WriteManagedFile(tc, "LICENSE", content, 0o600); err != nil {
+		t.Fatalf("legacy flat key not honored (false drift): %v", err)
+	}
+}
