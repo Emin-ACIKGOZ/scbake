@@ -66,7 +66,7 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 // must appear as a contiguous run of trimmed existing lines.
 //
 // Whitespace-only (or empty) content is treated as already present to preserve
-// the historic no-op behaviour.
+// the historic no-op behavior.
 func contentAlreadyPresent(existing, content string) bool {
 	if strings.TrimSpace(content) == "" {
 		return true
