@@ -169,6 +169,7 @@ func TestInsertXMLTask_InRootNameBeginningWithDots(t *testing.T) {
 		t.Fatalf("Failed to read test fixture: %v", err)
 	}
 	hiddenPath := filepath.Join(h.tmpDir, "..hidden.xml")
+	//nolint:gosec // fixture path is under t.TempDir(); the ".." is part of a filename, not traversal
 	if err := os.WriteFile(hiddenPath, content, fileutil.FilePerms); err != nil {
 		t.Fatalf("Failed to create %q: %v", hiddenPath, err)
 	}
