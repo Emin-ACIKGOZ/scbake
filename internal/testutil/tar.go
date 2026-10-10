@@ -1,5 +1,5 @@
 // Copyright 2025 Emin Salih Açıkgöz
-// SPDX-License-Identifier: gpl3-or-later
+// SPDX-License-Identifier: Apache-2.0
 
 // Package testutil provides shared helper utilities for internal unit and integration testing.
 package testutil

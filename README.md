@@ -282,3 +282,15 @@ task := &tasks.InsertXMLTask{
 | `--conflict-strategy` | How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` |
 | `-v`, `--version`     | Show version (`v0.4.1`)                               |
 | `--set`              | Set template variable (`key=value`, can be repeated)  |
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines,
+[docs/SCOPE.md](docs/SCOPE.md) for what belongs in core,
+[docs/COMMIT_MESSAGES.md](docs/COMMIT_MESSAGES.md) for commit conventions, and
+[docs/TRIAGE.md](docs/TRIAGE.md) for how issues are handled.
+
+## License
+
+scbake is licensed under the Apache License 2.0. See [LICENSE](LICENSE) and
+[NOTICE](NOTICE) for details.

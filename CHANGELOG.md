@@ -263,4 +263,4 @@ scbake follows [Semantic Versioning](https://semver.org/):
 
 ## License
 
-scbake is dual-licensed under MIT and GPL-3.0-or-later. See LICENSE file for details.
+scbake is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
