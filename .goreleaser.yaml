@@ -32,7 +32,8 @@ builds:
 archives:
   - id: scbake
     formats: [binary]
-    name_template: 'scbake-{{ .Os }}-{{ .Arch }}{{ if eq .Os "windows" }}.exe{{ end }}'
+    # GoReleaser appends ".exe" automatically for Windows in binary format.
+    name_template: "scbake-{{ .Os }}-{{ .Arch }}"
 
 checksum:
   # install.sh expects a file named exactly SHA256SUMS.
