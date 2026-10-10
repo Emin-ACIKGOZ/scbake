@@ -91,18 +91,23 @@ jobs:
           git push origin HEAD
           git push origin "${{ steps.version.outputs.version }}"
 
-      - name: Overlay GoReleaser config from the default branch
-        if: steps.version.outputs.version != '' && github.event.inputs.tag != ''
+      - name: Prepare GoReleaser config
+        if: steps.version.outputs.version != ''
         run: |
-          # A tag's tree may predate .goreleaser.yaml (e.g. re-releasing an older
-          # tag). Always build with the current configuration.
-          git show origin/master:.goreleaser.yaml > .goreleaser.yaml
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            # An older tag's tree may predate .goreleaser.yaml; use the current
+            # config from the default branch. Write it outside the repo so the
+            # git state stays clean (GoReleaser refuses to run when dirty).
+            git show origin/master:.goreleaser.yaml > "$RUNNER_TEMP/goreleaser.yaml"
+          else
+            cp .goreleaser.yaml "$RUNNER_TEMP/goreleaser.yaml"
+          fi
 
       - name: Run GoReleaser
         if: steps.version.outputs.version != ''
         uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --config ${{ runner.temp }}/goreleaser.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
