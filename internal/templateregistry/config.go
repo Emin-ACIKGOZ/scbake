@@ -19,7 +19,8 @@ import (
 // matching (rather than an exact allowlist) also covers vendor-specific names
 // such as "X-Amz-Signature", "sig", and "key".
 var credentialQueryMarkers = []string{
-	"token", "secret", "sig", "key", "auth", "pass", "credential",
+	"token", "secret", "sig", "key", "auth", "pass", "cred",
+	"code", "session", "jwt", "sas",
 }
 
 // isCredentialQueryKey reports whether a query parameter name looks like it
@@ -50,16 +51,23 @@ func RedactURL(raw string) string {
 	u.RawFragment = ""
 
 	if u.RawQuery != "" {
-		query := u.Query()
-		changed := false
-		for key := range query {
-			if isCredentialQueryKey(key) {
-				query.Set(key, "REDACTED")
-				changed = true
+		query, parseErr := url.ParseQuery(u.RawQuery)
+		if parseErr != nil {
+			// Fail closed: a malformed query (for example ';' separators or an
+			// invalid escape) makes ParseQuery drop or misparse parameters, so
+			// withhold the whole query rather than risk echoing a credential.
+			u.RawQuery = "REDACTED"
+		} else {
+			changed := false
+			for key := range query {
+				if isCredentialQueryKey(key) {
+					query.Set(key, "REDACTED")
+					changed = true
+				}
 			}
-		}
-		if changed {
-			u.RawQuery = query.Encode()
+			if changed {
+				u.RawQuery = query.Encode()
+			}
 		}
 	}
 

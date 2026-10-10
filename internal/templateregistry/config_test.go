@@ -58,6 +58,12 @@ func TestRedactURL_FragmentsAndVendorQueryKeys(t *testing.T) {
 		{"key param", "https://host/x?key=KEYSECRET", []string{"KEYSECRET"}},
 		{"credential param", "https://host/x?credential=CREDSECRET", []string{"CREDSECRET"}},
 		{"fragment and userinfo", "https://user:pass@host/x#token=FRAGSECRET", []string{"FRAGSECRET", "user:pass"}},
+		{"oauth code", "https://host/x?code=CODESECRET", []string{"CODESECRET"}},
+		{"session id", "https://host/x?session=SESSIONSECRET", []string{"SESSIONSECRET"}},
+		{"jwt", "https://host/x?jwt=JWTSECRET", []string{"JWTSECRET"}},
+		{"sas token", "https://host/x?SAS=SASSECRET", []string{"SASSECRET"}},
+		{"malformed query with semicolon", "https://host/x?token=SEMISECRET;v=1", []string{"SEMISECRET"}},
+		{"malformed escape", "https://host/x?code=CODESECRET&x=%zz", []string{"CODESECRET"}},
 	}
 
 	for _, tt := range tests {
