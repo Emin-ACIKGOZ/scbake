@@ -84,6 +84,19 @@ If the wrong version was tagged or released:
 Never rewrite or delete a tag that downstream users may already depend on. Prefer a
 follow-up patch release.
 
+## Re-releasing an existing tag
+
+To rebuild and re-publish the assets for an existing tag (for example, after a transient
+failure or to add missing assets), run the workflow manually with the tag:
+
+```sh
+gh workflow run release.yml -f tag=vX.Y.Z
+```
+
+The workflow checks out that tag, skips version detection and the changelog commit, and
+runs GoReleaser to (re)create the release and its assets. Delete an existing release
+first (`gh release delete vX.Y.Z --yes`) if you want a clean replacement.
+
 ## Pre-merge checklist (release-triggering PRs)
 
 - [ ] CI is green (lint, cross-platform tests, coverage).
