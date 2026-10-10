@@ -45,34 +45,42 @@ jobs:
       - name: Determine next version
         id: version
         run: |
-          next="$(svu next || true)"
-          echo "next=${next}" >> "$GITHUB_OUTPUT"
-          if [ -z "$next" ]; then
-            echo "No release-worthy commits since the last tag; nothing to do."
+          # `svu next` returns the current version when there is no bump, so
+          # guard against re-releasing an existing tag.
+          current="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          next="$(svu next 2>/dev/null || true)"
+          echo "current=${current} next=${next}"
+          if [ -z "$next" ] || [ "$next" = "$current" ] || git rev-parse -q --verify "refs/tags/${next}" >/dev/null 2>&1; then
+            echo "version=" >> "$GITHUB_OUTPUT"
+            echo "Nothing to release."
           else
-            echo "Next version will be: ${next}"
+            echo "version=${next}" >> "$GITHUB_OUTPUT"
+            echo "Next version: ${next}"
           fi
 
       - name: Generate CHANGELOG.md
-        if: steps.version.outputs.next != ''
+        if: steps.version.outputs.version != ''
         uses: orhun/git-cliff-action@v4
         with:
-          args: --tag ${{ steps.version.outputs.next }}
-          output: CHANGELOG.md
+          config: cliff.toml
+          args: --tag ${{ steps.version.outputs.version }}
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
 
       - name: Commit changelog and tag
-        if: steps.version.outputs.next != ''
+        if: steps.version.outputs.version != ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md
-          git commit -s -m "chore(release): ${{ steps.version.outputs.next }}" || echo "No changelog changes to commit"
-          git tag -a "${{ steps.version.outputs.next }}" -m "Release ${{ steps.version.outputs.next }}"
+          git commit -s -m "chore(release): ${{ steps.version.outputs.version }}" || echo "No changelog changes to commit"
+          git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
           git push origin HEAD
-          git push origin "${{ steps.version.outputs.next }}"
+          git push origin "${{ steps.version.outputs.version }}"
 
       - name: Run GoReleaser
-        if: steps.version.outputs.next != ''
+        if: steps.version.outputs.version != ''
         uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
