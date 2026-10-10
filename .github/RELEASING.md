@@ -1,189 +1,88 @@
 # Release Process
 
-This document describes how to release a new version of scbake.
+scbake releases are **automated**. You do not hand-write versions or tags. Merging a
+release-worthy commit to `master` triggers the [Release workflow](workflows/release.yml),
+which computes the next version, updates `CHANGELOG.md`, creates the tag, and publishes
+binaries.
 
-## Versioning
+## Version model
 
-scbake follows [Semantic Versioning](https://semver.org/):
+Versions are derived from [Conventional Commits](docs/COMMIT_MESSAGES.md) via
+[`svu`](https://github.com/caarlos0/svu):
 
-- **MAJOR.MINOR.PATCH** (e.g., 1.2.3)
-- MAJOR: Breaking changes (manifest format, core APIs)
-- MINOR: New features (language packs, templates, backward compatible)
-- PATCH: Bug fixes, performance improvements
+| Commit | Release |
+| :----- | :------ |
+| `fix:`, `perf:` | patch |
+| `feat:` | minor |
+| `!` / `BREAKING CHANGE:` | **minor** while `0.x` (see `.svu.yml` `v0: true`) |
+| `docs:`, `chore:`, `ci:`, `test:`, `style:`, `refactor:`, `build:` | none |
 
-## Pre-Release Checklist
+The **git tag is the single source of truth**. The binary version is injected at build
+time (`-X scbake/cmd.version={{ .Tag }}`); the code no longer hard-codes a version. At
+`1.0`, revisit `.svu.yml` so breaking changes bump the major version.
 
-Before cutting a release:
+## What triggers a release
 
-- [ ] All tests pass: `go test ./... -race`
-- [ ] No linting issues: `golangci-lint run ./...`
-- [ ] No vet warnings: `go vet ./...`
-- [ ] Code formatted: `go fmt ./...`
-- [ ] Coverage maintained: >75% across all packages
-- [ ] No uncommitted changes: `git status`
-- [ ] On master branch: `git branch`
+- A push or merge to `master` that contains at least one release-worthy commit since the
+  last tag.
+- Manually, via **Actions → Release → Run workflow** (`workflow_dispatch`).
 
-## Release Steps
+If there are no release-worthy commits, the workflow exits without releasing.
 
-### 1. Update Version in Code
+## Pipeline
 
-Edit `cmd/root.go`:
+1. `svu next` computes the next version from the git history.
+2. [`git-cliff`](https://git-cliff.org) regenerates `CHANGELOG.md`.
+3. The workflow commits the changelog (`chore(release): vX.Y.Z`), creates an annotated
+   tag `vX.Y.Z`, and pushes both.
+4. [GoReleaser](https://goreleaser.com) cross-builds `linux`/`darwin`/`windows` ×
+   `amd64`/`arm64`, produces the assets below, and creates the GitHub Release.
 
-```go
-var version = "v0.3.0"  // Update from current version
-```
+## Asset contract
 
-### 2. Update CHANGELOG
+These names are **required by `install.sh`** and the README install one-liner. Do not
+change them without updating `install.sh` and `README.md`:
 
-Edit `CHANGELOG.md`:
+- Binaries: `scbake-<os>-<arch>` (`scbake-windows-<arch>.exe` on Windows).
+- Checksums: a file named exactly `SHA256SUMS`.
 
-```markdown
-## [0.1.0] - 2025-04-20
+## Guardrails
 
-### Added
-- New feature 1
-- New feature 2
+- `master` is protected: changes land through a pull request; commit messages are
+  checked by `commitlint`; the PR title is checked (squash merges make the title the
+  released commit).
+- The release job **pushes a commit and a tag**. Branch protection must permit the
+  GitHub Actions bot to push (a ruleset bypass), or the release step will fail.
 
-### Fixed
-- Bug fix 1
-- Bug fix 2
+## Correcting a bad release
 
-### Changed
-- Breaking change (if applicable)
+If the wrong version was tagged or released:
 
-### Security
-- Security fix (if applicable)
-```
-
-Move "Unreleased" section to versioned section with date.
-
-### 3. Commit Changes
-
-```bash
-git add cmd/root.go CHANGELOG.md
-git commit -m "chore(release): bump version to v0.3.0"
-```
-
-### 4. Tag Release
-
-```bash
-git tag -a v0.3.0 -m "Release v0.3.0"
-```
-
-### 5. Push to GitHub
-
-```bash
-git push origin master
-git push origin v0.3.0
-```
-
-### 6. Create GitHub Release
-
-On GitHub:
-
-1. Go to Releases page
-2. Click "Draft a new release"
-3. Select tag: `v0.3.0`
-4. Title: `v0.3.0`
-5. Description: Copy from CHANGELOG.md
-
-Or via gh CLI:
-
-```bash
-gh release create v0.3.0 --title "v0.3.0" --notes-file <(sed -n '/^## \[0.3.0\]/,/^## \[/p' CHANGELOG.md | head -n -1)
-```
-
-## Version Numbering Examples
-
-### v0.3.0 → v0.3.1 (Patch: bug fix)
-Bug fixes that are backward-compatible.
-### v0.0.1 → v0.1.0 (Minor: new features)
-- Added config-driven extension discovery
-- Added new `python_linter` template
-- Refactored built-in handlers to unified system
-
-### v0.3.0 → v1.0.0 (Major: breaking changes)
-- Changed manifest format from TOML to YAML
-- Renamed `scbake apply` to `scbake extend`
-- Removed deprecated `--with` flag
-
-## Hotfix Releases
-
-For urgent bug fixes:
-
-1. Create branch from tag:
-   ```bash
-   git checkout -b hotfix/v0.3.1 v0.3.0
+1. Delete the release and tag:
+   ```sh
+   gh release delete vX.Y.Z --yes
+   git push origin --delete vX.Y.Z
    ```
+2. Fix the cause. If the tag was not yet consumed by users, you may amend history;
+   otherwise add a corrective commit (`fix:` or `revert:`).
+3. Re-run the Release workflow (or push a new release-worthy commit).
 
-2. Fix the bug, commit, push
+Never rewrite or delete a tag that downstream users may already depend on. Prefer a
+follow-up patch release.
 
-3. Tag and release: `v0.3.1`
+## Pre-merge checklist (release-triggering PRs)
 
-4. Merge back to master:
-   ```bash
-   git checkout master
-   git merge hotfix/v0.3.1
-   git push origin master
-   ```
+- [ ] CI is green (lint, cross-platform tests, coverage).
+- [ ] Commit messages and the PR title conform to Conventional Commits.
+- [ ] If the manifest or CLI changed and breaks users, the breaking change is called out.
 
-## Post-Release
+## Permissions and secrets
 
-After release:
+- The workflow uses the default `GITHUB_TOKEN` with `contents: write`.
+- No external secrets or tokens are required.
 
-1. **Announce**: Post on r/golang, HN, Twitter (optional)
-2. **Monitor**: Watch for issues in the first week
-3. **Document**: Update installation docs if needed
-4. **Plan**: Outline next minor/major version features
+## Related
 
-## GitHub Actions (Future)
-
-When automated releases are needed:
-
-```yaml
-# .github/workflows/release.yml
-name: Release
-
-on:
-  push:
-    tags:
-      - 'v*'
-
-jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v4
-      - run: go test ./... -race
-      - run: go build -o scbake main.go
-      - uses: softprops/action-gh-release@v1
-        with:
-          files: scbake
-```
-
-## Continuous Deployment (Future)
-
-When infrastructure permits:
-
-- Build binaries for multiple platforms (Linux, macOS, Windows)
-- Auto-generate `scbake` binary on GitHub releases
-- Publish to Homebrew formula
-- Update documentation site
-
-For now, releases are source-only.
-
-## Version Constraints
-
-Maintain backward compatibility:
-
-- **v0.3.0 projects** must work with v0.4.0, v0.5.0, etc.
-- `scbake.toml` format changes require migration tooling
-- Command interface changes require deprecation warnings
-- Handler API changes (rare) should follow Go compatibility rules
-
-## Questions?
-
-- When should I release? When a meaningful feature is complete + tests pass
-- Should I do every commit? No, batch related changes into minor/patch versions
-- Can I skip semver? No, users depend on version numbers for compatibility
+- [docs/COMMIT_MESSAGES.md](../docs/COMMIT_MESSAGES.md) — commit conventions.
+- [docs/SCOPE.md](../docs/SCOPE.md) — what belongs in core.
+- [RELEASING.md](RELEASING.md) — this document.
