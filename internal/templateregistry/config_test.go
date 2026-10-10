@@ -3,8 +3,45 @@ package templateregistry
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestRedactURL is a regression test for SCB-034: registry URLs may embed
+// credentials and must be stripped before they are printed or logged.
+func TestRedactURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"strips user and password", "https://user:pass@host/x", "https://host/x"},
+		{"strips username only", "https://user@host:8443/x", "https://host:8443/x"},
+		{"preserves plain url", "https://host/a/b", "https://host/a/b"},
+		{"preserves query without credentials", "https://host/x?q=1", "https://host/x?q=1"},
+		{
+			"redacts credential query params",
+			"https://user:pass@host/x?token=abc&foo=bar",
+			"https://host/x?foo=bar&token=REDACTED",
+		},
+		{"unparseable url becomes placeholder", "http://[::1", "[invalid registry URL]"},
+		{"opaque userinfo becomes placeholder", "user:pass@host/x", "[invalid registry URL]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RedactURL(tt.in)
+			if got != tt.want {
+				t.Errorf("RedactURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+			for _, secret := range []string{"pass", "abc"} {
+				if strings.Contains(got, secret) {
+					t.Errorf("RedactURL(%q) = %q still leaks %q", tt.in, got, secret)
+				}
+			}
+		})
+	}
+}
 
 func TestAddAndList(t *testing.T) {
 	dir := t.TempDir()

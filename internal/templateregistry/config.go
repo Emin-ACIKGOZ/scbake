@@ -6,11 +6,60 @@ package templateregistry
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
+
+// credentialQueryKeys are query parameter names whose values may carry
+// credentials and are redacted before a URL is printed.
+var credentialQueryKeys = map[string]bool{
+	"token":        true,
+	"access_token": true,
+	"auth":         true,
+	"apikey":       true,
+	"api_key":      true,
+	"password":     true,
+	"secret":       true,
+}
+
+// RedactURL strips userinfo (username/password) and credential-bearing query
+// parameters from a registry URL so it is safe to print in output or embed in
+// error messages. Unparseable URLs are replaced with a safe placeholder rather
+// than leaking the raw string.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "[invalid registry URL]"
+	}
+
+	u.User = nil
+
+	if u.RawQuery != "" {
+		query := u.Query()
+		changed := false
+		for key := range query {
+			if credentialQueryKeys[strings.ToLower(key)] {
+				query.Set(key, "REDACTED")
+				changed = true
+			}
+		}
+		if changed {
+			u.RawQuery = query.Encode()
+		}
+	}
+
+	// A URL without a host but with an opaque component can still smuggle
+	// credentials (e.g. "user:pass@host/x"); refuse to echo it.
+	if u.Host == "" && u.Opaque != "" {
+		return "[invalid registry URL]"
+	}
+
+	return u.String()
+}
 
 const (
 	configDirName  = "scbake"

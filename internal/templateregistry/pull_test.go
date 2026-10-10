@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"scbake/internal/testutil"
+	"strings"
 	"testing"
 	"time"
 )
@@ -287,6 +288,25 @@ func TestPullFromURL_ReadsBodyAfterHeaders(t *testing.T) {
 	}
 	if string(content) != testTplContent {
 		t.Errorf("expected %q, got %q", testTplContent, string(content))
+	}
+}
+
+// TestDoDownload_ErrorRedactsCredentials is a regression test for SCB-034:
+// failures must not echo credentials embedded in the registry URL.
+func TestDoDownload_ErrorRedactsCredentials(t *testing.T) {
+	// Port 1 is not listening, so the request fails while dialing.
+	_, err := doDownload("https://user:supersecret@127.0.0.1:1/x.tar.gz", "", "tpl")
+	if err == nil {
+		t.Fatal("expected doDownload to fail against an unreachable host")
+	}
+
+	for _, secret := range []string{"supersecret", "user:", "user@"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("error leaks credentials (%q): %v", secret, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1:1/x.tar.gz") {
+		t.Errorf("error should still include the useful host/path: %v", err)
 	}
 }
 

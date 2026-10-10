@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"scbake/internal/util/fileutil"
@@ -89,10 +90,10 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 	return extractToCache(resp.Body, pr.destDir, pr.subdirectory)
 }
 
-func doDownload(url, token, name string) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+func doDownload(downloadURL, token, name string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+		return nil, fmt.Errorf("creating request for %s: %w", RedactURL(downloadURL), redactURLError(err, downloadURL))
 	}
 
 	if token != "" {
@@ -105,7 +106,11 @@ func doDownload(url, token, name string) (*http.Response, error) {
 	client := &http.Client{Timeout: httpTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("downloading from %q: %w", url, err)
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			urlErr.URL = RedactURL(urlErr.URL)
+		}
+		return nil, fmt.Errorf("downloading from %q: %w", RedactURL(downloadURL), err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -114,6 +119,17 @@ func doDownload(url, token, name string) (*http.Response, error) {
 	}
 
 	return resp, nil
+}
+
+// redactURLError replaces any occurrence of rawURL in err's message with its
+// redacted form so credentials cannot leak through a wrapped parse error.
+func redactURLError(err error, rawURL string) error {
+	redacted := RedactURL(rawURL)
+	msg := strings.ReplaceAll(err.Error(), rawURL, redacted)
+	if msg == err.Error() {
+		return err
+	}
+	return errors.New(msg)
 }
 
 func extractToCache(body io.Reader, destDir, subdirectory string) error {
