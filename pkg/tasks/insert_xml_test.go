@@ -158,6 +158,56 @@ func TestInsertXMLTask_PathTraversalRejected(t *testing.T) {
 	}
 }
 
+// TestInsertXMLTask_InRootNameBeginningWithDots is a regression test for
+// issue #20 (SCB-004): a file literally named "..hidden.xml" inside the target
+// directory must be accepted, while a real parent-directory escape is rejected.
+func TestInsertXMLTask_InRootNameBeginningWithDots(t *testing.T) {
+	h := newTestHelper(t)
+
+	content, err := os.ReadFile(filepath.Join("testdata", "pom.xml"))
+	if err != nil {
+		t.Fatalf("Failed to read test fixture: %v", err)
+	}
+	hiddenPath := filepath.Join(h.tmpDir, "..hidden.xml")
+	//nolint:gosec // fixture path is under t.TempDir(); the ".." is part of a filename, not traversal
+	if err := os.WriteFile(hiddenPath, content, fileutil.FilePerms); err != nil {
+		t.Fatalf("Failed to create %q: %v", hiddenPath, err)
+	}
+
+	task := &InsertXMLTask{
+		FilePath:    "..hidden.xml",
+		ElementPath: "/project/build/plugins",
+		XMLContent:  `<plugin><groupId>org.example.dotdot</groupId></plugin>`,
+		Desc:        "Insert into in-root name beginning with dots",
+		TaskPrio:    1201,
+	}
+
+	if err := task.Execute(h.taskContext(false, false)); err != nil {
+		t.Fatalf("Execute() rejected in-root name %q: %v", "..hidden.xml", err)
+	}
+
+	//nolint:gosec // Path is under t.TempDir()
+	modified, err := os.ReadFile(hiddenPath)
+	if err != nil {
+		t.Fatalf("Failed to read modified file: %v", err)
+	}
+	if !strings.Contains(string(modified), "org.example.dotdot") {
+		t.Error("fragment was not inserted into ..hidden.xml")
+	}
+
+	// A genuine traversal payload must still be rejected.
+	traversal := &InsertXMLTask{
+		FilePath:    "../outside.xml",
+		ElementPath: "/project/build/plugins",
+		XMLContent:  `<plugin/>`,
+		Desc:        "Traversal must be rejected",
+		TaskPrio:    1201,
+	}
+	if err := traversal.Execute(h.taskContext(false, false)); err == nil {
+		t.Error("Execute() accepted a traversal path ../outside.xml")
+	}
+}
+
 func TestInsertXMLTask_FileNotFoundError(t *testing.T) {
 	h := newTestHelper(t)
 
