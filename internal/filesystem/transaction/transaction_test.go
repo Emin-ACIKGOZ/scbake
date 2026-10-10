@@ -265,6 +265,30 @@ func TestCommit_DisablesRollback_NoBackups(t *testing.T) {
 	}
 }
 
+// TestTrack_InRootNameBeginningWithDots is a regression test for issue #20
+// (SCB-004): a legitimate in-root file whose name merely begins with ".."
+// (e.g. "..hidden.xml") must not be mistaken for a parent-directory traversal.
+func TestTrack_InRootNameBeginningWithDots(t *testing.T) {
+	rootDir := t.TempDir()
+	tx, err := New(rootDir)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	inRoot := filepath.Join(rootDir, "..hidden.xml")
+	createFile(t, inRoot, "data", fileutil.FilePerms)
+
+	if err := tx.Track(inRoot); err != nil {
+		t.Fatalf("Track(%q) rejected an in-root name beginning with dots: %v", inRoot, err)
+	}
+
+	// A genuine parent-directory escape must still be rejected.
+	outside := filepath.Join(filepath.Dir(rootDir), "outside.xml")
+	if err := tx.Track(outside); err == nil {
+		t.Errorf("Track(%q) accepted a path outside the root", outside)
+	}
+}
+
 func TestTrack_ExistingDirectory_NoBackup(t *testing.T) {
 	rootDir := t.TempDir()
 	tx, err := New(rootDir)

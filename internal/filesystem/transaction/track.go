@@ -66,9 +66,11 @@ func (m *Manager) resolveAndValidate(path string) (string, error) {
 		return "", fmt.Errorf("failed to calculate relative path: %w", err)
 	}
 
-	// If the relative path starts with "..", it means absPath is outside m.rootPath.
-	// We also check for exactly ".." in case the path is the parent itself.
-	if strings.HasPrefix(rel, "..") || rel == ".." {
+	// If the relative path is ".." or starts with "..<separator>", it means
+	// absPath is outside m.rootPath. Checking for the separator boundary avoids
+	// rejecting legitimate in-root names that merely begin with dots, such as
+	// "..hidden.xml".
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf(
 			"security violation: attempting to track path '%s' outside project root '%s'",
 			absPath, m.rootPath,
