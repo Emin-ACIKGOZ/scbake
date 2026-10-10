@@ -519,3 +519,30 @@ func TestCreateTemplateTask_PathTraversal(t *testing.T) {
 		})
 	}
 }
+
+// TestWriteManagedFile_RollbackRemovesMissingTargetSubdir is a regression test
+// for SCB-055: the ancestor walk must be bounded by the transaction root, not by
+// tc.TargetPath, otherwise a not-yet-existing target directory (monorepo
+// subproject apply) is created but never tracked and survives rollback.
+func TestWriteManagedFile_RollbackRemovesMissingTargetSubdir(t *testing.T) {
+	root := t.TempDir()
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+
+	// The subproject target does not exist yet; the transaction root does.
+	target := filepath.Join(root, "services", "api")
+	tc := types.TaskContext{TargetPath: target, Manifest: &types.Manifest{}, Tx: tx}
+
+	if err := WriteManagedFile(tc, filepath.Join("pkg", "file.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteManagedFile() failed: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback() failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "services")); !os.IsNotExist(err) {
+		t.Errorf("rollback left the implicitly-created target tree %q behind", filepath.Join(root, "services"))
+	}
+}

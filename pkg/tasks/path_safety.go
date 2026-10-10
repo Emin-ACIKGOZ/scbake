@@ -43,9 +43,16 @@ func trackTaskFile(tc types.TaskContext, absPath, relPath string) error {
 // os.MkdirAll creates every missing directory in a path, but only the leaf was
 // previously tracked, so rollback left the implicitly-created parents behind.
 // This helper walks up from the parent of absPath, collecting each ancestor
-// that does not exist yet and stopping at the first existing ancestor or as
-// soon as it would escape the target root. Missing ancestors are registered
-// shallowest-first so that LIFO rollback removes the deepest directory first.
+// that does not exist yet and stopping at the first existing ancestor.
+//
+// The walk is bounded by the transaction's project root (falling back to
+// tc.TargetPath without a manager). Bounding by tc.TargetPath alone would miss
+// the case where the target directory itself does not exist yet, e.g.
+// `apply <subproject>` in a monorepo: there the root is the existing manifest
+// root and the not-yet-existing target lies below it.
+//
+// Missing ancestors are registered shallowest-first; Manager.Rollback iterates
+// in reverse, and because it removes recursively the whole chain is cleaned up.
 //
 // It is a no-op when transactions are disabled or in dry-run mode.
 func trackMissingAncestors(tc types.TaskContext, absPath string) error {
@@ -53,13 +60,17 @@ func trackMissingAncestors(tc types.TaskContext, absPath string) error {
 		return nil
 	}
 
-	root, err := filepath.Abs(filepath.Clean(tc.TargetPath))
+	root := filepath.Clean(tc.TargetPath)
+	if txRoot := tc.Tx.Root(); txRoot != "" {
+		root = filepath.Clean(txRoot)
+	}
+	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return fmt.Errorf("failed to resolve target root %s: %w", tc.TargetPath, err)
+		return fmt.Errorf("failed to resolve target root %s: %w", root, err)
 	}
 
 	var missing []string
-	for dir := filepath.Dir(absPath); isStrictlyWithin(root, dir); dir = filepath.Dir(dir) {
+	for dir := filepath.Dir(absPath); isStrictlyWithin(absRoot, dir); dir = filepath.Dir(dir) {
 		if _, statErr := os.Stat(dir); statErr == nil {
 			break // First existing ancestor: everything above it already exists.
 		} else if !os.IsNotExist(statErr) {
