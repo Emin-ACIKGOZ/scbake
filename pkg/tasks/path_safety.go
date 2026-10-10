@@ -5,8 +5,11 @@ package tasks
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
+	"strings"
 )
 
 // resolveTaskPath resolves a task path field against the target directory and
@@ -32,4 +35,58 @@ func trackTaskFile(tc types.TaskContext, absPath, relPath string) error {
 		return fmt.Errorf("failed to track file %s: %w", relPath, err)
 	}
 	return nil
+}
+
+// trackMissingAncestors records the not-yet-existing ancestor directories of
+// absPath with the transaction manager.
+//
+// os.MkdirAll creates every missing directory in a path, but only the leaf was
+// previously tracked, so rollback left the implicitly-created parents behind.
+// This helper walks up from the parent of absPath, collecting each ancestor
+// that does not exist yet and stopping at the first existing ancestor or as
+// soon as it would escape the target root. Missing ancestors are registered
+// shallowest-first so that LIFO rollback removes the deepest directory first.
+//
+// It is a no-op when transactions are disabled or in dry-run mode.
+func trackMissingAncestors(tc types.TaskContext, absPath string) error {
+	if tc.Tx == nil || tc.DryRun {
+		return nil
+	}
+
+	root, err := filepath.Abs(filepath.Clean(tc.TargetPath))
+	if err != nil {
+		return fmt.Errorf("failed to resolve target root %s: %w", tc.TargetPath, err)
+	}
+
+	var missing []string
+	for dir := filepath.Dir(absPath); isStrictlyWithin(root, dir); dir = filepath.Dir(dir) {
+		if _, statErr := os.Stat(dir); statErr == nil {
+			break // First existing ancestor: everything above it already exists.
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("failed to inspect ancestor directory %s: %w", dir, statErr)
+		}
+		missing = append(missing, dir)
+	}
+
+	// Register shallowest-first; Manager.Rollback iterates in reverse so the
+	// deepest implicitly-created directory is removed first.
+	for i := len(missing) - 1; i >= 0; i-- {
+		if err := tc.Tx.Track(missing[i]); err != nil {
+			return fmt.Errorf("failed to track ancestor directory %s: %w", missing[i], err)
+		}
+	}
+	return nil
+}
+
+// isStrictlyWithin reports whether path is a strict descendant of root. The
+// root itself and anything outside it are rejected.
+func isStrictlyWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	if rel == "." || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

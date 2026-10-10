@@ -157,9 +157,15 @@ func handleConflict(absFinalPath, outputRelPath, strategy string) (string, error
 // checkFilePreconditions validates that the output path stays inside the target
 // directory and ensures its parent directory exists. It returns the resolved
 // absolute output path.
-func checkFilePreconditions(output, target string) (string, error) {
+func checkFilePreconditions(tc types.TaskContext, output, target string) (string, error) {
 	absPath, err := resolveTaskPath(target, output, "output")
 	if err != nil {
+		return "", err
+	}
+
+	// Register the parent directories MkdirAll is about to create implicitly so
+	// that a rollback removes them along with the file itself.
+	if err := trackMissingAncestors(tc, absPath); err != nil {
 		return "", err
 	}
 
@@ -177,7 +183,7 @@ func checkFilePreconditions(output, target string) (string, error) {
 func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte, perm os.FileMode) error {
 	newHash := HashContent(content)
 
-	absPath, err := checkFilePreconditions(outputRelPath, tc.TargetPath)
+	absPath, err := checkFilePreconditions(tc, outputRelPath, tc.TargetPath)
 	if err != nil {
 		return err
 	}

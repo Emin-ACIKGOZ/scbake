@@ -334,6 +334,46 @@ func TestCreateTemplateTask_Transaction(t *testing.T) {
 	}
 }
 
+func TestWriteManagedFile_RollbackRemovesIntermediateDirs(t *testing.T) {
+	rootDir := t.TempDir()
+	tx, err := transaction.New(rootDir)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: rootDir,
+		Manifest:   &types.Manifest{ManagedFiles: make(map[string]string)},
+		Tx:         tx,
+	}
+
+	// Write a file several directories deep. Those parent directories do not
+	// exist yet, so WriteManagedFile must create AND track them.
+	if err := WriteManagedFile(tc, "nested/deep/file.txt", []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteManagedFile() failed: %v", err)
+	}
+
+	filePath := filepath.Join(rootDir, "nested", "deep", "file.txt")
+	if _, err := os.Stat(filePath); err != nil {
+		t.Fatalf("managed file was not created: %v", err)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback() failed: %v", err)
+	}
+
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Errorf("managed file was not removed by rollback")
+	}
+
+	// Regression (SCB-055): implicitly-created parent directories must also be
+	// removed so the filesystem returns to its pre-task state.
+	if _, err := os.Stat(filepath.Join(rootDir, "nested")); !os.IsNotExist(err) {
+		t.Errorf("intermediate directory %q was left behind by rollback", "nested")
+	}
+}
+
 func TestCreateTemplateTask_PathTraversal(t *testing.T) {
 	tmpDir := t.TempDir()
 
