@@ -223,12 +223,18 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 	// a "<path>.scbake-new" sibling, leaving the original file untouched, so its
 	// previously recorded hash must be preserved.
 	if writePath == absPath {
-		if tc.Manifest.ManagedFiles == nil {
-			tc.Manifest.ManagedFiles = make(map[string]string)
-		}
-		tc.Manifest.ManagedFiles[outputRelPath] = newHash
+		recordManagedHash(tc.Manifest, outputRelPath, newHash)
 	}
 	return nil
+}
+
+// recordManagedHash stores the SHA-256 hash of a file scbake wrote at key in the
+// manifest's managed_files ledger, initializing the map when necessary.
+func recordManagedHash(m *types.Manifest, key, hash string) {
+	if m.ManagedFiles == nil {
+		m.ManagedFiles = make(map[string]string)
+	}
+	m.ManagedFiles[key] = hash
 }
 
 // Execute performs the template creation task.

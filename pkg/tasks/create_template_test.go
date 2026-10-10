@@ -400,7 +400,7 @@ func TestWriteManagedFile_ArtifactDoesNotRecordNewHash(t *testing.T) {
 	// The user hand-edits the generated file, causing drift.
 	absPath := filepath.Join(tmpDir, rel)
 	drifted := []byte("version: 2 # hand edited\n")
-	if err := os.WriteFile(absPath, drifted, 0o644); err != nil {
+	if err := os.WriteFile(absPath, drifted, 0o600); err != nil {
 		t.Fatalf("failed to seed drift: %v", err)
 	}
 
@@ -437,9 +437,6 @@ func TestWriteManagedFile_ArtifactDoesNotRecordNewHash(t *testing.T) {
 	if got := manifest.ManagedFiles[rel]; got != originalHash {
 		t.Errorf("ManagedFiles[%q] = %s, want original hash %s (new template hash is %s)", rel, got, originalHash, newHash)
 	}
-	if manifest.ManagedFiles[rel] == newHash {
-		t.Errorf("ManagedFiles[%q] was incorrectly overwritten with the new template hash %s", rel, newHash)
-	}
 }
 
 func TestWriteManagedFile_NormalWriteRecordsNewHash(t *testing.T) {
@@ -458,7 +455,7 @@ func TestWriteManagedFile_NormalWriteRecordsNewHash(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o750); err != nil {
 		t.Fatalf("failed to create parent dir: %v", err)
 	}
-	if err := os.WriteFile(absPath, drifted, 0o644); err != nil {
+	if err := os.WriteFile(absPath, drifted, 0o600); err != nil {
 		t.Fatalf("failed to seed drift: %v", err)
 	}
 
