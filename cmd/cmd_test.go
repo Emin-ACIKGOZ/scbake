@@ -114,7 +114,7 @@ func (h *MockHandlerGeneric) GetTasks(_ string, _, _ string) ([]types.Task, erro
 // commands do not touch the real user config.
 //
 // os.UserConfigDir/os.UserCacheDir resolve differently per platform: Linux
-// honours XDG_CONFIG_HOME/XDG_CACHE_HOME, macOS uses $HOME/Library/..., and
+// honors XDG_CONFIG_HOME/XDG_CACHE_HOME, macOS uses $HOME/Library/..., and
 // Windows uses %AppData%/%LocalAppData%. Setting all of them keeps these tests
 // isolated on every OS (relying on XDG alone made them share the real user
 // config on macOS/Windows).
