@@ -1,0 +1,7 @@
+# svu configuration: derive the next version from Conventional Commits.
+# See docs/COMMIT_MESSAGES.md for the commit conventions.
+#
+# v0: pre-1.0 semantics. While the project is 0.x, a breaking change bumps the
+# MINOR version (0.x.0) instead of the MAJOR version, so we do not jump to 1.0.0
+# accidentally. Revisit at 1.0.
+v0: true

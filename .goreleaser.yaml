@@ -1,0 +1,73 @@
+# Copyright 2025 Emin Salih Açıkgöz
+# SPDX-License-Identifier: Apache-2.0
+#
+# GoReleaser configuration for scbake.
+#
+# Asset naming is deliberately kept compatible with install.sh, which downloads
+#   <release>/scbake-<os>-<arch>[.exe]
+# and a checksum file literally named SHA256SUMS. Do not "simplify" the archive
+# naming or the checksum name without updating install.sh and the README.
+version: 2
+
+project_name: scbake
+
+builds:
+  - id: scbake
+    main: ./main.go
+    binary: scbake
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      # Version comes solely from the git tag (single source of truth).
+      - -s -w -X scbake/cmd.version={{ .Tag }}
+
+# Emit bare, install.sh-compatible binaries instead of tar.gz/zip archives.
+archives:
+  - id: scbake
+    formats: [binary]
+    name_template: >-
+      scbake-{{ .Os }}-{{ .Arch }}{{ if eq .Os "windows" }}.exe{{ end }}
+
+checksum:
+  # install.sh expects a file named exactly SHA256SUMS.
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - '^docs:'
+      - '^chore\(release\):'
+      - '^test:'
+      - '^ci:'
+
+release:
+  draft: false
+  prerelease: auto
+  make_latest: true
+  name_template: "{{ .Tag }}"
+  header: |
+    scbake {{ .Tag }}
+
+    Install or update with:
+
+    ```sh
+    curl -sSL https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh | bash
+    ```

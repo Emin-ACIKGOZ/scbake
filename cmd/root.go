@@ -11,8 +11,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Set this with a linker flag during the build process in the future.
-var version = "v0.5.2"
+// version is set at build time via the linker:
+//
+//	-ldflags "-X scbake/cmd.version={{ .Tag }}"
+//
+// See .goreleaser.yaml. It falls back to "dev" for local builds.
+var version = "dev"
 
 var (
 	dryRun          bool

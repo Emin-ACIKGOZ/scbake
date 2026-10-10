@@ -1,0 +1,77 @@
+# Copyright 2025 Emin Salih Açıkgöz
+# SPDX-License-Identifier: Apache-2.0
+#
+# Automated release pipeline: compute the next version from Conventional
+# Commits (svu), update CHANGELOG.md (git-cliff), tag, and publish (goreleaser).
+#
+# See .github/RELEASING.md and docs/COMMIT_MESSAGES.md.
+name: Release
+
+on:
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install svu
+        run: go install github.com/caarlos0/svu/v3@latest
+
+      - name: Determine next version
+        id: version
+        run: |
+          next="$(svu next || true)"
+          echo "next=${next}" >> "$GITHUB_OUTPUT"
+          if [ -z "$next" ]; then
+            echo "No release-worthy commits since the last tag; nothing to do."
+          else
+            echo "Next version will be: ${next}"
+          fi
+
+      - name: Generate CHANGELOG.md
+        if: steps.version.outputs.next != ''
+        uses: orhun/git-cliff-action@v4
+        with:
+          args: --tag ${{ steps.version.outputs.next }}
+          output: CHANGELOG.md
+
+      - name: Commit changelog and tag
+        if: steps.version.outputs.next != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -s -m "chore(release): ${{ steps.version.outputs.next }}" || echo "No changelog changes to commit"
+          git tag -a "${{ steps.version.outputs.next }}" -m "Release ${{ steps.version.outputs.next }}"
+          git push origin HEAD
+          git push origin "${{ steps.version.outputs.next }}"
+
+      - name: Run GoReleaser
+        if: steps.version.outputs.next != ''
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
