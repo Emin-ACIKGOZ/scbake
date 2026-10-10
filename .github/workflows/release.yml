@@ -28,6 +28,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Authenticate pushes as the release deploy key, which is registered as
+          # a bypass actor on the "master protection" ruleset. GITHUB_TOKEN
+          # cannot push to a protected branch.
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
       - name: Set up Go
         uses: actions/setup-go@v5

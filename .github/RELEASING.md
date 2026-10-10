@@ -51,8 +51,22 @@ change them without updating `install.sh` and `README.md`:
 - `master` is protected: changes land through a pull request; commit messages are
   checked by `commitlint`; the PR title is checked (squash merges make the title the
   released commit).
-- The release job **pushes a commit and a tag**. Branch protection must permit the
-  GitHub Actions bot to push (a ruleset bypass), or the release step will fail.
+- The release job **pushes a commit and a tag** to the protected `master` branch. It
+  authenticates with a dedicated **deploy key** (`RELEASE_DEPLOY_KEY` secret) that is a
+  bypass actor on the `master protection` ruleset. `GITHUB_TOKEN` cannot push to a
+  protected branch, and GitHub Actions cannot be a ruleset bypass actor on a
+  user-owned repository. Human contributors must use pull requests.
+
+## Repository setup (one-time, already applied)
+
+This repository relies on the following GitHub configuration:
+
+- **Ruleset** `master protection` (branch target `refs/heads/master`): requires a pull
+  request and the `Lint`, `Coverage gate`, `Commit messages`, and `PR title` status
+  checks; blocks force-pushes and deletions. A **deploy key** is the sole bypass actor.
+- **Deploy key** `scbake release bot` (write access) + the `RELEASE_DEPLOY_KEY` secret.
+- **Private vulnerability reporting** enabled; **Discussions** enabled.
+- **Labels** for triage (see [docs/TRIAGE.md](../docs/TRIAGE.md)).
 
 ## Correcting a bad release
 
