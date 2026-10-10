@@ -260,7 +260,9 @@ func managedFilesKey(tc types.TaskContext, absPath, outputRelPath string) string
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return outputRelPath
 	}
-	return rel
+	// Normalize to forward slashes so keys are identical across platforms and
+	// match the slash-separated paths templates declare.
+	return filepath.ToSlash(rel)
 }
 
 // recordedHash returns the hash scbake last recorded for a managed path. It

@@ -571,8 +571,8 @@ func TestWriteManagedFile_ManagedFilesScopedByProject(t *testing.T) {
 		t.Fatalf("writing subproject B failed: %v", err)
 	}
 
-	keyA := filepath.Join("services", "a", "LICENSE")
-	keyB := filepath.Join("services", "b", "LICENSE")
+	keyA := "services/a/LICENSE"
+	keyB := "services/b/LICENSE"
 	if got := manifest.ManagedFiles[keyA]; got != HashContent(contentA) {
 		t.Errorf("ManagedFiles[%q] = %q, want hash of A's content", keyA, got)
 	}
