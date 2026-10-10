@@ -1,0 +1,40 @@
+# Copyright 2025 Emin Salih Açıkgöz
+# SPDX-License-Identifier: Apache-2.0
+#
+# Validates the pull request title against Conventional Commits. Because
+# scbake uses squash merges, the PR title becomes the commit that drives the
+# automated release version, so it must be well-formed.
+name: PR Title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint-pr-title:
+    name: PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject must not start with an uppercase letter and must not be empty.
+            See docs/COMMIT_MESSAGES.md.
