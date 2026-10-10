@@ -1,0 +1,27 @@
+# CODEOWNERS
+#
+# Owners are requested to review pull requests that touch the paths below.
+# Adding a maintainer to an area is a one-line change: append their @handle.
+# See MAINTAINERS.md for the human-readable version of this list.
+
+# Default owner for everything.
+*                            @Emin-ACIKGOZ
+
+# CLI
+/cmd/                        @Emin-ACIKGOZ
+
+# Language packs and templates
+/pkg/lang/                   @Emin-ACIKGOZ
+/pkg/templates/              @Emin-ACIKGOZ
+/pkg/tasks/                  @Emin-ACIKGOZ
+
+# Core engine
+/internal/core/              @Emin-ACIKGOZ
+/internal/filesystem/        @Emin-ACIKGOZ
+/internal/manifest/          @Emin-ACIKGOZ
+/internal/schema/            @Emin-ACIKGOZ
+/internal/templateregistry/  @Emin-ACIKGOZ
+
+# Documentation and repository metadata
+/docs/                       @Emin-ACIKGOZ
+/.github/                    @Emin-ACIKGOZ
