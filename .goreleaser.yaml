@@ -32,8 +32,7 @@ builds:
 archives:
   - id: scbake
     formats: [binary]
-    # {{ .Ext }} is ".exe" on Windows and empty elsewhere.
-    name_template: "scbake-{{ .Os }}-{{ .Arch }}{{ .Ext }}"
+    name_template: 'scbake-{{ .Os }}-{{ .Arch }}{{ if eq .Os "windows" }}.exe{{ end }}'
 
 checksum:
   # install.sh expects a file named exactly SHA256SUMS.
