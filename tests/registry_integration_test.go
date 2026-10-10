@@ -11,6 +11,19 @@ import (
 	"testing"
 )
 
+// userCacheDir returns the cache root the CLI resolves via os.UserCacheDir().
+// That API honors XDG_CACHE_HOME on Linux but uses the native
+// ~/Library/Caches location on macOS, so deriving the expectation the same way
+// keeps this integration test portable across platforms.
+func userCacheDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatalf("cannot determine user cache dir: %v", err)
+	}
+	return dir
+}
+
 func TestRegistryPullEndToEnd(t *testing.T) {
 	tmpDir := t.TempDir()
 	origWd, _ := os.Getwd()
@@ -45,7 +58,7 @@ func TestRegistryPullEndToEnd(t *testing.T) {
 		t.Fatalf("pull template: %v\n%s", err, out)
 	}
 
-	cacheDir := filepath.Join(xdgCache, "scbake/templates", "testreg", "editorconfig")
+	cacheDir := filepath.Join(userCacheDir(t), "scbake", "templates", "testreg", "editorconfig")
 	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
 		t.Fatalf("cache dir not created: %s", cacheDir)
 	}
@@ -148,7 +161,7 @@ func TestRegistryPull_WithSubdirectory(t *testing.T) {
 		t.Fatalf("pull template: %v\n%s", err, out)
 	}
 
-	cacheDir := filepath.Join(xdgCache, "scbake/templates", "subreg", "editorconfig")
+	cacheDir := filepath.Join(userCacheDir(t), "scbake", "templates", "subreg", "editorconfig")
 	if _, err := os.Stat(filepath.Join(cacheDir, ".editorconfig.tpl")); os.IsNotExist(err) {
 		t.Fatalf("subdirectory template not promoted to cache root: %s", cacheDir)
 	}
