@@ -6,11 +6,79 @@ package templateregistry
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
+
+// credentialQueryMarkers are case-insensitive substrings that, when present in
+// a query parameter name, mark its value as credential-bearing. Substring
+// matching (rather than an exact allowlist) also covers vendor-specific names
+// such as "X-Amz-Signature", "sig", and "key".
+var credentialQueryMarkers = []string{
+	"token", "secret", "sig", "key", "auth", "pass", "cred",
+	"code", "session", "jwt", "sas",
+}
+
+// isCredentialQueryKey reports whether a query parameter name looks like it
+// carries a credential.
+func isCredentialQueryKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, marker := range credentialQueryMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// RedactURL strips credentials from a registry URL so it is safe to print in
+// output or embed in error messages. It removes userinfo (username/password),
+// the fragment (which can carry OAuth implicit-flow tokens), and any
+// credential-bearing query parameter value. Unparseable URLs are replaced with
+// a safe placeholder rather than leaking the raw string.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "[invalid registry URL]"
+	}
+
+	u.User = nil
+	u.Fragment = ""
+	u.RawFragment = ""
+
+	if u.RawQuery != "" {
+		query, parseErr := url.ParseQuery(u.RawQuery)
+		if parseErr != nil {
+			// Fail closed: a malformed query (for example ';' separators or an
+			// invalid escape) makes ParseQuery drop or misparse parameters, so
+			// withhold the whole query rather than risk echoing a credential.
+			u.RawQuery = "REDACTED"
+		} else {
+			changed := false
+			for key := range query {
+				if isCredentialQueryKey(key) {
+					query.Set(key, "REDACTED")
+					changed = true
+				}
+			}
+			if changed {
+				u.RawQuery = query.Encode()
+			}
+		}
+	}
+
+	// A URL without a host but with an opaque component can still smuggle
+	// credentials (e.g. "user:pass@host/x"); refuse to echo it.
+	if u.Host == "" && u.Opaque != "" {
+		return "[invalid registry URL]"
+	}
+
+	return u.String()
+}
 
 const (
 	configDirName  = "scbake"

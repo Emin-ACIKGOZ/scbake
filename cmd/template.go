@@ -50,7 +50,7 @@ The --token flag stores the token in the config file; use the env var to avoid t
 		if err := m.Add(args[0], args[1], registryAddToken, registryAddVersion, registryAddSubdirectory); err != nil {
 			return err
 		}
-		msg := fmt.Sprintf("Added registry %q (%s)", args[0], args[1])
+		msg := fmt.Sprintf("Added registry %q (%s)", args[0], templateregistry.RedactURL(args[1]))
 		if registryAddVersion != "" {
 			msg += fmt.Sprintf(" [version: %s]", registryAddVersion)
 		}
@@ -105,7 +105,7 @@ var registryListCmd = &cobra.Command{
 			if r.Token != "" {
 				extra += " [token set]"
 			}
-			fmt.Printf("  %s (%s)%s\n", r.Name, r.URL, extra)
+			fmt.Printf("  %s (%s)%s\n", r.Name, templateregistry.RedactURL(r.URL), extra)
 		}
 		return nil
 	},

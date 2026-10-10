@@ -6,9 +6,11 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"scbake/internal/templateregistry"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/templates"
@@ -106,6 +108,95 @@ type MockHandlerGeneric struct{ Tasks []types.Task }
 
 func (h *MockHandlerGeneric) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 	return h.Tasks, nil
+}
+
+// isolateXDGDirs points the registry config/cache at a temp dir so registry
+// commands do not touch the real user config.
+//
+// os.UserConfigDir/os.UserCacheDir resolve differently per platform: Linux
+// honors XDG_CONFIG_HOME/XDG_CACHE_HOME, macOS uses $HOME/Library/..., and
+// Windows uses %AppData%/%LocalAppData%. Setting all of them keeps these tests
+// isolated on every OS (relying on XDG alone made them share the real user
+// config on macOS/Windows).
+func isolateXDGDirs(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("AppData", filepath.Join(dir, "AppData"))
+	t.Setenv("LocalAppData", filepath.Join(dir, "LocalAppData"))
+}
+
+// captureStdout redirects os.Stdout for the duration of fn and returns what
+// was written.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe failed: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing pipe writer failed: %v", err)
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured stdout failed: %v", err)
+	}
+	_ = r.Close()
+	return string(data)
+}
+
+// TestRegistryAdd_RedactsCredentials is a regression test for SCB-034: the
+// registry URL printed on 'registry add' must not leak embedded credentials.
+func TestRegistryAdd_RedactsCredentials(t *testing.T) {
+	isolateXDGDirs(t)
+
+	out := captureStdout(t, func() {
+		if err := executeCLI("template", "registry", "add", "acme", "https://user:pass@host/x"); err != nil {
+			t.Errorf("registry add failed: %v", err)
+		}
+	})
+
+	if strings.Contains(out, "pass") {
+		t.Errorf("registry add output leaks credentials: %q", out)
+	}
+	if !strings.Contains(out, "https://host/x") {
+		t.Errorf("registry add output should show the redacted URL, got %q", out)
+	}
+}
+
+// TestRegistryList_RedactsCredentials is a regression test for SCB-034: the
+// registry URL printed on 'registry list' must not leak embedded credentials.
+func TestRegistryList_RedactsCredentials(t *testing.T) {
+	isolateXDGDirs(t)
+
+	m, err := templateregistry.NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	if err := m.Add("acme", "https://user:pass@host/x", "", "", ""); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := executeCLI("template", "registry", "list"); err != nil {
+			t.Errorf("registry list failed: %v", err)
+		}
+	})
+
+	if strings.Contains(out, "pass") {
+		t.Errorf("registry list output leaks credentials: %q", out)
+	}
+	if !strings.Contains(out, "https://host/x") {
+		t.Errorf("registry list output should show the redacted URL, got %q", out)
+	}
 }
 
 // --- Registration Tests ---
