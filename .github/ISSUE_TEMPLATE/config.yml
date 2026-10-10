@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/Emin-ACIKGOZ/scbake/security/advisories/new
+    about: Report privately via GitHub Security Advisories. Do NOT open a public issue.
+  - name: 💬 Questions and usage help
+    url: https://github.com/Emin-ACIKGOZ/scbake/discussions
+    about: Ask "how do I…" questions and discuss ideas here, not in the issue tracker.
+  - name: 📖 Documentation
+    url: https://github.com/Emin-ACIKGOZ/scbake/blob/master/README.md
+    about: README, QUICK_START, EXTENDING, and ARCHITECTURE.

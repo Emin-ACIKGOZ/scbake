@@ -1,0 +1,61 @@
+name: ✨ Feature request
+description: Suggest a new language pack, template, flag, or behavior.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Please describe the **problem** before the solution.
+
+        Note: features that fall outside the core are usually better built as a language
+        pack, a template, a registry entry, or a fork — see `docs/SCOPE.md`.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Type of request
+      options:
+        - New language pack
+        - New tooling template
+        - CLI flag / command
+        - Manifest / config change
+        - Core behavior (transaction, priority, registry)
+        - Schema / validation
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do, and what is missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Desired behavior, flag, or handler. Sketch the `scbake` command if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds, existing templates, or other approaches.
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Examples, references, prior art, or a link to a template or registry.
+    validations:
+      required: false

@@ -1,0 +1,118 @@
+name: 🐛 Bug report
+description: Something scbake did wrong — crash, wrong files, failed rollback, bad output.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve scbake. Please fill in **every required field** — a bug
+        without a reproducible command is hard to fix.
+
+        For security issues, do **not** use this form. Use the security link on the
+        previous screen.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I read the docs and this is not expected behavior.
+          required: true
+        - label: I can reproduce this on the latest release.
+          required: false
+  - type: input
+    id: version
+    attributes:
+      label: scbake version
+      description: Output of `scbake --version`.
+      placeholder: v0.5.2
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - install.sh (curl/wget)
+        - Manual release binary
+        - go install
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS / architecture
+      placeholder: macOS 14 arm64 / Ubuntu 24.04 amd64 / Windows 11 amd64
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Pick the closest match; maintainers may relabel.
+      options:
+        - CLI / flags / output
+        - Language pack (go, spring, svelte)
+        - Tooling template (makefile, ci_github, ...)
+        - Task execution
+        - Transaction / rollback
+        - Manifest (scbake.toml)
+        - Template registry / pull
+        - Schema validation
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command(s) run
+      description: The exact command you executed.
+      placeholder: scbake apply --with go_linter --lang go
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The minimal sequence that triggers the bug. Paste the relevant `scbake.toml` if applicable.
+      placeholder: |
+        1. Run `scbake new demo --lang go`
+        2. Run `scbake apply --with go_linter`
+        3. ...
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead. Note whether files were left behind or partially created.
+    validations:
+      required: true
+  - type: textarea
+    id: dry_run
+    attributes:
+      label: Dry-run output
+      description: Re-run with `--dry-run` and paste output — this separates planning bugs from execution bugs.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: Paste stderr. Screenshots can be attached by dragging them into this box.
+      render: shell
+    validations:
+      required: false
