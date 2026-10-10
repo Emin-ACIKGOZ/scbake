@@ -92,7 +92,7 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 }
 
 func doDownload(downloadURL, token, name string) (*http.Response, error) {
-	// The request uses a never-cancelled background context; the client timeout
+	// The request uses a never-canceled background context; the client timeout
 	// below bounds the whole exchange. The caller reads resp.Body after this
 	// function returns, so the request context must not be canceled here.
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, downloadURL, nil)
