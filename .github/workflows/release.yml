@@ -11,6 +11,11 @@ on:
   push:
     branches: ["master"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)release. Leave empty to auto-detect the next version."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -28,6 +33,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
           # Authenticate pushes as the release deploy key, which is registered as
           # a bypass actor on the "master protection" ruleset. GITHUB_TOKEN
           # cannot push to a protected branch.
@@ -42,9 +48,15 @@ jobs:
       - name: Install svu
         run: go install github.com/caarlos0/svu/v3@latest
 
-      - name: Determine next version
+      - name: Determine version
         id: version
         run: |
+          # Manual re-release of an existing tag.
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "version=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "Manual release for tag ${{ github.event.inputs.tag }}"
+            exit 0
+          fi
           # `svu next` returns the current version when there is no bump, so
           # guard against re-releasing an existing tag.
           current="$(git describe --tags --abbrev=0 2>/dev/null || true)"
@@ -59,7 +71,7 @@ jobs:
           fi
 
       - name: Generate CHANGELOG.md
-        if: steps.version.outputs.version != ''
+        if: steps.version.outputs.version != '' && github.event.inputs.tag == ''
         uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
@@ -69,7 +81,7 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
 
       - name: Commit changelog and tag
-        if: steps.version.outputs.version != ''
+        if: steps.version.outputs.version != '' && github.event.inputs.tag == ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
