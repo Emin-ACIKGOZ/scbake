@@ -1,7 +1,6 @@
 package templateregistry
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -91,10 +90,7 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 }
 
 func doDownload(url, token, name string) (*http.Response, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -103,7 +99,10 @@ func doDownload(url, token, name string) (*http.Response, error) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	client := &http.Client{}
+	// Bound the whole request (connect, redirects, and body read) with the
+	// client timeout. The caller reads resp.Body after this function returns,
+	// so the request context must not be cancelled here.
+	client := &http.Client{Timeout: httpTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("downloading from %q: %w", url, err)

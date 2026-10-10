@@ -4,12 +4,14 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"scbake/internal/testutil"
 	"testing"
+	"time"
 )
 
 const (
@@ -212,6 +214,79 @@ func TestPullFromURL_WithAuth(t *testing.T) {
 	}
 	if string(content) != "authed content" {
 		t.Errorf("expected 'authed content', got %q", string(content))
+	}
+}
+
+// TestDoDownload_BodyReadableAfterReturn is a regression test for SCB-026:
+// the request context must stay alive after doDownload returns so the caller
+// can consume the response body. Previously the deferred cancel() cancelled
+// the request context as soon as doDownload returned, so the body read failed
+// with "context canceled".
+func TestDoDownload_BodyReadableAfterReturn(t *testing.T) {
+	payload := []byte("some response body")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Ensure doDownload has returned (and, pre-fix, cancelled the
+		// context) before the body becomes available.
+		time.Sleep(200 * time.Millisecond)
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+
+	resp, err := doDownload(srv.URL, "", "tpl")
+	if err != nil {
+		t.Fatalf("doDownload failed: %v", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading body after doDownload returned failed: %v", err)
+	}
+	if !bytes.Equal(body, payload) {
+		t.Errorf("expected body %q, got %q", payload, body)
+	}
+}
+
+// TestPullFromURL_ReadsBodyAfterHeaders is the end-to-end regression test for
+// SCB-026: a pull must succeed even when the server sends headers before the
+// body, so the response body is read after doDownload has returned.
+func TestPullFromURL_ReadsBodyAfterHeaders(t *testing.T) {
+	archive := testutil.CreateTarGz(map[string]string{
+		"main.go.tpl": testTplContent,
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		time.Sleep(200 * time.Millisecond)
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err != nil {
+		t.Fatalf("PullFromURL failed: %v", err)
+	}
+
+	cacheDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
+	//nolint:gosec // test temp directory
+	content, err := os.ReadFile(filepath.Join(cacheDir, "main.go.tpl"))
+	if err != nil {
+		t.Fatalf("failed to read pulled template: %v", err)
+	}
+	if string(content) != testTplContent {
+		t.Errorf("expected %q, got %q", testTplContent, string(content))
 	}
 }
 
