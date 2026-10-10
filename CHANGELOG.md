@@ -4,263 +4,322 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.5.3] - 2026-10-10
 
-## [Unreleased]
+### Bug Fixes
 
-- Installation via Homebrew
-- Subprocess-based plugin system (if demand exists)
-- Command allowlisting for security
-- Audit logging
-- Plugin registry
-- Hot-reload capabilities (unlikely)
+- **fileutil:** Reject foreign-absolute paths in SafePath (#17)
 
----
+### Continuous Integration
+
+- Test on Linux, macOS, and Windows and enforce a coverage gate
+- Enforce Conventional Commits on pull requests
+- Automate releases with svu, git-cliff, and goreleaser
+- Validate pull request titles for squash merges
+- Authenticate release pushes with a deploy key (#4)
+- **release:** Guard against re-tagging and fix changelog output (#5)
+- **release:** Support re-releasing an existing tag (#6)
+- **release:** Re-release tags with the current goreleaser config (#7)
+- **release:** Keep git state clean during goreleaser re-releases (#8)
+- **release:** Use a supported template for the windows executable name (#9)
+- **release:** Drop the manual .exe suffix for windows binaries (#10)
+
+### Documentation
+
+- **governance:** Add AI usage policy
+- **scope:** Define core scope and extension boundary
+- **triage:** Add issue triage guide
+- **commit:** Add commit message conventions
+- **contributing:** Restructure guide and add maintainer scaffolding
+- **releasing:** Correct branch references to master
+- **commit:** Note the enforced header length limit
+- **contributing:** Require DCO sign-off
+- **releasing:** Document the automated release process
+- Drop stale version literal from the README
+
+### Miscellaneous Tasks
+
+- **github:** Replace markdown issue templates with issue forms
+- **license:** Relicense scbake to Apache-2.0
+
+### Testing
+
+- **tasks:** Skip the POSIX permission test on Windows (#15)
 
 ## [0.5.2] - 2026-08-12
 
-**Conflict warnings routed to stderr; stdout kept clean for piped consumers.**
+### Bug Fixes
 
-### Fixed
-
-- **Conflict warnings to stderr** — drift warnings in `CreateTemplateTask` (`--conflict-strategy=artifact`/`keep-local`) now write to `stderr` like all other diagnostics, so piped stdout stays a clean result stream
-
----
+- **pkg/tasks:** Route conflict warnings to stderr
 
 ## [0.5.1] - 2026-08-12
 
-**Transaction finalization fixed; security hardening consolidated into central path helpers; internal refactors.**
+### Bug Fixes
 
-### Fixed
+- **transaction:** Commit must finalize transactions with no backups
+- **ci:** Update golangci-lint version to v2.11.4
 
-- **Transaction Commit finalization** — `Commit` now properly finalizes transactions that produced no backups, instead of leaving them in an unfinished state
-- **CI** — golangci-lint pinned to v2.11.4
+### Features
 
-### Security
+- **security:** Implement central fileutil.SafePath helpers and resolve G304/G110 warnings
+- **fileutil:** Introduce reusable ExtractTarGz helper and simplify extractTarGz in pull.go
 
-- **Central `fileutil.SafePath` helpers** — path validation consolidated into reusable helpers, resolving G304/G110 lint findings
+### Refactor
 
-### Changed
+- **tests:** Modularize TestMonorepoGovernance into step helpers
+- **core:** Modularize RunApply and executeAndFinalize into pipeline step helpers
+- **cmd:** Modularize runNew by extracting bootstrapProjectDir helper
+- **tasks:** Introduce WriteManagedFile helper and simplify CreateTemplateTask and LicenseTask
+- **tasks:** Extract appendFileContent and trackTaskFile helpers in pkg/tasks
+- **cmd:** Replace custom splitOnce with standard strings.SplitN in parseSetFlags
+- **templates:** Introduce tasks.BuildTemplateTasks factory to deduplicate handler boilerplate
 
-- **Refactors** — `tasks.BuildTemplateTasks` factory deduplicates handler boilerplate; `WriteManagedFile` and `ExtractTarGz` centralize file creation/extraction; `runNew` and `RunApply` modularized into step helpers; `parseSetFlags` uses `strings.SplitN`; test helpers consolidated into `internal/testutil`
+### Testing
 
----
+- **testutil:** Consolidate createTarGz test helper into internal/testutil
 
-## [0.5.0] - 2026-08-10
+## [0.5.0] - 2026-08-09
 
-**Hardened path handling and structural XML insertion; monorepo workflows documented and verified.**
+### Bug Fixes
 
-### Added
+- **security:** Enforce target containment in AppendFileTask and CreateDirTask
+- **security:** Correct boundary check in CreateTemplateTask path validation
+- **pkg/tasks:** Locate InsertXMLTask targets structurally via encoding/xml token stream
+- **pkg/tasks:** Reject undeclared namespace prefixes in ElementPath matching
 
-#### Monorepo Management
-- **Monorepo workflows documented and verified** — README and QUICK_START now cover managing multiple subprojects from a central `scbake.toml` via recursive root discovery: scoped template application per subdirectory and fleet-wide governance from the root, verified by monorepo governance integration tests
+### Documentation
 
-#### Documentation
-- **Execution flow and transaction diagrams** — mermaid diagrams for plan execution, rollback, and the transaction lifecycle in README and ARCHITECTURE
+- Add mermaid diagrams for execution flow and transaction logic
 
-#### Tests
-- **Security and boundary regression suite** — path traversal contracts for all file tasks, XML parsing boundary cases, and schema variable fuzz testing
-- **Transaction priority-band tests** — LIFO rollback across priority bands, byte-exact file restoration, and zero transaction residue on failure
+### Features
 
-### Security
-- **Target containment for file tasks** — AppendFileTask, CreateDirTask, and CreateTemplateTask now reject paths that resolve outside the target directory before any file operation, including paths that merely share a directory-name prefix (e.g. `<target>/root-evil` vs. `<target>/root`). CreateDirTask resolves relative paths against the target directory instead of the process working directory, and validation now also applies in dry-run mode
-- **Structural XML target selection** — InsertXMLTask verifies the complete element ancestry via the XML token stream: paths with nonexistent ancestors (e.g. `/project/nonexistent/plugins`) or undeclared namespace prefixes are rejected instead of silently matching a same-named element elsewhere in the file. Matching is fail-closed: a self-closing first match is rejected rather than skipping to a later element
+- Enhance and document native monorepo support
 
----
+### Styling
 
-## [0.4.1] - 2025-06-09
+- **pkg/tasks:** Gofmt alignment for splice boundary test table
 
-**Template schema & input validation: fail early when required variables are missing.**
+### Testing
 
-### Added
+- **transaction:** Add priority-band integration tests for execution engine and rollback
+- **security:** Add XML parsing boundary, path traversal, and schema fuzz tests
 
-#### Template Schema & Input Validation
-- **`schema.json` per template** — Template authors declare required and optional input variables with types and defaults in a `schema.json` embedded alongside their templates
-- **`SchemaProvider` interface** — Optional interface for `templates.Handler`; templates that implement it expose their embedded schema for pre-execution validation
-- **`internal/schema` package** — Schema parsing (`ParseSchema`, `ParseSchemaBytes`, `ReadSchema`), type system (`string`, `number`, `boolean`), and validation logic
-- **`validateSelectedTemplates()` in `core.RunApply`** — Before any tasks execute, every `--with` template's schema is validated against the manifest metadata; all errors are collected and reported in a single pass
-- **`--set key=value` flag** — New `--set` flag on `new` and `apply` commands populates `Manifest.Metadata` for schema validation; can be repeated (e.g., `--set oncall_alias=my-team --set service_id=srv-123`)
-- **Example schemas** — `makefile` and `ci_github` templates now ship with `schema.json` declaring their optional variables (`build_tool`, `test_command`, `runner_os`, `go_version`) with defaults
+## [0.4.1] - 2026-06-09
 
-#### Tests
-- Full unit test coverage for schema parsing, type validation, required/optional/default handling, and multiple error accumulation (`internal/schema/schema_test.go`, `internal/schema/validator_test.go`)
-- Core validation tests for `validateSelectedTemplates` with schema-providing, non-schema, and unknown handlers (`internal/core/schema_validation_test.go`)
-- Integration test for `--set` flag parsing and template application with optional variables (`tests/schema_validation_integration_test.go`)
+### Features
 
-#### Documentation
-- Added schema and validation section to `docs/EXTENDING.md`
+- **schema:** Template input validation with pattern/enum, wire templates to metadata, extend to lang packs
 
----
+## [0.4.0] - 2026-06-09
 
-## [0.4.0] - 2025-06-09
+### Bug Fixes
 
-**Private template registries: distribute and version templates across teams.**
+- **new:** Correct os.Chdir side-effect and cleanup logic
+- **task:** Correct file overwrite logic and implement --force
+- **ui:** Unify logging in 'new' command
+- **new:** Correct unexported field access idiomatically
+- **core:** Make 'apply' robust on empty repositories
+- **core:** Fix 'smart' template logic by using future manifest
+- **lang/go:** Make Go handler idempotent
+- **core:** Prevent duplicate manifest entries
+- **git:** Prevent commit failure on a clean repo
+- **core:** Correct project name resolution in buildPlan
+- **core, lang:** Sanitize project names for Go modules
+- **lang/svelte:** Run vite scaffolder from parent directory
+- **lang/spring:** Run curl and unzip from parent directory
+- **lang/spring:** Use robust Spring Initializr URL
+- **lang/spring:** Encode project name and sanitize package for Spring Initializr URL
+- **spring:** Correctly handle unzip pathing and consistent chmod execution
+- **executor:** Corrected spinner animation
+- **main.go.tpl:** Added comment to package for proper linting.
+- **template:** Adjusted templates to apply after language packs are applied.
+- **svelte_linter:** Linter correctly uses ESLint 9 for newer versions of Svelte.
+- **new:** New now correctly allows initialization without a lang for project root setup
+- **apply/run:** Improved path logic for Manifest and TargetPath:
+- **spring.go:** Moved target directory check to correct position and added an Idempotency check.
+- **svelte.go:** Added defensive checks and explicit script setup
+- **Dockerfile:** Simplified devcontainer Dockerfile to use standard devcontainer base image
+- **Makefile:** Makefile is now more robust and correctly handles languages
+- **pom_snippet:** Added explicit checkstyle.xml location
+- **cmd/apply:** Resolve linting issues in applyCmd
+- **cmd/list:** Resolve linting issues in listCmd
+- **cmd/new:** Resolve multiple linting issues
+- **cmd/root:** Resolve linting issues in rootCmd
+- **core/executor:** Resolve mnd and package-comments
+- **manifest/io:** Resolve errcheck and revive warnings
+- **internal/pkgs:** Add missing package comments to core modules
+- **types/priority:** Resolve revive warnings and naming conflicts
+- **lang:** Resolve all language handler revive warnings
+- **templates:** Resolve all template handler revive warnings
+- **git/checks:** Resolve noctx, nilerr, and revive warnings
+- **types/priority:** Add comments for constants
+- **perms:** Resolve structural var-naming warnings
+- **git:** Reset to savepoint tag instead of HEAD during rollback
+- **tests:** Refactor git integration tests for linter compliance
+- Ci.yml moved to correct directory
+- **config:** Remove deprecated keys causing golangci-lint failure
+- **config:** Remove version key causing golangci-lint failure
+- **test:** Configure Git identity in TestMain to fix commit failure
+- Handle errors for git config in TestMain to satisfy errcheck
+- **git:** Set local user identity in unit tests to resolve HEAD failure
+- Corrected linting issue
+- Changed branch name to master to reflect repository structure
+- **transaction/util.go:** Moved a linter comment for clarity
+- Resolve path traversal errors and isolate integration tests
+- **git_test:** Isolate git identity using environment variables
+- **.golangci.yml:** Add version field for golangci-lint v2 compatibility
+- **pkg/templates/maven_linter:** Integrate plugin into pom.xml
+- **pkg/lang,pkg/templates:** Add mutex protection to handler registries
+- **internal/ui:** Add mutex protection to spinner goroutine access
+- **internal/ui:** Synchronize output to prevent concurrent write corruption
+- **internal/core:** Add timeout context to prevent indefinite hanging
+- **pkg/tasks:** Optimize memory allocations in insertXMLElement
+- **internal/types:** Change priority initialization panic to error return
+- **internal/manifest:** Log cleanup errors instead of swallowing them
+- **internal/core:** Validate and warn on empty handler results
+- **internal/types:** Implement proper deep copy for manifest
+- **internal/ui:** Prevent goroutine leaks in spinner with context timeout
+- **internal/manifest:** Implement optimistic locking to detect concurrent modifications
+- **deps:** Bump Go toolchain to 1.22.11 to address stdlib CVEs
+- Remove unused nolint directives
+- **test:** Update CreateTemplateTask test for state-aware reconciliation
+- Restore nolint:cyclop for executeAndFinalize after state-aware changes
+- Update example rust handler to match new GetTasks signature
+- Resolve templates from nested registry cache directories
 
-### Added
+### Build
 
-#### Private Template Registries
-- **`scbake template registry add/remove/list`** — Manage named remote template registries with optional auth tokens, version pinning, and archive subdirectory extraction
-- **`scbake template pull <name>`** — Download and cache template archives from registries to `~/.cache/scbake/templates/`; skips redownload if already cached
-- **3-tier template resolution chain**: `--template-dir` overrides → registry cache → embedded defaults, configurable per template file
-- **`RegistryCacheDir` propagation** from CLI (`cmd/new.go`, `cmd/apply.go`) through `RunContext` → `TaskContext` → `CreateTemplateTask.Execute` → `ReadTemplate`
-- **`ResolveCachePath`** searches all cached registries for a template file, including nested template-name subdirectories
-- **Auth support** via stored tokens in config or `SCBAKE_REGISTRY_TOKEN_<NAME>` env var override
-- **Archive extraction** with path traversal protection, subdirectory promotion, and cache validation
-- **Config persisted** to `~/.config/scbake/registries.json` with `0600` permissions
+- Add gitignore for binaries and artifacts
 
-#### Handler Interface Update
-- All `GetTasks` signatures updated to `(targetPath, templateDir, registryCacheDir string)` to support the resolution chain at task execution time
+### Continuous Integration
 
-#### Tests
-- End-to-end integration tests for registry pull, versioned pull, and subdirectory-based pull (`tests/registry_integration_test.go`)
-- Full unit test coverage for config CRUD, resolver, pull/extraction, and the template resolution chain
+- Add test and build pipeline
+- Update golangci-lint to v2.11 for version field compatibility
+- Upgrade golangci-lint to v2.11 with proper v2 configuration
 
-#### Documentation
-- New `template registry` and `template pull` command docs in README
-- Updated architecture docs with resolution chain and registry file structure
-- Updated extending guide with correct 3-param `GetTasks` signatures
+### Documentation
 
-### Fixed
-- `ResolveCachePath` now searches one level deeper within template subdirectories (pull stores `<cacheDir>/<registry>/<templateName>/<file>`)
-- Example Rust handler in `docs/examples/rust-handler/` updated to match 3-param `GetTasks` interface and use proper `TemplateFS` + `TemplatePath` pattern
+- **project:** Add community health files
+- **README.md:** Update README to reflect codebase
+- Update for InsertXMLTask and Maven Linter fix
+- Document --conflict-strategy flag in README
 
----
+### Features
 
-## [0.0.1] - 2025-04-19
+- Add initial CLI structure with Cobra
+- Define core project types
+- Implement global flags
+- **task:** Implement 'ExecCommand' task primitive
+- Implement 'Plan' executor (core logic)
+- **core:** Add Git pre-flight safety checks
+- **core:** Implement Git snapshot and rollback
+- **core:** Implement Git commit on success
+- **apply:** Wire core 'apply' command lifecycle
+- Add pre-flight check for external binaries
+- **task:** Implement 'CreateTemplate' task primitive
+- **lang:** Add 'go' language handler
+- **apply:** Connect 'apply --lang' to language handlers
+- Implement 'scbake.toml' manifest logic
+- **apply:** Update 'apply' to be manifest-aware
+- **task:** Make templates 'smart' (context-aware)
+- **template:** Add 'makefile' synthesis template
+- **apply:** Connect 'apply --with' to tooling templates
+- **apply:** Implement path-scoped application
+- **new:** Implement 'new' command wrapper
+- **list:** Implement 'list' subcommands
+- **ui:** Add simple, library-free spinners
+- **ui:** Refine step-by-step logging
+- **lang/svelte:** Add Svelte handler implementation
+- **core:** Register Svelte and add pre-flight checks
+- **lang/spring:** Add Spring Boot handler implementation
+- **core:** Register Spring and add pre-flight checks
+- **spring:** Add CreateDirTask and ensure target directory exists before Spring project setup
+- **template:** Add 'ci_github' template for GitHub Actions
+- **template:** Add 'editorconfig' template
+- **template:** Add 'go_linter' template
+- **template:** Add 'maven_linter' template
+- **template:** Add 'svelte_linter' template
+- **template:** Add 'devcontainer' template
+- **devcontainer:** Improved devcontainer.json structure for better DX
+- **golangci template:** Improved template quality
+- Add priority band system and update language/template handlers
+- **README:** Added readme file
+- **ci:** Finalize CI pipeline and enable manual run
+- **transaction:** Add atomic filesystem transaction manager with rollback and tests
+- **manifest:** Implement recursive root discovery and atomic save logic
+- **tasks:** Wire transaction manager into task execution
+- **core:** Replace git dependency with native transaction engine
+- **templates:** Add git version control template
+- **templates/git:** Enforce deterministic version control lifecycle
+- **pkg/tasks:** Add InsertXMLTask for XML file modifications
+- **release:** V0.0.1 release with artifact publishing and documentation
+- **install.sh:** Add cross-platform installer script
+- Add community and compliance governance templates
+- Add governance compliance features (v0.1.0)
+- Implement state-aware reconciliation and conflict strategies
+- Add state-aware reconciliation and conflict strategies (v0.2.0)
+- Implement template overrides (BYOT) mechanism
+- Add BYOT template overrides mechanism (v0.3.0)
+- Add private template registry system
+- **private-registry:** Add auth, versioning, subdirectory, and template validation
+- Enable remote registry overrides for surgical snippets
 
-**The first release of scbake: A manifest-driven, atomic project scaffolder.**
+### Miscellaneous Tasks
 
-### Added
-
-#### Core Features
-- ✅ **Atomic operations** - All changes applied transactionally with LIFO rollback
-- ✅ **Manifest tracking** - `scbake.toml` as source of truth for project state
-- ✅ **Priority-based execution** - Tasks execute in defined bands (directory creation → language setup → config → linters → build → VCS)
-- ✅ **Dry-run mode** - Preview changes before applying with `--dry-run`
-- ✅ **Transaction safety** - Automatic rollback on failure, filesystem restored to original state
-
-#### Commands
-- `scbake new <name>` - Create new project with language pack and templates
-- `scbake apply` - Apply templates to existing projects
-- `scbake list [langs|templates|projects]` - View available resources
-
-#### Language Packs (3)
-- **Go** - Creates project structure, runs `go mod init`, `go mod tidy`
-- **Spring** - Bootstrap Java projects from `start.spring.io`
-- **Svelte** - Initialize Vite+Svelte frontend with npm
-
-#### Templates (8)
-- **git** - Initialize Git repo with first commit
-- **editorconfig** - Standard `.editorconfig` for IDE consistency
-- **makefile** - Universal `Makefile` with build/test/lint targets
-- **ci_github** - GitHub Actions workflows (language-aware)
-- **go_linter** - golangci-lint configuration for Go projects
-- **maven_linter** - Checkstyle + Maven plugin integration
-- **svelte_linter** - ESLint 9 for Svelte projects
-- **devcontainer** - VS Code dev container with auto-detected toolchains
-
-#### Task Types (4)
-- **CreateTemplateTask** - Create files from embedded templates with variable substitution
-- **ExecCommandTask** - Run shell commands in project context
-- **CreateDirectoryTask** - Create directories with full path handling
-- **InsertXMLTask** - Insert XML fragments into existing files (e.g., Maven pom.xml)
-
-#### Code Quality
-- Zero external dependencies (standard library only)
-- >75% test coverage across all packages
-- Comprehensive integration tests (full end-to-end workflows)
-- Fuzz tests for XML operations
-- Performance benchmarks (10 benchmarks, optimized)
-- Race detection enabled on all tests
-- Zero linting issues (golangci-lint passing)
-
-#### Documentation
-- `README.md` - Feature overview and usage examples
-- `CONTRIBUTING.md` - Contribution guidelines
-- `SECURITY.md` - Security policy and threat model
-- `docs/QUICK_START.md` - 5-minute getting started guide
-- `docs/EXTENDING.md` - Complete guide to adding custom handlers
-- `docs/ARCHITECTURE.md` - Architecture overview for contributors
-
-#### Security
-- Path traversal prevention in all file operations
-- Optimistic locking for manifest conflict detection (concurrent modifications)
-- Symlink validation in transaction system
-- Secure temporary file handling (0600 permissions)
-- Atomic manifest updates (write to temp file, then rename)
-- No arbitrary code execution (all handlers compiled-in)
-
-### Known Limitations
-
-- **No dynamic plugins** - Handlers must be compiled in. Fork & modify for custom extensions.
-- **Single project per manifest** - One `scbake.toml` per directory (monorepo support planned)
-- **Limited monitoring** - No audit log of executed commands (planned for v0.2.0)
-- **No symlink hardening** - Symlink validation present but not comprehensive (defer to v0.1.0)
-- **Windows support untested** - Developed on Linux, should work on Windows but not verified
-- **No version pinning** - Always pulls latest (e.g., Spring Boot latest, npm packages latest)
+- Remove redundant pathing logic and unify Spring execution environment
+- **go.go:** Documentation and code housekeeping
+- **lint:** Add golangci-lint configuration
+- **License:** Added license text
+- **tasks:** Suppress false positive gosec linter errors
+- **legal:** Add GPL-3.0-or-later SPDX headers to configurations
+- **lang:** Align registry behavior with template registry
+- Bump version from v0.0.1 to v0.1.0
+- Bump version from v0.1.0 to v0.2.0
+- Bump version from v0.2.0 to v0.3.0
 
 ### Performance
-- Sub-10ms handler discovery (interface-based dispatch)
-- <50ms typical project creation (dominated by I/O and command execution)
-- ~500KB memory overhead for 50 templates
-- Single-pass transaction processing with O(n) rollback
 
-### Testing Summary
-- **19 test packages** with >75% coverage
-- **45+ individual tests** including unit, integration, fuzz, and benchmarks
-- **0 race condition issues** (all tests pass with `-race` flag)
-- **10 performance benchmarks** showing optimized XML operations (5.4x improvement)
-- **Edge cases covered**: missing files, rollback on error, concurrent access, malformed XML
+- **pkg/tasks:** Optimize XML operations and add comprehensive tests
 
-### Breaking Changes
-None - This is the first release.
+### Refactor
 
----
+- **lang:** Make handlers path-aware
+- **core:** Consolidate manifest save operation
+- **core:** Remove unused manifest parameter from buildPlan
+- Remove internal comments and deprecated fields
+- **cmd/list:** Decouple list command from hardcoded resources
+- **core/run:** Reduce complexity and clean up linting issues
+- **tasks/create_template:** Reduce complexity and improve pre-checks
+- **templates:** Standardize handler instantiation
+- Fully replace Git-based atomicity with custom FS transaction manager
+- Centralize file markers and permissions in fileutil
+- **ui,core,cmd:** Decouple terminal presentation from execution engine
 
-## Installation
+### Testing
 
-### From Source
+- **util:** Add unit tests for module name sanitization
+- **types:** Add concurrency-safe priority sequence tests
+- **manifest:** Add load and save persistence tests
+- **git:** Add integration suite and fix error propagation
+- **tasks:** Add unit tests for exec command task
+- **tasks:** Add unit tests for directory creation
+- **tasks:** Add unit tests for template creation logic and security checks
+- Add integration suite and fix pathing in 'new' command
+- **lang/go:** Validate task planning and priority safety
+- **lang/spring:** Validate initialization sequence and priority bands
+- **lang/svelte:** Validate bootstrap flow and priority bands
+- **template/ci-github:** Validate workflow path and CI priority band
+- **template/devcontainer:** Enforce structural integrity and deterministic sequencing
+- **template/editorconfig:** Enforce deterministic config band placement
+- **template/go-linter:** Enforce deterministic linter band placement
+- **template/svelte-linter:** Enforce strict priority sequencing and structural integrity
+- **template/makefile:** Enforce deterministic build system placement
+- **maven_linter:** Add integration and edge case tests
+- Expand execution path coverage for governance features
+- Expand execution path coverage for state-aware reconciliation
+- Expand execution path coverage for BYOT template overrides
 
-```bash
-git clone https://github.com/Emin-ACIKGOZ/scbake.git
-cd scbake
-go build -o scbake main.go
-./scbake --version
-```
+### Report
 
-**Requirements**: Go 1.21+
+- **docs:** Deduplicate package headers into single doc files
 
----
-
-## Next Steps
-
-1. **Read the Quick Start**: See `docs/QUICK_START.md` for a 5-minute walkthrough
-2. **Extend scbake**: Add custom handlers - see `docs/EXTENDING.md`
-3. **Contribute**: Found a bug or have an idea? Open an issue on GitHub
-4. **Share feedback**: Help us improve! Your use cases drive the roadmap.
-
----
-
-## Versioning Policy
-
-scbake follows [Semantic Versioning](https://semver.org/):
-
-- **MAJOR version** (X.0.0): Breaking changes to the manifest format or core APIs
-- **MINOR version** (0.X.0): New features (language packs, templates) and minor improvements
-- **PATCH version** (0.0.X): Bug fixes and performance improvements
-
-**Stability guarantees**:
-- v0.0.1 is stable for production use (atomic operations, comprehensive tests)
-- v0.1.0+ will maintain backward compatibility with v0.0.1 projects
-- Breaking changes will be announced with deprecation warnings in advance
-
----
-
-## Contributors
-
-- **Emin Salih Açıkgöz** (@Emin-ACIKGOZ) - Creator, core architecture, all language packs & templates
-
----
-
-## License
-
-scbake is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
