@@ -45,12 +45,13 @@ jobs:
           args: --timeout=5m
 
   test:
-    name: Test (Go ${{ matrix.go-version }})
+    name: Test (${{ matrix.os }}, Go ${{ matrix.go-version }})
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         go-version: ["1.22.x", "1.23.x"]
 
     steps:
@@ -66,18 +67,54 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run unit tests with coverage
-        run: go test -v -race -coverprofile=coverage.out ./...
+      - name: Run tests
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            # The end-to-end suite in ./tests shells out to npm and the network.
+            # Run it on Linux/macOS only; Windows runs every package except tests.
+            packages=$(go list ./... | grep -v '/tests')
+            go test -v ${packages}
+          else
+            go test -v -race ./...
+          fi
+
+  coverage:
+    name: Coverage gate
+    needs: lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests with coverage
+        run: go test -coverprofile=coverage.out ./...
+
+      - name: Enforce coverage threshold
+        env:
+          # Current suite is ~62%. Raise this as coverage improves (target: 75%).
+          COVERAGE_MIN: "60"
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${total}% (minimum: ${COVERAGE_MIN}%)"
+          awk -v t="$total" -v m="$COVERAGE_MIN" 'BEGIN { if (t+0 < m+0) { printf "::error::Coverage %.1f%% is below the required %s%%\n", t, m; exit 1 } }'
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-${{ matrix.go-version }}
+          name: coverage
           path: coverage.out
 
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
-    needs: test
+    needs: [test, coverage]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true
