@@ -108,6 +108,30 @@ func (h *MockHandlerGeneric) GetTasks(_ string, _, _ string) ([]types.Task, erro
 	return h.Tasks, nil
 }
 
+// --- Registration Tests ---
+
+// Verifies that every subcommand is registered exactly once on rootCmd.
+// Cobra's AddCommand does not de-duplicate, so a duplicate registration
+// surfaces as a repeated name in rootCmd.Commands().
+func TestRootCmd_NoDuplicateSubcommands(t *testing.T) {
+	seen := make(map[string]int)
+	for _, c := range rootCmd.Commands() {
+		seen[c.Name()]++
+	}
+
+	for name, count := range seen {
+		if count != 1 {
+			t.Errorf("command %q registered %d times, want exactly 1", name, count)
+		}
+	}
+
+	for _, want := range []string{"apply", "list", "new"} {
+		if seen[want] != 1 {
+			t.Errorf("command %q registered %d times, want exactly 1", want, seen[want])
+		}
+	}
+}
+
 // --- New Command Tests ---
 
 // Verifies that 'new' fails if no language or templates are requested.

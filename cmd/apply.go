@@ -77,7 +77,8 @@ var applyCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(applyCmd)
+	// applyCmd is registered on rootCmd in root.go's init to keep all
+	// subcommand registration in one place.
 	applyCmd.PersistentFlags().StringVar(&langFlag, "lang", "", "Language pack")
 	applyCmd.PersistentFlags().StringSliceVar(&withFlag, "with", []string{}, "Tooling templates")
 	applyCmd.PersistentFlags().StringArrayVar(&applySetFlag, "set", []string{}, "Set template variable (key=value, can be repeated)")

@@ -58,6 +58,5 @@ or the projects currently managed in this repository's ` + fileutil.ManifestFile
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(listCmd)
-}
+// listCmd is registered on rootCmd in root.go's init to keep all
+// subcommand registration in one place; no init is needed here.
