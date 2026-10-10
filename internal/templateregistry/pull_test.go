@@ -220,7 +220,7 @@ func TestPullFromURL_WithAuth(t *testing.T) {
 
 // TestDoDownload_BodyReadableAfterReturn is a regression test for SCB-026:
 // the request context must stay alive after doDownload returns so the caller
-// can consume the response body. Previously the deferred cancel() cancelled
+// can consume the response body. Previously the deferred cancel() canceled
 // the request context as soon as doDownload returned, so the body read failed
 // with "context canceled".
 func TestDoDownload_BodyReadableAfterReturn(t *testing.T) {
@@ -231,7 +231,7 @@ func TestDoDownload_BodyReadableAfterReturn(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		// Ensure doDownload has returned (and, pre-fix, cancelled the
+		// Ensure doDownload has returned (and, pre-fix, canceled the
 		// context) before the body becomes available.
 		time.Sleep(200 * time.Millisecond)
 		_, _ = w.Write(payload)
@@ -295,7 +295,10 @@ func TestPullFromURL_ReadsBodyAfterHeaders(t *testing.T) {
 // failures must not echo credentials embedded in the registry URL.
 func TestDoDownload_ErrorRedactsCredentials(t *testing.T) {
 	// Port 1 is not listening, so the request fails while dialing.
-	_, err := doDownload("https://user:supersecret@127.0.0.1:1/x.tar.gz", "", "tpl")
+	resp, err := doDownload("https://user:supersecret@127.0.0.1:1/x.tar.gz", "", "tpl")
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if err == nil {
 		t.Fatal("expected doDownload to fail against an unreachable host")
 	}
@@ -307,6 +310,26 @@ func TestDoDownload_ErrorRedactsCredentials(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "127.0.0.1:1/x.tar.gz") {
 		t.Errorf("error should still include the useful host/path: %v", err)
+	}
+}
+
+// TestDoDownload_ErrorRedactsControlCharCredentials guards against a credential
+// leak through a wrapped parse error: url.Error renders its URL with %q, so a
+// literal substring replacement misses control characters that the quoting
+// escapes. The redaction must operate on the parsed URL, not the rendered text.
+func TestDoDownload_ErrorRedactsControlCharCredentials(t *testing.T) {
+	resp, err := doDownload("https://user:pass@host/x\ty", "", "tpl")
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("expected doDownload to reject a URL with a control character")
+	}
+
+	for _, secret := range []string{"user:pass", ":pass", "pass@"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("error leaks credentials (%q): %v", secret, err)
+		}
 	}
 }
 

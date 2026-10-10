@@ -43,6 +43,35 @@ func TestRedactURL(t *testing.T) {
 	}
 }
 
+// TestRedactURL_FragmentsAndVendorQueryKeys covers credential carriers that the
+// exact-key allowlist missed: URL fragments (OAuth implicit-flow tokens) and
+// vendor-specific query parameters such as AWS pre-signed URL signatures.
+func TestRedactURL_FragmentsAndVendorQueryKeys(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		secrets []string
+	}{
+		{"fragment token", "https://host/x#access_token=FRAGSECRET", []string{"FRAGSECRET", "access_token"}},
+		{"aws signature", "https://host/x?X-Amz-Signature=AWSSECRET", []string{"AWSSECRET"}},
+		{"short sig", "https://host/x?sig=SIGSECRET", []string{"SIGSECRET"}},
+		{"key param", "https://host/x?key=KEYSECRET", []string{"KEYSECRET"}},
+		{"credential param", "https://host/x?credential=CREDSECRET", []string{"CREDSECRET"}},
+		{"fragment and userinfo", "https://user:pass@host/x#token=FRAGSECRET", []string{"FRAGSECRET", "user:pass"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RedactURL(tt.in)
+			for _, secret := range tt.secrets {
+				if strings.Contains(got, secret) {
+					t.Errorf("RedactURL(%q) = %q still leaks %q", tt.in, got, secret)
+				}
+			}
+		})
+	}
+}
+
 func TestAddAndList(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "registries.json")

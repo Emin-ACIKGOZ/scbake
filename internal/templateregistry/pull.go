@@ -1,6 +1,7 @@
 package templateregistry
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -91,9 +92,13 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 }
 
 func doDownload(downloadURL, token, name string) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
+	// The request uses a never-cancelled background context; the client timeout
+	// below bounds the whole exchange. The caller reads resp.Body after this
+	// function returns, so the request context must not be canceled here.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("creating request for %s: %w", RedactURL(downloadURL), redactURLError(err, downloadURL))
+		redactURLError(err)
+		return nil, fmt.Errorf("creating request for %s: %w", RedactURL(downloadURL), err)
 	}
 
 	if token != "" {
@@ -101,15 +106,11 @@ func doDownload(downloadURL, token, name string) (*http.Response, error) {
 	}
 
 	// Bound the whole request (connect, redirects, and body read) with the
-	// client timeout. The caller reads resp.Body after this function returns,
-	// so the request context must not be cancelled here.
+	// client timeout.
 	client := &http.Client{Timeout: httpTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			urlErr.URL = RedactURL(urlErr.URL)
-		}
+		redactURLError(err)
 		return nil, fmt.Errorf("downloading from %q: %w", RedactURL(downloadURL), err)
 	}
 
@@ -121,15 +122,15 @@ func doDownload(downloadURL, token, name string) (*http.Response, error) {
 	return resp, nil
 }
 
-// redactURLError replaces any occurrence of rawURL in err's message with its
-// redacted form so credentials cannot leak through a wrapped parse error.
-func redactURLError(err error, rawURL string) error {
-	redacted := RedactURL(rawURL)
-	msg := strings.ReplaceAll(err.Error(), rawURL, redacted)
-	if msg == err.Error() {
-		return err
+// redactURLError rewrites the URL carried by a *url.Error to its redacted form
+// so credentials cannot leak through a wrapped request or parse error. url.Error
+// renders its URL with %q, so replacing the raw string literally would miss
+// escaped control characters; mutating the parsed URL is exact.
+func redactURLError(err error) {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		urlErr.URL = RedactURL(urlErr.URL)
 	}
-	return errors.New(msg)
 }
 
 func extractToCache(body io.Reader, destDir, subdirectory string) error {

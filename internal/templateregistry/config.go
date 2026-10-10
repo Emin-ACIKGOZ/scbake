@@ -14,22 +14,31 @@ import (
 	"sync"
 )
 
-// credentialQueryKeys are query parameter names whose values may carry
-// credentials and are redacted before a URL is printed.
-var credentialQueryKeys = map[string]bool{
-	"token":        true,
-	"access_token": true,
-	"auth":         true,
-	"apikey":       true,
-	"api_key":      true,
-	"password":     true,
-	"secret":       true,
+// credentialQueryMarkers are case-insensitive substrings that, when present in
+// a query parameter name, mark its value as credential-bearing. Substring
+// matching (rather than an exact allowlist) also covers vendor-specific names
+// such as "X-Amz-Signature", "sig", and "key".
+var credentialQueryMarkers = []string{
+	"token", "secret", "sig", "key", "auth", "pass", "credential",
 }
 
-// RedactURL strips userinfo (username/password) and credential-bearing query
-// parameters from a registry URL so it is safe to print in output or embed in
-// error messages. Unparseable URLs are replaced with a safe placeholder rather
-// than leaking the raw string.
+// isCredentialQueryKey reports whether a query parameter name looks like it
+// carries a credential.
+func isCredentialQueryKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, marker := range credentialQueryMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// RedactURL strips credentials from a registry URL so it is safe to print in
+// output or embed in error messages. It removes userinfo (username/password),
+// the fragment (which can carry OAuth implicit-flow tokens), and any
+// credential-bearing query parameter value. Unparseable URLs are replaced with
+// a safe placeholder rather than leaking the raw string.
 func RedactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -37,12 +46,14 @@ func RedactURL(raw string) string {
 	}
 
 	u.User = nil
+	u.Fragment = ""
+	u.RawFragment = ""
 
 	if u.RawQuery != "" {
 		query := u.Query()
 		changed := false
 		for key := range query {
-			if credentialQueryKeys[strings.ToLower(key)] {
+			if isCredentialQueryKey(key) {
 				query.Set(key, "REDACTED")
 				changed = true
 			}
