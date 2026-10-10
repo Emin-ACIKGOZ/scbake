@@ -67,7 +67,8 @@ docs(commit): add commit message conventions
 
 - **MUST** be written in the imperative mood: "add", not "added" or "adds".
 - **SHOULD** be lowercase and **MUST NOT** end with a period.
-- **SHOULD** be short enough to read in a `git log --oneline` (roughly ≤ 72 chars).
+- **SHOULD** be short enough to read in a `git log --oneline` (aim for ≤ 72
+  characters). The hard limit enforced by commitlint is 100.
 
 ## Body
 
