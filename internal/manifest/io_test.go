@@ -149,6 +149,39 @@ func TestFindProjectRoot_FallbackToStart(t *testing.T) {
 	}
 }
 
+func TestLoad_EmptyManifestDefaultsVersion(t *testing.T) {
+	rootDir := t.TempDir()
+
+	// Simulate `scbake new`: an existing but empty scbake.toml.
+	if err := os.WriteFile(filepath.Join(rootDir, fileutil.ManifestFileName), []byte(""), fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _, err := Load(rootDir)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if m.SbakeVersion == "" {
+		t.Fatal("expected non-empty SbakeVersion for an empty manifest")
+	}
+	if m.SbakeVersion != DefaultSbakeVersion {
+		t.Errorf("SbakeVersion mismatch. Want %q, Got %q", DefaultSbakeVersion, m.SbakeVersion)
+	}
+}
+
+func TestLoad_AbsentManifestDefaultsVersion(t *testing.T) {
+	rootDir := t.TempDir()
+
+	// No scbake.toml present: fresh apply path.
+	m, _, err := Load(rootDir)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if m.SbakeVersion != DefaultSbakeVersion {
+		t.Errorf("SbakeVersion mismatch. Want %q, Got %q", DefaultSbakeVersion, m.SbakeVersion)
+	}
+}
+
 func TestLoadAndSave(t *testing.T) {
 	tmpDir := t.TempDir()
 
