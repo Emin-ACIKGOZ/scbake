@@ -280,7 +280,7 @@ task := &tasks.InsertXMLTask{
 | `--force`             | Override safety checks                               |
 | `--template-dir`      | Directory with custom template overrides (env: `SCBAKE_TEMPLATE_DIR`) |
 | `--conflict-strategy` | How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` |
-| `-v`, `--version`     | Show version (`v0.4.1`)                               |
+| `-v`, `--version`     | Show version                                          |
 | `--set`              | Set template variable (`key=value`, can be repeated)  |
 
 ## Contributing
