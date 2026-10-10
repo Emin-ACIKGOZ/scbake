@@ -120,7 +120,7 @@ func checkReconciliation(
 	existingHash := HashContent(existingContent)
 
 	// Check state
-	originalHash := recordedHash(tc.Manifest, ledgerKey, outputRelPath)
+	originalHash := recordedHash(tc.Manifest, ledgerKey, outputRelPath, existingHash)
 
 	// If the file exists but we've never managed it (or didn't record it), it's a conflict
 	if originalHash == "" {
@@ -266,18 +266,23 @@ func managedFilesKey(tc types.TaskContext, absPath, outputRelPath string) string
 }
 
 // recordedHash returns the hash scbake last recorded for a managed path. It
-// looks up the project-scoped key first and falls back to the legacy
-// project-relative key so manifests written before keys were scoped keep
-// working.
-func recordedHash(m *types.Manifest, ledgerKey, legacyKey string) string {
+// looks up the project-scoped key first. For manifests written before keys were
+// scoped, it falls back to the legacy project-relative key only when that hash
+// matches the file's current on-disk content. A stale legacy key that belongs
+// to another subproject (or has been hand-edited) therefore never becomes a
+// drift baseline, which would otherwise risk a silent overwrite.
+func recordedHash(m *types.Manifest, ledgerKey, legacyKey, existingHash string) string {
 	if m == nil || m.ManagedFiles == nil {
 		return ""
 	}
 	if h := m.ManagedFiles[ledgerKey]; h != "" {
 		return h
 	}
-	if ledgerKey != legacyKey {
-		return m.ManagedFiles[legacyKey]
+	if ledgerKey == legacyKey {
+		return ""
+	}
+	if legacy := m.ManagedFiles[legacyKey]; legacy != "" && legacy == existingHash {
+		return legacy
 	}
 	return ""
 }

@@ -583,11 +583,44 @@ func TestWriteManagedFile_ManagedFilesScopedByProject(t *testing.T) {
 		t.Errorf("expected 2 distinct ledger entries, got %d: %v", len(manifest.ManagedFiles), manifest.ManagedFiles)
 	}
 
-	// Re-applying subproject A must not report drift. Before the fix both
-	// subprojects shared the "LICENSE" key, so B's hash overwrote A's and this
-	// re-apply failed with a false "manual modifications" error.
-	if err := WriteManagedFile(subA, "LICENSE", contentA, 0o600); err != nil {
-		t.Fatalf("re-applying subproject A reported drift: %v", err)
+	// Re-applying subproject A with NEW content must not report drift. Before
+	// the fix both subprojects shared the "LICENSE" key, so B's hash overwrote
+	// A's and this re-apply failed with a false "manual modifications" error.
+	contentA2 := []byte("license for alice v2\n")
+	if err := WriteManagedFile(subA, "LICENSE", contentA2, 0o600); err != nil {
+		t.Fatalf("re-applying subproject A with new content reported drift: %v", err)
+	}
+	if got := manifest.ManagedFiles[keyA]; got != HashContent(contentA2) {
+		t.Errorf("ManagedFiles[%q] = %q, want the updated hash", keyA, got)
+	}
+}
+
+// TestWriteManagedFile_StaleLegacyKeyNotTrusted verifies that a legacy
+// project-relative key which does not match the file's on-disk content is not
+// used as a drift baseline. Otherwise another subproject's stale entry could
+// mask real drift or cause a silent overwrite.
+func TestWriteManagedFile_StaleLegacyKeyNotTrusted(t *testing.T) {
+	root := t.TempDir()
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+
+	target := filepath.Join(root, "services", "a")
+	if err := os.MkdirAll(target, 0o750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	onDisk := []byte("alice license\n")
+	if err := os.WriteFile(filepath.Join(target, "LICENSE"), onDisk, 0o600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	// The legacy flat key holds a DIFFERENT project's hash.
+	manifest := &types.Manifest{ManagedFiles: map[string]string{"LICENSE": HashContent([]byte("bob license\n"))}}
+	tc := types.TaskContext{TargetPath: target, Manifest: manifest, Tx: tx}
+
+	if err := WriteManagedFile(tc, "LICENSE", []byte("new template\n"), 0o600); err == nil {
+		t.Fatal("expected a drift conflict when the legacy key does not match on-disk content")
 	}
 }
 
