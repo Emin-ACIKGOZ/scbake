@@ -86,6 +86,15 @@ derived from commit messages, so the format matters.
 - Disclose AI assistance with an `Assisted-by` trailer (see
   [AI_USAGE_POLICY.md](AI_USAGE_POLICY.md)).
 
+All commits must carry a Developer Certificate of Origin sign-off:
+
+```sh
+git commit -s
+```
+
+This adds a `Signed-off-by: Name <email>` trailer certifying that you have the right to
+submit the contribution under the project license. See [DCO](DCO).
+
 ## Pull requests
 
 - Clearly describe the problem and the change.
@@ -124,5 +133,6 @@ A formal deprecation policy will be introduced at `1.0`.
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the same license
-as the project. See [LICENSE](LICENSE).
+scbake is licensed under the [Apache License 2.0](LICENSE). By contributing, you agree
+that your contributions are licensed under the same license and that you have certified
+this under the [Developer Certificate of Origin](DCO).
