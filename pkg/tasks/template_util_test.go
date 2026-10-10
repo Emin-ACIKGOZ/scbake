@@ -4,6 +4,7 @@ import (
 	"embed"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -81,6 +82,10 @@ func TestReadTemplate_EmbeddedFileNotFound(t *testing.T) {
 
 func TestReadTemplate_OverrideWithPermissionError(t *testing.T) {
 	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce POSIX mode bits; a 0000 file is still readable")
+	}
 
 	tmpDir := t.TempDir()
 	overridePath := filepath.Join(tmpDir, "testdata/simple.tpl")
