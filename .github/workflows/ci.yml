@@ -73,6 +73,9 @@ jobs:
             # Run it on Linux/macOS only; Windows runs every package except tests.
             packages=$(go list ./... | grep -v '/tests')
             go test -v ${packages}
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            # Verification branch: no race detector on macOS (LC_UUID/dyld abort).
+            go test -v ./...
           else
             go test -v -race ./...
           fi
