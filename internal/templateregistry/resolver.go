@@ -15,7 +15,7 @@ import (
 // not silently shadow a later one. Registries not present in the order file are
 // visited in lexical order after the recorded ones. If the order file is
 // missing (for example a cache written before it existed), the fallback is
-// lexical order, matching the previous behaviour.
+// lexical order, matching the previous behavior.
 //
 // It only consults the verified per-template layout
 // <registry>/<templateName>/<cleanPath> and requires templateName to be
@@ -55,23 +55,35 @@ func ResolveCachePath(cacheDir, templateName, tplPath string) string {
 
 	cleanPath := filepath.Clean(tplPath)
 	for _, registryDir := range orderRegistries(cacheDir, registryDirs) {
-		if ValidateName(registryDir) != nil {
-			continue
-		}
-
-		// Per-template layout: <registry>/<templateName>/<cleanPath>. The
-		// requested template name constrains the lookup; sibling template
-		// directories are never searched. The directory must verify against its
-		// manifest before any file is returned.
-		tplDir := filepath.Join(cacheDir, registryDir, templateName)
-		if cacheManifestValid(tplDir) {
-			nested := filepath.Join(tplDir, cleanPath)
-			if _, err := os.Stat(nested); err == nil {
-				return nested
-			}
+		if found := resolveInRegistry(cacheDir, registryDir, templateName, cleanPath); found != "" {
+			return found
 		}
 	}
 
+	return ""
+}
+
+// resolveInRegistry returns the verified path of cleanPath within the requested
+// template directory of a single cached registry, or the empty string when the
+// registry name is unsafe, the directory does not verify against its manifest,
+// or the file is absent.
+func resolveInRegistry(cacheDir, registryDir, templateName, cleanPath string) string {
+	if ValidateName(registryDir) != nil {
+		return ""
+	}
+
+	// Per-template layout: <registry>/<templateName>/<cleanPath>. The
+	// requested template name constrains the lookup; sibling template
+	// directories are never searched. The directory must verify against its
+	// manifest before any file is returned.
+	tplDir := filepath.Join(cacheDir, registryDir, templateName)
+	if !cacheManifestValid(tplDir) {
+		return ""
+	}
+	nested := filepath.Join(tplDir, cleanPath)
+	if _, err := os.Stat(nested); err == nil {
+		return nested
+	}
 	return ""
 }
 

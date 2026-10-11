@@ -701,7 +701,6 @@ func TestPull_RejectsTraversalTemplateName(t *testing.T) {
 		t.Fatalf("MkdirAll failed: %v", err)
 	}
 	marker := filepath.Join(sentinel, "keep")
-	//nolint:gosec // test temp directory
 	if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
@@ -739,7 +738,7 @@ func TestPull_RejectsTraversalRegistryName(t *testing.T) {
 // TestPull_RejectsTraversalSubdirectory is a regression test for SCB-011: a
 // subdirectory of ".." must not make promoteSubdirectory return a directory
 // outside the extraction temp dir. The config is seeded directly so the
-// malicious value bypasses the Add-time check, modelling a hand-edited config.
+// malicious value bypasses the Add-time check, modeling a hand-edited config.
 func TestPull_RejectsTraversalSubdirectory(t *testing.T) {
 	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -756,7 +755,6 @@ func TestPull_RejectsTraversalSubdirectory(t *testing.T) {
 		t.Fatalf("MkdirAll failed: %v", err)
 	}
 	marker := filepath.Join(cacheDir, "marker")
-	//nolint:gosec // test temp directory
 	if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
@@ -872,7 +870,7 @@ func (r *swapReader) Read(p []byte) (int, error) {
 // The test swaps the registry directory for an escaping symlink on the first
 // body Read and asserts extractToCache fails closed and leaves the outside
 // sentinel intact.
-func TestExtractToCache_RechecksContainmentBeforeSwap(t *testing.T) {
+func TestExtractToCache_RechecksContainmentBeforeSwap(t *testing.T) { //nolint:cyclop // deterministic TOCTOU regression test
 	dir := t.TempDir()
 	cacheDir := filepath.Join(dir, "cache")
 	registryDir := filepath.Join(cacheDir, "acme")
@@ -897,7 +895,6 @@ func TestExtractToCache_RechecksContainmentBeforeSwap(t *testing.T) {
 		t.Fatalf("MkdirAll(outsideDest) failed: %v", err)
 	}
 	marker := filepath.Join(outsideDest, "keep")
-	//nolint:gosec // test temp directory
 	if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
 		t.Fatalf("WriteFile(marker) failed: %v", err)
 	}
@@ -952,7 +949,6 @@ func TestRemoveAllContained_RechecksSymlink(t *testing.T) {
 		t.Fatalf("MkdirAll(sentinel) failed: %v", err)
 	}
 	marker := filepath.Join(sentinel, "keep")
-	//nolint:gosec // test temp directory
 	if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
 		t.Fatalf("WriteFile(marker) failed: %v", err)
 	}

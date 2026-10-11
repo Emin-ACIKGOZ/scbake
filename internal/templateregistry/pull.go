@@ -102,25 +102,8 @@ type pullRequest struct {
 }
 
 func (m *Manager) pullFromURL(pr pullRequest) error {
-	if m.cacheDir == "" {
-		return errors.New("template cache directory is not configured")
-	}
-	if err := ValidateName(pr.registryName); err != nil {
-		return fmt.Errorf("invalid registry name: %w", err)
-	}
-	if err := ValidateName(pr.templateName); err != nil {
-		return fmt.Errorf("invalid template name: %w", err)
-	}
-	if err := validateSubdirectory(pr.subdirectory); err != nil {
-		return err
-	}
-	// Containment is enforced again here, immediately before any destructive
-	// filesystem operation, so a bad name can never reach outside the cache.
-	if err := ensureStrictlyWithin(m.cacheDir, pr.destDir); err != nil {
-		return err
-	}
 	manifestPath := TemplateManifestPath(m.cacheDir, pr.registryName, pr.templateName)
-	if err := ensureStrictlyWithin(m.cacheDir, manifestPath); err != nil {
+	if err := m.validatePull(pr, manifestPath); err != nil {
 		return err
 	}
 
@@ -137,6 +120,39 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 	// extraction failure must leave a previously valid cache intact.
 	// extractToCache stages the download in a temp directory and only replaces
 	// destDir once extraction has fully succeeded.
+	return m.downloadAndCache(pr, manifestPath)
+}
+
+// validatePull checks the request's cache configuration, names, and
+// subdirectory, then re-checks that the destination and manifest paths are
+// strictly inside the cache root. The containment check is enforced again
+// immediately before any destructive filesystem operation (see extractToCache)
+// so a bad name can never reach outside the cache.
+func (m *Manager) validatePull(pr pullRequest, manifestPath string) error {
+	if m.cacheDir == "" {
+		return errors.New("template cache directory is not configured")
+	}
+	if err := ValidateName(pr.registryName); err != nil {
+		return fmt.Errorf("invalid registry name: %w", err)
+	}
+	if err := ValidateName(pr.templateName); err != nil {
+		return fmt.Errorf("invalid template name: %w", err)
+	}
+	if err := validateSubdirectory(pr.subdirectory); err != nil {
+		return err
+	}
+	if err := ensureStrictlyWithin(m.cacheDir, pr.destDir); err != nil {
+		return err
+	}
+	return ensureStrictlyWithin(m.cacheDir, manifestPath)
+}
+
+// downloadAndCache downloads the archive, stages it via extractToCache, and
+// records the integrity manifest. On failure after extraction it removes the
+// freshly downloaded tree and any partial manifest, re-checking containment
+// immediately before each removal (see removeAllContained) in case destDir was
+// swapped for an escaping symlink while the body was read.
+func (m *Manager) downloadAndCache(pr pullRequest, manifestPath string) error {
 	resp, err := doDownload(pr.downloadURL, pr.token, pr.templateName)
 	if err != nil {
 		return err
@@ -151,11 +167,6 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 
 	hash, err := hashTree(pr.destDir)
 	if err != nil {
-		// destDir now holds the freshly downloaded tree, not the old cache, so
-		// removing it is safe; drop the manifest too so nothing points at a
-		// half-written cache. The removals re-check containment immediately
-		// before acting (see removeAllContained) in case destDir was swapped for
-		// an escaping symlink while the body was read.
 		_ = removeAllContained(m.cacheDir, pr.destDir)
 		_ = removeContained(m.cacheDir, manifestPath)
 		return fmt.Errorf("hashing extracted template: %w", err)
@@ -374,17 +385,30 @@ func extractToCache(body io.Reader, cacheDir, destDir, subdirectory string) erro
 	if err := ensureStrictlyWithin(cacheDir, tmpDir); err != nil {
 		return err
 	}
+
+	sourceDir, err := stageArchive(body, cacheDir, tmpDir, subdirectory)
+	if err != nil {
+		return err
+	}
+	return swapIntoCache(cacheDir, destDir, tmpDir, sourceDir)
+}
+
+// stageArchive extracts the archive into a fresh temp directory and validates
+// the staged tree, returning the directory to promote. The existing cache is
+// not touched, so an empty or malformed archive cannot destroy a previously
+// valid cache.
+func stageArchive(body io.Reader, cacheDir, tmpDir, subdirectory string) (string, error) {
 	if err := removeAllContained(cacheDir, tmpDir); err != nil {
-		return fmt.Errorf("cleaning temp dir: %w", err)
+		return "", fmt.Errorf("cleaning temp dir: %w", err)
 	}
 	if err := os.MkdirAll(tmpDir, cacheDirPerm); err != nil {
-		return fmt.Errorf("creating temp dir: %w", err)
+		return "", fmt.Errorf("creating temp dir: %w", err)
 	}
 
 	limited := io.LimitReader(body, maxArchiveBytes)
 	if err := extractTarGz(limited, tmpDir); err != nil {
 		_ = removeAllContained(cacheDir, tmpDir)
-		return fmt.Errorf("extracting archive: %w", err)
+		return "", fmt.Errorf("extracting archive: %w", err)
 	}
 
 	sourceDir := promoteSubdirectory(tmpDir, subdirectory)
@@ -393,33 +417,37 @@ func extractToCache(body io.Reader, cacheDir, destDir, subdirectory string) erro
 	// (for example via "..") would otherwise be renamed into the cache.
 	if err := ensureWithin(tmpDir, sourceDir); err != nil {
 		_ = removeAllContained(cacheDir, tmpDir)
-		return err
+		return "", err
 	}
 
 	// Validate the staged tree before touching the existing cache so an empty
 	// or malformed archive cannot destroy a previously valid cache.
 	if err := validateTemplateCache(sourceDir); err != nil {
 		_ = removeAllContained(cacheDir, tmpDir)
-		return err
+		return "", err
 	}
+	return sourceDir, nil
+}
 
+// swapIntoCache replaces the existing cache with the staged source directory.
+// It runs only after extraction and validation have fully succeeded, so a
+// failure before this point leaves any previous cache (and its manifest)
+// untouched.
+//
+// The body read in stageArchive can block for as long as the download takes, so
+// the containment checks performed at the top of extractToCache can be stale by
+// the time the cache is swapped. In particular, a concurrent attacker can
+// replace <cache>/<registry> with a symlink pointing outside the cache after
+// those checks pass; the destructive operations below would then follow it.
+// Re-check containment immediately before each one so a path that now escapes
+// is refused (fail closed) rather than acted on. This narrows the race to the
+// instant between the check and the syscall.
+func swapIntoCache(cacheDir, destDir, tmpDir, sourceDir string) error {
 	if err := os.MkdirAll(filepath.Dir(destDir), cacheDirPerm); err != nil {
 		_ = removeAllContained(cacheDir, tmpDir)
 		return fmt.Errorf("creating parent dir: %w", err)
 	}
 
-	// Replace the existing cache only now that extraction and validation have
-	// fully succeeded. A failure before this point leaves any previous cache
-	// (and its manifest) untouched.
-	//
-	// The body read above can block for as long as the download takes, so the
-	// containment checks performed at the top of this function can be stale by
-	// the time the cache is swapped. In particular, a concurrent attacker can
-	// replace <cache>/<registry> with a symlink pointing outside the cache after
-	// those checks pass; the destructive operations below would then follow it.
-	// Re-check containment immediately before each one so a path that now
-	// escapes is refused (fail closed) rather than acted on. This narrows the
-	// race to the instant between the check and the syscall.
 	if err := removeAllContained(cacheDir, destDir); err != nil {
 		_ = removeAllContained(cacheDir, tmpDir)
 		return fmt.Errorf("removing stale cache: %w", err)

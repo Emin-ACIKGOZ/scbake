@@ -5,6 +5,7 @@ package templateregistry
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -96,8 +97,21 @@ const (
 // filepath.Join(cacheDir, registryName, templateName) can never escape the
 // template cache.
 func ValidateName(name string) error {
+	if err := validateNameForm(name); err != nil {
+		return err
+	}
+	if err := validateNamePathSafety(name); err != nil {
+		return err
+	}
+	return validateNameRunes(name)
+}
+
+// validateNameForm rejects names whose shape makes them unsafe as a single path
+// segment: empty, the special entries "." and "..", or anything containing a
+// path separator or drive syntax.
+func validateNameForm(name string) error {
 	if name == "" {
-		return fmt.Errorf("name must not be empty")
+		return errors.New("name must not be empty")
 	}
 	if name == "." || name == ".." {
 		return fmt.Errorf("name %q is a reserved path segment", name)
@@ -110,6 +124,13 @@ func ValidateName(name string) error {
 	if strings.ContainsRune(name, ':') {
 		return fmt.Errorf("name %q must not contain ':'", name)
 	}
+	return nil
+}
+
+// validateNamePathSafety rejects names that resolve outside the intended single
+// path segment: absolute or volume-qualified names, trailing dots or spaces
+// (which Windows strips), and Windows-reserved device names.
+func validateNamePathSafety(name string) error {
 	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
 		return fmt.Errorf("name %q must not be absolute", name)
 	}
@@ -121,6 +142,11 @@ func ValidateName(name string) error {
 	if isReservedWindowsName(name) {
 		return fmt.Errorf("name %q is a reserved device name", name)
 	}
+	return nil
+}
+
+// validateNameRunes rejects names containing control characters.
+func validateNameRunes(name string) error {
 	for _, r := range name {
 		if r < 0x20 || r == 0x7f {
 			return fmt.Errorf("name %q must not contain control characters", name)
@@ -172,16 +198,25 @@ func validateSubdirectory(subdirectory string) error {
 	for _, raw := range strings.FieldsFunc(subdirectory, func(r rune) bool {
 		return r == '/' || r == '\\'
 	}) {
-		// Windows strips trailing dots and spaces from a path component, so a
-		// segment written as ".. " (or "..") can collapse to a traversal
-		// segment. Reject both the raw and space/dot-stripped forms.
-		if raw == ".." || strings.TrimRight(raw, " ") == ".." ||
-			strings.TrimRight(raw, ".") == ".." {
-			return fmt.Errorf("subdirectory %q must not contain %q", subdirectory, "..")
+		if err := validateSubdirectorySegment(subdirectory, raw); err != nil {
+			return err
 		}
-		if isReservedWindowsName(raw) || isReservedWindowsName(strings.TrimRight(raw, " .")) {
-			return fmt.Errorf("subdirectory %q contains a reserved device name", subdirectory)
-		}
+	}
+	return nil
+}
+
+// validateSubdirectorySegment rejects a single subdirectory segment that would
+// traverse upward or name a Windows-reserved device.
+func validateSubdirectorySegment(subdirectory, raw string) error {
+	// Windows strips trailing dots and spaces from a path component, so a
+	// segment written as ".. " (or "..") can collapse to a traversal
+	// segment. Reject both the raw and space/dot-stripped forms.
+	if raw == ".." || strings.TrimRight(raw, " ") == ".." ||
+		strings.TrimRight(raw, ".") == ".." {
+		return fmt.Errorf("subdirectory %q must not contain %q", subdirectory, "..")
+	}
+	if isReservedWindowsName(raw) || isReservedWindowsName(strings.TrimRight(raw, " .")) {
+		return fmt.Errorf("subdirectory %q contains a reserved device name", subdirectory)
 	}
 	return nil
 }
@@ -308,6 +343,7 @@ func (m *Manager) writeRegistryOrder() error {
 // readRegistryOrder loads the recorded registry precedence order, or nil when it
 // is absent or unreadable.
 func readRegistryOrder(cacheDir string) []string {
+	//nolint:gosec // path is derived from the cache root, not user input
 	data, err := os.ReadFile(filepath.Join(cacheDir, registryOrderFileName))
 	if err != nil {
 		return nil
