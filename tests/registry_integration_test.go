@@ -24,6 +24,22 @@ func userCacheDir(t *testing.T) string {
 	return dir
 }
 
+// isolateUserDirs points HOME and the platform config/cache environment at a
+// temp dir so os.UserConfigDir/os.UserCacheDir resolve there on every platform
+// (Linux honors XDG_*, macOS uses $HOME/Library/..., Windows uses %AppData%).
+// Without this, macOS and Windows tests share the real user config and leak
+// registry state between tests.
+func isolateUserDirs(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("AppData", filepath.Join(dir, "AppData"))
+	t.Setenv("LocalAppData", filepath.Join(dir, "LocalAppData"))
+	return dir
+}
+
 func TestRegistryPullEndToEnd(t *testing.T) {
 	tmpDir := t.TempDir()
 	origWd, _ := os.Getwd()
@@ -43,10 +59,7 @@ func TestRegistryPullEndToEnd(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	xdgConfig := filepath.Join(tmpDir, "xdg-config")
-	xdgCache := filepath.Join(tmpDir, "xdg-cache")
-	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
-	t.Setenv("XDG_CACHE_HOME", xdgCache)
+	isolateUserDirs(t)
 
 	out, err := runCLI("template", "registry", "add", "testreg", srv.URL)
 	if err != nil {
@@ -97,10 +110,7 @@ func TestRegistryPull_WithVersion(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	xdgConfig := filepath.Join(tmpDir, "xdg-config")
-	xdgCache := filepath.Join(tmpDir, "xdg-cache")
-	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
-	t.Setenv("XDG_CACHE_HOME", xdgCache)
+	isolateUserDirs(t)
 
 	out, err := runCLI("template", "registry", "add", "verreg", srv.URL, "--version", "1.2.0")
 	if err != nil {
@@ -146,10 +156,7 @@ func TestRegistryPull_WithSubdirectory(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	xdgConfig := filepath.Join(tmpDir, "xdg-config")
-	xdgCache := filepath.Join(tmpDir, "xdg-cache")
-	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
-	t.Setenv("XDG_CACHE_HOME", xdgCache)
+	isolateUserDirs(t)
 
 	out, err := runCLI("template", "registry", "add", "subreg", srv.URL, "--subdirectory", "scbake-template")
 	if err != nil {

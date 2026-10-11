@@ -187,7 +187,7 @@ func validateSubdirectory(subdirectory string) error {
 	if subdirectory == "" {
 		return nil
 	}
-	if filepath.IsAbs(subdirectory) || filepath.VolumeName(subdirectory) != "" {
+	if isAbsoluteOrRooted(subdirectory) {
 		return fmt.Errorf("subdirectory %q must be relative", subdirectory)
 	}
 	for _, r := range subdirectory {
@@ -207,6 +207,14 @@ func validateSubdirectory(subdirectory string) error {
 
 // validateSubdirectorySegment rejects a single subdirectory segment that would
 // traverse upward or name a Windows-reserved device.
+// isAbsoluteOrRooted reports whether p is absolute or rooted (leading separator).
+// It also catches a leading "/" on Windows, where filepath.IsAbs does not treat
+// such a path as absolute.
+func isAbsoluteOrRooted(p string) bool {
+	return filepath.IsAbs(p) || filepath.VolumeName(p) != "" ||
+		strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`)
+}
+
 func validateSubdirectorySegment(subdirectory, raw string) error {
 	// Windows strips trailing dots and spaces from a path component, so a
 	// segment written as ".. " (or "..") can collapse to a traversal
