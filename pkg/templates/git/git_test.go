@@ -16,11 +16,14 @@ import (
 	"time"
 )
 
-// TestGitHandler_Structure validates the deterministic structural plan and task ordering.
+// TestGitHandler_Structure validates the deterministic structural plan and task ordering
+// for a fresh target (no pre-existing .git).
 // Logic: Git operations MUST be strictly sequential (Init -> Add -> Commit) with no priority gaps.
 func TestGitHandler_Structure(t *testing.T) {
+	tmpDir := t.TempDir()
+
 	h := &Handler{}
-	plan, err := h.GetTasks("", "", "")
+	plan, err := h.GetTasks(tmpDir, "", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -29,13 +32,14 @@ func TestGitHandler_Structure(t *testing.T) {
 		t.Fatalf("Expected exactly 3 tasks, got %d", len(plan))
 	}
 
+	noHooks := "core.hooksPath=" + os.DevNull
 	expected := []struct {
 		cmd  string
 		args []string
 	}{
 		{"git", []string{"init"}},
-		{"git", []string{"add", "."}},
-		{"git", []string{"commit", "--allow-empty", "-m", "scbake: Apply templates"}},
+		{"git", []string{"-c", noHooks, "add", "."}},
+		{"git", []string{"-c", noHooks, "commit", "--allow-empty", "-m", "scbake: Apply templates"}},
 	}
 
 	for i, task := range plan {
@@ -44,6 +48,48 @@ func TestGitHandler_Structure(t *testing.T) {
 		assertSequentialPriority(t, plan, execTask, i)
 		assertPredictedCreated(t, execTask, i)
 		assertBandBoundary(t, execTask, i)
+	}
+}
+
+// TestGitHandler_ExistingRepo_Structure validates that when the target already
+// contains a .git directory the plan is fail-closed: no `git init` is scheduled
+// and every mutating command disables hooks.
+func TestGitHandler_ExistingRepo_Structure(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, fileutil.GitDir), 0700); err != nil {
+		t.Fatalf("failed to create fake .git: %v", err)
+	}
+
+	h := &Handler{}
+	plan, err := h.GetTasks(tmpDir, "", "")
+	if err != nil {
+		t.Fatalf("GetTasks failed: %v", err)
+	}
+
+	if len(plan) != 2 {
+		t.Fatalf("Expected exactly 2 tasks for existing repo, got %d", len(plan))
+	}
+
+	noHooks := "core.hooksPath=" + os.DevNull
+	expected := []struct {
+		cmd  string
+		args []string
+	}{
+		{"git", []string{"-c", noHooks, "add", "."}},
+		{"git", []string{"-c", noHooks, "commit", "--allow-empty", "-m", "scbake: Apply templates"}},
+	}
+
+	for i, task := range plan {
+		execTask := assertExecTask(t, task, i)
+		assertCommandIdentity(t, execTask, expected[i], i)
+		assertSequentialPriority(t, plan, execTask, i)
+		assertBandBoundary(t, execTask, i)
+
+		for _, arg := range execTask.Args {
+			if arg == "init" {
+				t.Errorf("Task %d: must not schedule git init on an existing repo", i)
+			}
+		}
 	}
 }
 
@@ -112,12 +158,7 @@ func TestGitTemplate_Fresh(t *testing.T) {
 	}
 
 	// Scoped environment setup. t.Setenv ensures these are cleaned up automatically.
-	t.Setenv("GIT_AUTHOR_NAME", "scbake-test-user")
-	t.Setenv("GIT_AUTHOR_EMAIL", "scbake-test@scbake.dev")
-	t.Setenv("GIT_COMMITTER_NAME", "scbake-test-user")
-	t.Setenv("GIT_COMMITTER_EMAIL", "scbake-test@scbake.dev")
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "true")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	isolateGitEnv(t)
 
 	tmpDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmpDir, "scbake.toml"), []byte(""), 0600); err != nil {
@@ -150,6 +191,76 @@ func TestGitTemplate_Fresh(t *testing.T) {
 		t.Fatalf("Failed to read git log: %v", err)
 	}
 
+	if !strings.Contains(string(out), "scbake: Apply templates") {
+		t.Errorf("Commit message mismatch. Got: %s", string(out))
+	}
+}
+
+// TestGitTemplate_ExistingRepo_IgnoresHooks is the SCB-037 regression test.
+// A target that already contains a .git directory is untrusted input: a planted
+// pre-commit hook must NOT be executed while scaffolding stages and commits.
+func TestGitTemplate_ExistingRepo_IgnoresHooks(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+
+	isolateGitEnv(t)
+
+	tmpDir := t.TempDir()
+
+	// Simulate a pre-existing, attacker-controlled repository.
+	runInDir(t, tmpDir, "git", "init")
+	runInDir(t, tmpDir, "git", "config", "user.email", "scbake-test@scbake.dev")
+	runInDir(t, tmpDir, "git", "config", "user.name", "scbake-test-user")
+
+	// Plant a malicious hook that would drop a marker if it ever runs.
+	hooksDir := filepath.Join(tmpDir, fileutil.GitDir, "hooks")
+	if err := os.MkdirAll(hooksDir, 0700); err != nil {
+		t.Fatalf("Failed to create hooks dir: %v", err)
+	}
+	markerName := "hook-executed.marker"
+	hookScript := "#!/bin/sh\ntouch " + markerName + "\n"
+	if err := os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte(hookScript), 0700); err != nil {
+		t.Fatalf("Failed to plant pre-commit hook: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "scbake.toml"), []byte(""), 0600); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	h := &Handler{}
+	plan, err := h.GetTasks(tmpDir, "", "")
+	if err != nil {
+		t.Fatalf("GetTasks failed: %v", err)
+	}
+	if len(plan) != 2 {
+		t.Fatalf("Expected 2 tasks for an existing repo (add, commit), got %d", len(plan))
+	}
+
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: tmpDir,
+	}
+	for _, task := range plan {
+		if err := task.Execute(tc); err != nil {
+			t.Fatalf("Existing-repo lifecycle failed at task '%s': %v", task.Description(), err)
+		}
+	}
+
+	if _, statErr := os.Stat(filepath.Join(tmpDir, markerName)); !os.IsNotExist(statErr) {
+		t.Fatalf("SECURITY: planted pre-commit hook executed during scaffolding (marker present)")
+	}
+
+	// The commit must still have happened; otherwise the assertion above would
+	// pass vacuously. Confirm the scaffolding commit landed.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	logCmd := exec.CommandContext(ctx, "git", "log", "-1", "--pretty=%B")
+	logCmd.Dir = tmpDir
+	out, err := logCmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to read git log: %v", err)
+	}
 	if !strings.Contains(string(out), "scbake: Apply templates") {
 		t.Errorf("Commit message mismatch. Got: %s", string(out))
 	}
@@ -210,6 +321,18 @@ func TestGitTemplate_Idempotent(t *testing.T) {
 	if len(status) > 0 {
 		t.Errorf("Repository is dirty after idempotent run:\n%s", string(status))
 	}
+}
+
+// isolateGitEnv pins Git identity and config to test-local values so commits
+// succeed regardless of the host configuration.
+func isolateGitEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_AUTHOR_NAME", "scbake-test-user")
+	t.Setenv("GIT_AUTHOR_EMAIL", "scbake-test@scbake.dev")
+	t.Setenv("GIT_COMMITTER_NAME", "scbake-test-user")
+	t.Setenv("GIT_COMMITTER_EMAIL", "scbake-test@scbake.dev")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "true")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 }
 
 func runInDir(t *testing.T, dir, name string, args ...string) {
