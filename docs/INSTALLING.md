@@ -4,26 +4,38 @@ scbake is a single-binary CLI tool. Choose your preferred installation method be
 
 ## Quick Install (Recommended)
 
-One-liner for macOS, Linux, and Windows (WSL/Git Bash):
+Install from a **pinned release tag** for macOS, Linux, and Windows
+(WSL/Git Bash). A release tag is immutable, and the installer is published as a
+release asset alongside its checksum, so you can verify what you are about to
+run:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh | bash
+# Pick a tag from https://github.com/Emin-ACIKGOZ/scbake/releases
+TAG=v0.5.15
+BASE="https://github.com/Emin-ACIKGOZ/scbake/releases/download/${TAG}"
+
+# Download the installer and verify it against the release checksums
+# (on macOS, use: shasum -a 256 -c -)
+curl -fsSL -o install.sh "${BASE}/install.sh"
+curl -fsSL -o SHA256SUMS "${BASE}/SHA256SUMS"
+grep 'install.sh$' SHA256SUMS | sha256sum -c -
+
+# Run the installer, pinned to the same tag
+bash install.sh "${TAG}"
 ```
 
-Or with `wget`:
-
-```bash
-wget -qO- https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh | bash
-```
+> **Avoid piping a branch URL into `bash`.** The old one-liner
+> (`curl -sSL .../master/install.sh | bash`) fetches a mutable branch, so the
+> script can change between review and execution. Use a pinned release above.
 
 ### Installation Options
 
 ```bash
-# Install latest version to default location
+# Install the latest version to the default location
 bash install.sh
 
-# Install specific version
-bash install.sh v0.3.0
+# Install a specific version (tag)
+bash install.sh v0.5.15
 
 # Install to custom directory
 bash install.sh latest /opt/bin
@@ -32,7 +44,7 @@ bash install.sh latest /opt/bin
 bash install.sh latest --quiet
 
 # Combined: specific version, custom path, quiet
-bash install.sh v0.3.0 ~/.local/bin --quiet
+bash install.sh v0.5.15 ~/.local/bin --quiet
 ```
 
 The installer will:
@@ -139,7 +151,7 @@ Or reinstall using the quick install command at the top of this page.
 ## Security
 
 - **HTTPS-only downloads** - All downloads use secure HTTPS connections
-- **Checksum verification** - Binaries are verified with SHA256 checksums (automatic if available)
+- **Mandatory checksum verification** - The installer downloads the release's `SHA256SUMS` and verifies the binary against it; installation aborts if the checksums file is missing or the hash does not match
 - **Binary validation** - Checks downloaded file is a valid executable (not corrupted or HTML error page)
 - **Sudo escalation warnings** - Warns before requesting sudo for elevated installations
 - **Retry with backoff** - Failed downloads retry with exponential backoff (1s, 2s, 4s)
