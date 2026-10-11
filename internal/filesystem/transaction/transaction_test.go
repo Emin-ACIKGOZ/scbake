@@ -417,3 +417,37 @@ func TestTrack_ExistingDirectory_NoBackup(t *testing.T) {
 		t.Errorf("existing directory was marked as created")
 	}
 }
+
+// TestNew_SweepDoesNotFollowSymlinkedTmpDir verifies the startup sweep refuses
+// to delete paths outside the project root when .scbake/tmp is a symlink.
+func TestNew_SweepDoesNotFollowSymlinkedTmpDir(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	outside := t.TempDir()
+	victim := filepath.Join(outside, txDirPrefix+"victim")
+	if err := os.MkdirAll(victim, fileutil.DirPerms); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	old := time.Now().Add(-2 * staleTransactionThreshold)
+	if err := os.Chtimes(victim, old, old); err != nil {
+		t.Fatalf("Chtimes failed: %v", err)
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, fileutil.InternalDir), fileutil.DirPerms); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir)); err != nil {
+		t.Fatalf("Symlink failed: %v", err)
+	}
+
+	if _, err := New(root); err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("sweep followed a symlinked .scbake/tmp and deleted a directory outside the root: %v", err)
+	}
+}
