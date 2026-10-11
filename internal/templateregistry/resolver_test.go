@@ -277,6 +277,42 @@ func TestResolveCachePath_IgnoresFlatLegacyFile(t *testing.T) {
 	}
 }
 
+// TestResolveCachePath_UsesInsertionOrderOverAlphabetical is a regression test
+// for SCB-021: resolution precedence must be the order registries were added,
+// not alphabetical order. "zeta" is added before "alpha", so even though
+// "alpha" sorts first the resolver must pick "zeta".
+func TestResolveCachePath_UsesInsertionOrderOverAlphabetical(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
+
+	if err := m.Add("zeta", "https://zeta.example/v1", "", "", ""); err != nil {
+		t.Fatalf("Add zeta failed: %v", err)
+	}
+	if err := m.Add("alpha", "https://alpha.example/v1", "", "", ""); err != nil {
+		t.Fatalf("Add alpha failed: %v", err)
+	}
+
+	for _, reg := range []string{"alpha", "zeta"} {
+		tplDir := filepath.Join(cacheDir, reg, "go-api")
+		//nolint:gosec // test temp directory
+		if err := os.MkdirAll(tplDir, 0755); err != nil {
+			t.Fatalf("MkdirAll failed: %v", err)
+		}
+		//nolint:gosec // test temp directory
+		if err := os.WriteFile(filepath.Join(tplDir, "main.go.tpl"), []byte(reg), 0644); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+		writeValidManifest(t, tplDir, "go-api")
+	}
+
+	got := ResolveCachePath(cacheDir, "go-api", "main.go.tpl")
+	want := filepath.Join(cacheDir, "zeta", "go-api", "main.go.tpl")
+	if got != want {
+		t.Fatalf("expected the first-added registry to win: got %q, want %q", got, want)
+	}
+}
+
 func TestLookupPath_Found(t *testing.T) {
 	dir := t.TempDir()
 	registryDir := filepath.Join(dir, "my-registry")

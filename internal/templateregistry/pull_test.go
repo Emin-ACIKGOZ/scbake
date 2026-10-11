@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"scbake/internal/testutil"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -672,5 +673,298 @@ func TestExtractTarGz_DecompressionBombLimiter(t *testing.T) {
 
 	if info.Size() > int64(maxArchiveBytes) {
 		t.Errorf("decompression limiter failed: extracted size %d exceeds maxArchiveBytes %d", info.Size(), maxArchiveBytes)
+	}
+}
+
+// TestPull_RejectsTraversalTemplateName is a regression test for SCB-010: a
+// template name containing ".." must be rejected before any download, and must
+// never cause os.RemoveAll(destDir+".tmp") to delete a directory outside the
+// cache.
+func TestPull_RejectsTraversalTemplateName(t *testing.T) {
+	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
+	if err := m.Add("acme", srv.URL, "", "", ""); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	// cacheDir/acme/../../evil resolves to <dir>/evil, so destDir+".tmp" is
+	// <dir>/evil.tmp. Plant it to prove it is not recursively deleted.
+	sentinel := filepath.Join(dir, "evil.tmp")
+	if err := os.MkdirAll(sentinel, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	marker := filepath.Join(sentinel, "keep")
+	if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := m.Pull("acme", "../../evil"); err == nil {
+		t.Fatal("expected Pull to reject a traversal template name")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("traversal pull deleted a directory outside the cache: %v", err)
+	}
+}
+
+// TestPull_RejectsTraversalRegistryName is a regression test for SCB-010: a
+// registry name containing a path separator or ".." must be rejected both when
+// added and when used to pull.
+func TestPull_RejectsTraversalRegistryName(t *testing.T) {
+	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
+
+	if err := m.Add("../evil", srv.URL, "", "", ""); err == nil {
+		t.Error("expected Add to reject a traversal registry name")
+	}
+	if err := m.PullFromURL("../evil", "go-api", srv.URL, ""); err == nil {
+		t.Error("expected PullFromURL to reject a traversal registry name")
+	}
+}
+
+// TestPull_RejectsTraversalSubdirectory is a regression test for SCB-011: a
+// subdirectory of ".." must not make promoteSubdirectory return a directory
+// outside the extraction temp dir. The config is seeded directly so the
+// malicious value bypasses the Add-time check, modeling a hand-edited config.
+func TestPull_RejectsTraversalSubdirectory(t *testing.T) {
+	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
+	m.config.Registries = []Registry{{Name: "acme", URL: srv.URL, Subdirectory: "../.."}}
+
+	if err := os.MkdirAll(cacheDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	marker := filepath.Join(cacheDir, "marker")
+	if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := m.Pull("acme", "go-api"); err == nil {
+		t.Fatal("expected Pull to reject a traversal subdirectory")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("traversal subdirectory pull damaged the cache root: %v", err)
+	}
+}
+
+// TestPromoteSubdirectory_RejectsTraversal verifies promoteSubdirectory never
+// returns a path outside the temp dir, regardless of the subdirectory value.
+func TestPromoteSubdirectory_RejectsTraversal(t *testing.T) {
+	tmpDir := filepath.Join(t.TempDir(), "stage")
+	if err := os.MkdirAll(tmpDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+
+	for _, sub := range []string{"..", "../..", "nested/../../..", `..\..`} {
+		got := promoteSubdirectory(tmpDir, sub)
+		rel, err := filepath.Rel(tmpDir, got)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			t.Errorf("promoteSubdirectory(%q, %q) = %q escapes the temp dir", tmpDir, sub, got)
+		}
+	}
+}
+
+// TestExtractToCache_RejectsTraversalDestDir verifies the staging path is
+// contained in the cache before any destructive operation.
+func TestExtractToCache_RejectsTraversalDestDir(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
+
+	// destDir escapes the cache root.
+	outside := filepath.Join(dir, "outside")
+	if err := extractToCache(bytes.NewReader(archive), cacheDir, outside, ""); err == nil {
+		t.Fatal("expected extractToCache to reject a destDir outside the cache")
+	}
+}
+
+// TestPullFromURL_RejectsSymlinkedRegistryDir is a regression test for the
+// symlink bypass of the lexical containment checks: when <cache>/<registry> is
+// a symlink pointing outside the cache, the destination resolves through the
+// symlink, so a pull must fail closed instead of writing (and later removing)
+// the template outside the cache root.
+func TestPullFromURL_RejectsSymlinkedRegistryDir(t *testing.T) {
+	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	outside := filepath.Join(dir, "outside")
+	if err := os.MkdirAll(cacheDir, 0750); err != nil {
+		t.Fatalf("MkdirAll(cacheDir) failed: %v", err)
+	}
+	if err := os.MkdirAll(outside, 0750); err != nil {
+		t.Fatalf("MkdirAll(outside) failed: %v", err)
+	}
+	// <cache>/acme -> <dir>/outside, so cacheDir/acme/go-api is outside.
+	if err := os.Symlink(outside, filepath.Join(cacheDir, "acme")); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err == nil {
+		t.Error("expected PullFromURL to reject a symlinked registry directory")
+	}
+
+	// Nothing may have been written or deleted through the symlink outside the
+	// cache root.
+	for _, name := range []string{"go-api", "go-api.tmp", "go-api.manifest.json"} {
+		if _, statErr := os.Lstat(filepath.Join(outside, name)); !os.IsNotExist(statErr) {
+			t.Errorf("pull touched %q outside the cache through a symlink (stat err: %v)", name, statErr)
+		}
+	}
+}
+
+// swapReader serves an archive but invokes swap exactly once, on the first Read.
+// It lets a test swap <cache>/<registry> for an escaping symlink at the moment
+// the download body starts being consumed, i.e. after extractToCache's initial
+// containment checks but before its destructive operations.
+type swapReader struct {
+	data []byte
+	once sync.Once
+	swap func()
+}
+
+func (r *swapReader) Read(p []byte) (int, error) {
+	r.once.Do(r.swap)
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+
+// TestExtractToCache_RechecksContainmentBeforeSwap is a deterministic regression
+// test for the TOCTOU in extractToCache: containment was checked only once, at
+// the top, but the download body is fully consumed (and extracted) before the
+// destructive RemoveAll(destDir)/Rename(sourceDir, destDir) run. An attacker who
+// replaces <cache>/<registry> with a symlink pointing outside the cache while
+// the body is pending would make those operations follow the symlink, deleting
+// and overwriting data outside the cache, while the pull reported success.
+//
+// The test swaps the registry directory for an escaping symlink on the first
+// body Read and asserts extractToCache fails closed and leaves the outside
+// sentinel intact.
+func TestExtractToCache_RechecksContainmentBeforeSwap(t *testing.T) { //nolint:cyclop // deterministic TOCTOU regression test
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	registryDir := filepath.Join(cacheDir, "acme")
+	destDir := filepath.Join(registryDir, "go-api")
+	outside := filepath.Join(dir, "outside")
+
+	if err := os.MkdirAll(registryDir, 0750); err != nil {
+		t.Fatalf("MkdirAll(registryDir) failed: %v", err)
+	}
+	if err := os.MkdirAll(outside, 0750); err != nil {
+		t.Fatalf("MkdirAll(outside) failed: %v", err)
+	}
+	// The attacker pre-creates the staging dir at the symlink target so
+	// extraction still succeeds after the swap.
+	if err := os.MkdirAll(filepath.Join(outside, "go-api.tmp"), 0750); err != nil {
+		t.Fatalf("MkdirAll(outside tmp) failed: %v", err)
+	}
+	// A sentinel at the destination the final RemoveAll/Rename would clobber if
+	// it followed the symlink.
+	outsideDest := filepath.Join(outside, "go-api")
+	if err := os.MkdirAll(outsideDest, 0750); err != nil {
+		t.Fatalf("MkdirAll(outsideDest) failed: %v", err)
+	}
+	marker := filepath.Join(outsideDest, "keep")
+	if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
+		t.Fatalf("WriteFile(marker) failed: %v", err)
+	}
+
+	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
+
+	swapped := false
+	body := &swapReader{
+		data: archive,
+		swap: func() {
+			// Replace <cache>/acme with a symlink to <dir>/outside, exactly as a
+			// concurrent attacker would during the body read.
+			if err := os.Rename(registryDir, filepath.Join(cacheDir, "acme.real")); err != nil {
+				t.Errorf("renaming registry dir aside failed: %v", err)
+				return
+			}
+			if err := os.Symlink(outside, registryDir); err != nil {
+				t.Errorf("creating escaping symlink failed: %v", err)
+				return
+			}
+			swapped = true
+		},
+	}
+
+	if err := extractToCache(body, cacheDir, destDir, ""); err == nil {
+		t.Fatal("expected extractToCache to fail when the registry dir is swapped for an escaping symlink")
+	}
+	if !swapped {
+		t.Fatal("test did not trigger the swap; the body was never read")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("extractToCache deleted content outside the cache through a symlink: %v", err)
+	}
+}
+
+// TestRemoveAllContained_RechecksSymlink is a focused unit test for the pre-op
+// re-check: after a directory is swapped for an escaping symlink,
+// removeAllContained must refuse to act rather than delete through the symlink.
+func TestRemoveAllContained_RechecksSymlink(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	registryDir := filepath.Join(cacheDir, "acme")
+	templateDir := filepath.Join(registryDir, "go-api")
+	outside := filepath.Join(dir, "outside")
+
+	if err := os.MkdirAll(templateDir, 0750); err != nil {
+		t.Fatalf("MkdirAll(templateDir) failed: %v", err)
+	}
+	// A sentinel at the path a symlink-following RemoveAll would delete.
+	sentinel := filepath.Join(outside, "go-api")
+	if err := os.MkdirAll(sentinel, 0750); err != nil {
+		t.Fatalf("MkdirAll(sentinel) failed: %v", err)
+	}
+	marker := filepath.Join(sentinel, "keep")
+	if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
+		t.Fatalf("WriteFile(marker) failed: %v", err)
+	}
+
+	// Swap <cache>/acme for a symlink to <dir>/outside.
+	if err := os.RemoveAll(registryDir); err != nil {
+		t.Fatalf("RemoveAll(registryDir) failed: %v", err)
+	}
+	if err := os.Symlink(outside, registryDir); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+
+	if err := removeAllContained(cacheDir, templateDir); err == nil {
+		t.Error("expected removeAllContained to refuse an escaping symlink")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("removeAllContained deleted through an escaping symlink: %v", err)
 	}
 }
