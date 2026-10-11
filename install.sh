@@ -4,7 +4,7 @@
 # Or:    bash install.sh [version] [install-dir] [--quiet]
 # Examples:
 #   bash install.sh                          # Latest version, interactive
-#   bash install.sh v0.3.0 /opt/scbake       # Specific version to custom path
+#   bash install.sh vX.Y.Z /opt/scbake       # Specific version to custom path
 #   bash install.sh latest --quiet           # Latest, automation-friendly (no output)
 
 set -euo pipefail
@@ -117,30 +117,32 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Get latest release version from GitHub API (with rate limit fallback)
+# Get latest release version from GitHub API.
+# Any API failure (HTTP error, rate limiting, unparseable response) is fatal.
+# We never fall back to a hard-coded version: doing so would let an attacker
+# (or a transient rate limit) silently downgrade the user to a stale build.
 get_latest_version() {
     local url="${GITHUB_API_URL}/releases/latest"
     local version
     local response
 
     if command_exists curl; then
-        response=$(curl -sSL "$url" 2>/dev/null)
+        # -f makes curl exit non-zero on HTTP 4xx/5xx instead of writing the
+        # error body to stdout and reporting success.
+        if ! response=$(curl -fsSL "$url" 2>/dev/null); then
+            die "Failed to query the GitHub releases API ($url). Check your network connection, or GitHub may be rate limiting requests. Retry later, or install a specific version: bash install.sh <version> <path>"
+        fi
     elif command_exists wget; then
-        response=$(wget -qO- "$url" 2>/dev/null)
+        if ! response=$(wget -qO- "$url" 2>/dev/null); then
+            die "Failed to query the GitHub releases API ($url). Check your network connection, or GitHub may be rate limiting requests. Retry later, or install a specific version: bash install.sh <version> <path>"
+        fi
     else
         die "Neither curl nor wget found. Please install one to download scbake."
     fi
 
-    # Check for rate limit error (output warning to stderr, not stdout)
-    if echo "$response" | grep -q "API rate limit exceeded"; then
-        [ "$QUIET" -eq 0 ] && echo -e "${YELLOW}⚠${NC} GitHub API rate limited. Using fallback version v0.3.0" >&2
-        echo "v0.3.0"
-        return
-    fi
-
     # Try jq first (most reliable)
     if command_exists jq; then
-        version=$(echo "$response" | jq -r '.tag_name' 2>/dev/null)
+        version=$(echo "$response" | jq -r '.tag_name' 2>/dev/null || true)
         if [ -n "$version" ] && [ "$version" != "null" ]; then
             echo "$version"
             return
@@ -148,15 +150,15 @@ get_latest_version() {
     fi
 
     # Fallback to grep for systems without jq
-    version=$(echo "$response" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+    version=$(echo "$response" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 
     if [ -z "$version" ]; then
         # Last resort: try basic grep
-        version=$(echo "$response" | grep "tag_name" | head -1 | cut -d'"' -f4)
+        version=$(echo "$response" | grep "tag_name" | head -1 | cut -d'"' -f4 || true)
     fi
 
     if [ -z "$version" ]; then
-        die "Failed to fetch latest version from GitHub. Try: bash install.sh v0.3.0 <path>"
+        die "Failed to parse the latest version from the GitHub API response. Try installing a specific version: bash install.sh <version> <path>"
     fi
 
     echo "$version"
@@ -169,30 +171,41 @@ download_file() {
     local retries=3
     local delay=1
     local attempt
+    local status
+    local dl_pid
 
     for attempt in $(seq 1 $retries); do
+        # Discard any stale/partial file so a failed attempt can never be
+        # mistaken for a successful one.
+        rm -f "$output"
+        status=0
+
         if command_exists curl; then
+            # -f makes curl fail on HTTP 4xx/5xx instead of saving the error
+            # body and exiting 0.
             if [ "$QUIET" -eq 0 ]; then
-                curl -sSL -o "$output" "$url" 2>/dev/null &
+                curl -fsSL -o "$output" "$url" 2>/dev/null &
+                dl_pid=$!
                 spinner "Downloading binary..."
+                wait "$dl_pid" || status=$?
             else
-                curl -sSL -o "$output" "$url" 2>/dev/null
-            fi
-            if [ -s "$output" ]; then
-                return 0
+                curl -fsSL -o "$output" "$url" 2>/dev/null || status=$?
             fi
         elif command_exists wget; then
             if [ "$QUIET" -eq 0 ]; then
                 wget -q -O "$output" "$url" 2>/dev/null &
+                dl_pid=$!
                 spinner "Downloading binary..."
+                wait "$dl_pid" || status=$?
             else
-                wget -q -O "$output" "$url" 2>/dev/null
-            fi
-            if [ -s "$output" ]; then
-                return 0
+                wget -q -O "$output" "$url" 2>/dev/null || status=$?
             fi
         else
             die "Neither curl nor wget found"
+        fi
+
+        if [ "$status" -eq 0 ] && [ -s "$output" ]; then
+            return 0
         fi
 
         # Skip sleep on final attempt (no point waiting before exit)
@@ -349,17 +362,24 @@ main() {
         die "Downloaded file is empty or invalid"
     fi
 
-    # Check for ELF (Linux), Mach-O (macOS), or PE (Windows) magic numbers
+    # Check for ELF (Linux), Mach-O (macOS), or PE (Windows) magic numbers.
+    # An unrecognized magic number means we downloaded something that is not a
+    # scbake binary (e.g. an HTML error page served with HTTP 200), so abort.
+    # Only warn when the magic cannot be determined at all (xxd/od unavailable).
     local magic
-    magic=$(xxd -l 4 -p "$binary_name" 2>/dev/null || od -A n -t x1 -N 4 "$binary_name" 2>/dev/null | tr -d ' \n')
-    case "$magic" in
-        7f454c46*|fecf*|cafebabe*|4d5a*) log_success "Binary signature verified" ;;
-        *) log_warn "Could not verify binary signature (but may still be valid)" ;;
-    esac
+    magic=$(xxd -l 4 -p "$binary_name" 2>/dev/null || od -A n -t x1 -N 4 "$binary_name" 2>/dev/null | tr -d ' \n' || true)
+    if [ -z "$magic" ]; then
+        log_warn "Could not verify binary signature (xxd/od unavailable)"
+    else
+        case "$magic" in
+            7f454c46*|cffaedfe*|cefaedfe*|feedface*|feedfacf*|cafebabe*|cafebabf*|bebafeca*|bfbafeca*|4d5a*) log_success "Binary signature verified" ;;
+            *) die "Downloaded file is not a valid scbake binary (unexpected magic number: $magic)" ;;
+        esac
+    fi
 
     log_info "Verifying checksums..."
     local checksums_url="${RELEASE_URL}/${VERSION}/SHA256SUMS"
-    if curl -sSL -o SHA256SUMS "$checksums_url" 2>/dev/null || wget -q -O SHA256SUMS "$checksums_url" 2>/dev/null; then
+    if curl -fsSL -o SHA256SUMS "$checksums_url" 2>/dev/null || wget -q -O SHA256SUMS "$checksums_url" 2>/dev/null; then
         if verify_checksum "$binary_name" "SHA256SUMS" 2>/dev/null; then
             log_success "Checksum verified"
         else
