@@ -39,6 +39,11 @@ checksum:
   # install.sh expects a file named exactly SHA256SUMS.
   name_template: SHA256SUMS
   algorithm: sha256
+  # Also checksum the installer so users can verify a pinned download of it
+  # against the same SHA256SUMS file. install.sh matches the binary by its
+  # exact asset name, so the extra "install.sh" line does not affect it.
+  extra_files:
+    - glob: ./install.sh
 
 changelog:
   sort: asc
@@ -63,11 +68,15 @@ release:
   prerelease: auto
   make_latest: true
   name_template: "{{ .Tag }}"
+  # Attach the installer to every release so a pinned, immutable URL exists:
+  #   https://github.com/Emin-ACIKGOZ/scbake/releases/download/<tag>/install.sh
+  extra_files:
+    - glob: ./install.sh
   header: |
     scbake {{ .Tag }}
 
     Install or update with:
 
     ```sh
-    curl -sSL https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh | bash
+    curl -fsSL https://github.com/Emin-ACIKGOZ/scbake/releases/download/{{ .Tag }}/install.sh | bash
     ```

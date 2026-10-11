@@ -2,8 +2,8 @@ package tasks
 
 import (
 	"embed"
+	"errors"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"scbake/internal/templateregistry"
 	"scbake/internal/util/fileutil"
@@ -29,7 +29,9 @@ func ReadTemplate(efs embed.FS, tplPath string, overrideDir, registryCacheDir, t
 			return content, nil
 		}
 
-		if !os.IsNotExist(err) {
+		// errors.Is unwraps the %w chain emitted by SafePath/canonicalize, so a
+		// dangling symlink (reported as os.ErrNotExist) still falls through.
+		if !errors.Is(err, fs.ErrNotExist) {
 			return nil, err
 		}
 	}

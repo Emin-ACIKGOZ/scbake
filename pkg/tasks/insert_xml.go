@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"scbake/internal/types"
@@ -63,7 +62,7 @@ func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
 		return nil
 	}
 
-	contentStr, err := t.readAndValidateXML(absPath)
+	contentStr, err := t.readAndValidateXML(tc.TargetPath)
 	if err != nil {
 		return err
 	}
@@ -81,7 +80,7 @@ func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
 		return fmt.Errorf("failed to insert XML into %s: %w", t.FilePath, err)
 	}
 
-	if err := os.WriteFile(absPath, []byte(newContent), fileutil.FilePerms); err != nil {
+	if err := fileutil.SafeWriteFile(tc.TargetPath, t.FilePath, []byte(newContent), fileutil.FilePerms); err != nil {
 		return fmt.Errorf("failed to write modified XML file %s: %w", t.FilePath, err)
 	}
 
@@ -89,31 +88,32 @@ func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
 }
 
 func (t *InsertXMLTask) validatePath(targetPath string) (string, error) {
-	absPath, err := filepath.Abs(filepath.Join(targetPath, t.FilePath))
+	// fileutil.SafePath performs both lexical and symlink-aware containment, so
+	// a file reached through a symlink that escapes the target is rejected.
+	absPath, err := fileutil.SafePath(targetPath, t.FilePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve path for %s: %w", t.FilePath, err)
+		return "", fmt.Errorf("path %s is outside target directory: %w", t.FilePath, err)
 	}
 
-	absTarget, _ := filepath.Abs(targetPath)
-	relPath, err := filepath.Rel(filepath.Clean(absTarget), filepath.Clean(absPath))
-	if err != nil || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %s is outside target directory", t.FilePath)
-	}
-
-	if _, err := os.Stat(absPath); err != nil {
+	// Lstat: do not follow a symlink. The final component is later opened with
+	// O_NOFOLLOW, but rejecting here reports a clear error and prevents reading
+	// through a link.
+	if info, err := os.Lstat(absPath); err != nil {
 		if os.IsNotExist(err) {
 			return "", fmt.Errorf("XML file not found: %s", t.FilePath)
 		}
 		return "", fmt.Errorf("failed to stat XML file %s: %w", t.FilePath, err)
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("XML file %s is a symlink, which is not allowed", t.FilePath)
 	}
 
 	return absPath, nil
 }
 
-func (t *InsertXMLTask) readAndValidateXML(absPath string) (string, error) {
-	// absPath is validated to be within target directory in validatePath()
-	//nolint:gosec
-	content, err := os.ReadFile(absPath)
+func (t *InsertXMLTask) readAndValidateXML(targetPath string) (string, error) {
+	// The path is validated by validatePath() and SafeReadFile re-checks
+	// containment, opening the final component with O_NOFOLLOW.
+	content, err := fileutil.SafeReadFile(targetPath, t.FilePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read XML file %s: %w", t.FilePath, err)
 	}

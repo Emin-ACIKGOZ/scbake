@@ -1,6 +1,6 @@
 #!/bin/bash
 # scbake installer - Cross-platform, production-grade installation script
-# Usage: curl -sSL https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh | bash
+# Usage: curl -fsSL https://github.com/Emin-ACIKGOZ/scbake/releases/download/<tag>/install.sh | bash
 # Or:    bash install.sh [version] [install-dir] [--quiet]
 # Examples:
 #   bash install.sh                          # Latest version, interactive
@@ -216,39 +216,51 @@ download_file() {
         fi
     done
 
-    die "Failed to download after $retries attempts: $url"
+    # Return non-zero instead of dying so the caller can add context (binary
+    # vs. checksums) while still treating exhaustion as fatal.
+    return 1
 }
 
-# Verify checksum (optional, non-fatal if missing or mismatched)
+# Verify the downloaded binary against the release's SHA256SUMS. This check is
+# mandatory and fatal: a missing checksums file, a missing entry for the asset,
+# no hashing tool, or a hash mismatch all abort the install. A tampered or wrong
+# binary must never be installed.
 verify_checksum() {
-    local binary="$1"
-    local checksums_file="$2"
+    local binary="$1"          # local path to the downloaded binary
+    local checksums_file="$2"  # path to the SHA256SUMS file
+    local asset_name="$3"      # release asset filename to look up
+    local expected
+    local actual
 
     if [ ! -f "$checksums_file" ]; then
-        return 0  # No checksums file, skip silently
+        die "Checksum file not found: $checksums_file"
     fi
 
-    # Try sha256sum first (standard on Linux)
-    if command_exists sha256sum; then
-        if sha256sum -c "$checksums_file" --ignore-missing >/dev/null 2>&1; then
-            log_success "Checksum verified"
-            return 0
-        else
-            log_warn "Checksum mismatch (but binary downloaded successfully)"
-            return 0  # Don't die, binary might still be valid
-        fi
-    # Fallback to shasum (macOS, some BSD systems)
-    elif command_exists shasum; then
-        if grep "$(shasum -a 256 "$binary" | awk '{print $1}')" "$checksums_file" >/dev/null 2>&1; then
-            log_success "Checksum verified"
-            return 0
-        else
-            log_warn "Checksum mismatch (but binary downloaded successfully)"
-            return 0  # Don't die
-        fi
-    else
-        return 0  # No checksum tool, skip silently
+    # Look up the line for exactly this asset (field 2) instead of checking
+    # every entry in the file: a checksums file that simply lacks this asset
+    # must not "pass". Some tools prefix the filename with '*' (binary mode), so
+    # strip that before comparing.
+    expected=$(awk -v name="$asset_name" \
+        '{ n = $2; sub(/^\*/, "", n); if (n == name) { print $1; exit } }' \
+        "$checksums_file" 2>/dev/null || true)
+
+    if [ -z "$expected" ]; then
+        die "No checksum entry for '$asset_name' in $checksums_file"
     fi
+
+    if command_exists sha256sum; then
+        actual=$(sha256sum "$binary" | awk '{print $1}')
+    elif command_exists shasum; then
+        actual=$(shasum -a 256 "$binary" | awk '{print $1}')
+    else
+        die "Neither sha256sum nor shasum found; cannot verify the download"
+    fi
+
+    if [ "$actual" != "$expected" ]; then
+        die "Checksum mismatch for '$asset_name': expected $expected, got $actual"
+    fi
+
+    log_success "Checksum verified"
 }
 
 # Determine install directory
@@ -354,7 +366,7 @@ main() {
     log_info "Downloading binary..."
     log_info "Source: $download_url"
 
-    download_file "$download_url" "$binary_name"
+    download_file "$download_url" "$binary_name" || die "Failed to download binary from $download_url"
     log_success "Downloaded successfully"
 
     log_info "Validating binary..."
@@ -377,17 +389,19 @@ main() {
         esac
     fi
 
+    # Download the checksum manifest. Unlike before, this is not best-effort:
+    # if it cannot be fetched we abort rather than install an unverified binary.
+    # Route it through download_file so a transient network blip gets the same
+    # retries + exponential backoff as the binary; exhaustion is still fatal.
     log_info "Verifying checksums..."
     local checksums_url="${RELEASE_URL}/${VERSION}/SHA256SUMS"
-    if curl -fsSL -o SHA256SUMS "$checksums_url" 2>/dev/null || wget -q -O SHA256SUMS "$checksums_url" 2>/dev/null; then
-        if verify_checksum "$binary_name" "SHA256SUMS" 2>/dev/null; then
-            log_success "Checksum verified"
-        else
-            log_warn "Checksum validation skipped"
-        fi
-    else
-        log_warn "Checksums unavailable, skipped validation"
+    download_file "$checksums_url" "SHA256SUMS" || die "Failed to download checksums from $checksums_url"
+
+    if [ ! -s SHA256SUMS ]; then
+        die "Downloaded checksum file is empty: $checksums_url"
     fi
+
+    verify_checksum "$binary_name" "SHA256SUMS" "$filename"
 
     # Make executable
     make_executable "$binary_name"
