@@ -17,9 +17,9 @@ import (
 	"strings"
 )
 
-// MaxLines bounds a text merge. Above this the merge reports NotText so the
-// caller falls back to a policy instead of allocating an O(n*m) table.
-const MaxLines = 20000
+// MaxCells bounds the LCS table (base lines x changed lines) so a merge cannot
+// allocate an unbounded O(n*m) table. 4M cells is roughly 32 MiB of ints.
+const MaxCells = 4_000_000
 
 // Conflict marker labels.
 const (
@@ -57,7 +57,7 @@ func Merge(base, ours, theirs []byte) ([]byte, Status) {
 	}
 
 	bl, ol, tl := splitLines(base), splitLines(ours), splitLines(theirs)
-	if len(bl) > MaxLines || len(ol) > MaxLines || len(tl) > MaxLines {
+	if len(bl)*max(len(ol), len(tl)) > MaxCells {
 		return nil, NotText
 	}
 

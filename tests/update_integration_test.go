@@ -194,3 +194,30 @@ func TestUpdateConflictWritesArtifact(t *testing.T) {
 		t.Fatalf("artifact = %q", got)
 	}
 }
+
+// TestUpdateDoesNotDuplicateProjectBlocks is a regression test for the
+// render-time manifest re-adding an existing project. Templates that range
+// .Projects (such as makefile) must not emit the project block twice after an
+// update.
+func TestUpdateDoesNotDuplicateProjectBlocks(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(originalWd) })
+	_ = os.Chdir(tmpDir)
+
+	out, err := runCLI("new", "langproj", "--lang", "go", "--with", "makefile")
+	if err != nil {
+		t.Fatalf("new failed: %v\n%s", err, out)
+	}
+	projectPath := filepath.Join(tmpDir, "langproj")
+	_ = os.Chdir(projectPath)
+
+	if out, err := runCLI("update"); err != nil {
+		t.Fatalf("update failed: %v\n%s", err, out)
+	}
+
+	makefile := mustRead(t, filepath.Join(projectPath, "Makefile"))
+	if n := strings.Count(makefile, "Building "); n != 1 {
+		t.Fatalf("Makefile rendered %d project blocks, want 1:\n%s", n, makefile)
+	}
+}

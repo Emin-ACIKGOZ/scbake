@@ -101,13 +101,11 @@ func TestMerge_BinaryIsNotText(t *testing.T) {
 }
 
 func TestMerge_LargeIsNotText(t *testing.T) {
-	var b bytes.Buffer
-	for i := 0; i <= MaxLines; i++ {
-		b.WriteString("x\n")
-	}
-	base := bytes.Repeat([]byte("base\n"), MaxLines+1)
-	ours := bytes.Repeat([]byte("ours\n"), MaxLines+1)
-	if _, status := Merge(base, ours, b.Bytes()); status != NotText {
+	// base lines x changed lines exceeds MaxCells.
+	base := bytes.Repeat([]byte("base\n"), 3000)
+	ours := bytes.Repeat([]byte("ours\n"), 3000)
+	theirs := bytes.Repeat([]byte("theirs\n"), 3000)
+	if _, status := Merge(base, ours, theirs); status != NotText {
 		t.Errorf("oversized input must be NotText")
 	}
 }

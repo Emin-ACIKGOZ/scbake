@@ -76,3 +76,33 @@ func TestManagedWriteTasks(t *testing.T) {
 		t.Fatalf("managedWriteTasks kept the wrong task: %T", got[0])
 	}
 }
+
+// TestApplyManifestChangesDeduplicates is a regression guard: the render-time
+// manifest must not re-add a project or template that already exists, or
+// templates ranging .Projects render every block twice after update.
+func TestApplyManifestChangesDeduplicates(t *testing.T) {
+	m := &types.Manifest{
+		Projects:  []types.Project{{Name: "api", Path: "services/api", Language: "go"}},
+		Templates: []types.Template{{Name: "makefile", Path: "."}},
+	}
+	changes := &manifestChanges{
+		Projects: []types.Project{
+			{Name: "api", Path: "services/api", Language: "go"}, // duplicate
+			{Name: "web", Path: "services/web", Language: "svelte"},
+		},
+		Templates: []types.Template{
+			{Name: "makefile", Path: "."}, // duplicate
+			{Name: "ci_github", Path: "."},
+		},
+	}
+
+	applyManifestChanges(m, changes)
+	applyManifestChanges(m, changes) // a second run must not grow the manifest
+
+	if len(m.Projects) != 2 {
+		t.Errorf("projects = %d, want 2: %+v", len(m.Projects), m.Projects)
+	}
+	if len(m.Templates) != 2 {
+		t.Errorf("templates = %d, want 2: %+v", len(m.Templates), m.Templates)
+	}
+}

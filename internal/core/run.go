@@ -34,6 +34,11 @@ const (
 // template was requested, so there is nothing to apply.
 var ErrNoSelection = errors.New("no language or templates specified")
 
+// legacyRootTemplate is the placeholder name written by manifests generated
+// before SCB-064 recorded real template references. `update` skips it rather
+// than failing with an unknown-template error.
+const legacyRootTemplate = "root-templates"
+
 // RunContext holds the flags and arguments for a single execution run.
 type RunContext struct {
 	LangFlag         string
@@ -157,7 +162,7 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 
 	var with []string
 	for _, t := range m.Templates {
-		if t.Path == rel {
+		if t.Path == rel && t.Name != legacyRootTemplate {
 			with = append(with, t.Name)
 		}
 	}
@@ -227,8 +232,7 @@ func buildTaskContext(
 		}
 	}
 
-	futureManifest.Projects = append(futureManifest.Projects, changes.Projects...)
-	futureManifest.Templates = append(futureManifest.Templates, changes.Templates...)
+	applyManifestChanges(futureManifest, changes)
 
 	// Reject untrusted manifest fields before any template renders them. Project
 	// paths/names are interpolated into generated shell scripts, Makefile
@@ -345,31 +349,38 @@ func updateManifest(m *types.Manifest, changes *manifestChanges) error {
 			return err
 		}
 	}
+	applyManifestChanges(m, changes)
+	return nil
+}
 
-	// Update Projects (ensure no duplicates by path)
-	existingProjects := make(map[string]bool)
+// applyManifestChanges merges planned projects and templates into a manifest,
+// skipping entries that already exist. It is shared by the render-time manifest
+// (buildTaskContext) and the persisted one (updateManifest) so that re-running
+// update, or a second apply, never duplicates entries. Duplicating them would
+// make templates that range .Projects render every project block twice.
+func applyManifestChanges(m *types.Manifest, changes *manifestChanges) {
+	existingProjects := make(map[string]bool, len(m.Projects))
 	for _, proj := range m.Projects {
 		existingProjects[proj.Path] = true
 	}
 	for _, newProj := range changes.Projects {
 		if !existingProjects[newProj.Path] {
 			m.Projects = append(m.Projects, newProj)
+			existingProjects[newProj.Path] = true
 		}
 	}
-	// Update Templates (ensure no duplicates by name + path)
-	existingTemplates := make(map[string]bool)
+
+	existingTemplates := make(map[string]bool, len(m.Templates))
 	for _, tmpl := range m.Templates {
-		key := tmpl.Name + ":" + tmpl.Path
-		existingTemplates[key] = true
+		existingTemplates[tmpl.Name+":"+tmpl.Path] = true
 	}
 	for _, newTmpl := range changes.Templates {
 		key := newTmpl.Name + ":" + newTmpl.Path
 		if !existingTemplates[key] {
 			m.Templates = append(m.Templates, newTmpl)
+			existingTemplates[key] = true
 		}
 	}
-
-	return nil
 }
 
 // validateManifestFields rejects untrusted manifest fields that the generated
