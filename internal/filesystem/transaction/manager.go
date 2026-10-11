@@ -48,6 +48,12 @@ type Manager struct {
 	// They are stored in order of creation (append-only) for LIFO deletion.
 	created []string
 
+	// createdSet mirrors created for O(1) membership tests in alreadyTracked.
+	// The two hold exactly the same paths: every element of created is in the
+	// set and vice versa. It exists only to avoid a linear scan that made
+	// tracking Θ(n²) in the number of created paths.
+	createdSet map[string]struct{}
+
 	// committed records that the transaction was finalized with Commit().
 	// After a commit, Rollback() must be a no-op: the deferred rollback safety
 	// net (RunApply) runs after Commit() even on success.
@@ -66,9 +72,10 @@ func New(rootPath string) (*Manager, error) {
 	sweepStaleTransactions(absRoot)
 
 	return &Manager{
-		rootPath: absRoot,
-		backups:  make(map[string]backupEntry),
-		created:  make([]string, 0),
+		rootPath:   absRoot,
+		backups:    make(map[string]backupEntry),
+		created:    make([]string, 0),
+		createdSet: make(map[string]struct{}),
 	}, nil
 }
 
@@ -205,4 +212,5 @@ func (m *Manager) resetState() {
 	m.tempDir = ""
 	m.backups = make(map[string]backupEntry)
 	m.created = make([]string, 0)
+	m.createdSet = make(map[string]struct{})
 }
