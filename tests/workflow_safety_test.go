@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,7 +41,7 @@ func TestReleaseWorkflowNoInputInjection(t *testing.T) {
 	root := moduleRoot(t)
 	path := filepath.Join(root, ".github", "workflows", "release.yml")
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // fixed path under the module root
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
@@ -50,8 +51,22 @@ func TestReleaseWorkflowNoInputInjection(t *testing.T) {
 		t.Errorf("%s: expected the workflow_dispatch tag input to be passed via a `TAG:` env indirection; the fix may have been reverted", path)
 	}
 
-	lines := strings.Split(content, "\n")
-	blocks := 0
+	blocks := collectRunBlocks(strings.Split(content, "\n"))
+	if len(blocks) == 0 {
+		t.Fatalf("%s: no run: scripts detected; the scanner is broken", path)
+	}
+	for _, block := range blocks {
+		if m := injectionRe.FindString(block); m != "" {
+			t.Errorf("%s: run: script must not interpolate an untrusted input directly (%q):\n%s", path, m, block)
+		}
+	}
+}
+
+// collectRunBlocks returns the body of every `run:` step in the given workflow
+// lines. A block scalar (or bare `run:`) captures the following indented lines;
+// an inline `run: <command>` contributes a single line.
+func collectRunBlocks(lines []string) []string {
+	var blocks []string
 	for i := 0; i < len(lines); i++ {
 		m := runKeyRe.FindStringSubmatch(lines[i])
 		if m == nil {
@@ -63,9 +78,6 @@ func TestReleaseWorkflowNoInputInjection(t *testing.T) {
 		var body []string
 
 		if value == "" || blockScalarRe.MatchString(value) {
-			// Block scalar (or bare `run:`): capture the following indented
-			// block. Blank lines are allowed inside the block; the block ends
-			// at the first non-blank line that is not more indented than `run:`.
 			for j := i + 1; j < len(lines); j++ {
 				if strings.TrimSpace(lines[j]) == "" {
 					body = append(body, "")
@@ -78,20 +90,12 @@ func TestReleaseWorkflowNoInputInjection(t *testing.T) {
 				i = j
 			}
 		} else {
-			// Inline `run: <command>`.
 			body = append(body, value)
 		}
 
-		blocks++
-		block := strings.Join(body, "\n")
-		if m := injectionRe.FindString(block); m != "" {
-			t.Errorf("%s: run: script must not interpolate an untrusted input directly (%q):\n%s", path, m, block)
-		}
+		blocks = append(blocks, strings.Join(body, "\n"))
 	}
-
-	if blocks == 0 {
-		t.Fatalf("%s: no run: scripts detected; the scanner is broken", path)
-	}
+	return blocks
 }
 
 // indentOf returns the number of leading spaces of a line. Tabs count as one
@@ -119,7 +123,7 @@ func moduleRoot(t *testing.T) string {
 		}
 	}
 
-	out, err := exec.Command("go", "env", "GOMOD").Output()
+	out, err := exec.CommandContext(context.Background(), "go", "env", "GOMOD").Output()
 	if err != nil {
 		t.Fatalf("locate module root: %v", err)
 	}
