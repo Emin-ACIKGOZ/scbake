@@ -109,7 +109,7 @@ jobs:
           awk -v t="$total" -v m="$COVERAGE_MIN" 'BEGIN { if (t+0 < m+0) { printf "::error::Coverage %.1f%% is below the required %s%%\n", t, m; exit 1 } }'
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.out
@@ -148,7 +148,7 @@ jobs:
           go build -trimpath -ldflags="-s -w" -o "$OUTPUT_NAME" ./main.go
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scbake-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/scbake-${{ matrix.goos }}-${{ matrix.goarch }}*
