@@ -57,4 +57,50 @@ func TestSchemaValidation_New(t *testing.T) {
 			t.Errorf("output should mention invalid --set format, got: %s", output)
 		}
 	})
+
+	// Test that an undeclared --set key is rejected early.
+	_ = os.Chdir(tmpDir)
+
+	t.Run("UndeclaredSetKey_Fails", func(t *testing.T) {
+		output, err := runCLI("new", "proj-bogus", "--with", "makefile", "--set", "bogus_key=1")
+		if err == nil {
+			t.Fatal("expected failure for undeclared --set key")
+		}
+		if !strings.Contains(output, "bogus_key") {
+			t.Errorf("output should name the offending key, got: %s", output)
+		}
+		// The project directory must not be left behind on early failure.
+		if _, statErr := os.Stat(filepath.Join(tmpDir, "proj-bogus")); !os.IsNotExist(statErr) {
+			t.Errorf("failed project directory should have been cleaned up, stat err: %v", statErr)
+		}
+	})
+}
+
+// TestSchemaValidation_ComplianceSetKey verifies that --set license is accepted
+// when the compliance template (which declares it) is selected. The LICENSE
+// task fetches SPDX data over the network; a transient failure is not a
+// set-key validation failure.
+func TestSchemaValidation_ComplianceSetKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(originalWd) })
+	_ = os.Chdir(tmpDir)
+
+	output, err := runCLI("new", "proj-compliance",
+		"--with", "compliance",
+		"--license", "MIT",
+		"--copyright-holder", "X",
+		"--set", "license=MIT",
+	)
+	if err != nil {
+		// A set-key validation failure is a regression here. A transient SPDX
+		// network failure is environmental; anything else is unexpected.
+		if strings.Contains(output, "unknown --set") || strings.Contains(output, "not declared") {
+			t.Fatalf("--set license should be accepted with compliance, got: %v\nOutput: %s", err, output)
+		}
+		if strings.Contains(output, "failed to fetch license") {
+			t.Skipf("compliance license fetch unavailable, skipping: %v\nOutput: %s", err, output)
+		}
+		t.Fatalf("unexpected failure: %v\nOutput: %s", err, output)
+	}
 }

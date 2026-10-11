@@ -1,0 +1,15 @@
+{
+  "description": "Enterprise security and compliance files (SECURITY.md, dependabot, LICENSE).",
+  "variables": {
+    "license": {
+      "type": "string",
+      "required": false,
+      "description": "SPDX license identifier used to generate the LICENSE file (e.g. MIT, Apache-2.0)."
+    },
+    "copyright_holder": {
+      "type": "string",
+      "required": false,
+      "description": "Copyright holder name inserted into the generated LICENSE file."
+    }
+  }
+}
