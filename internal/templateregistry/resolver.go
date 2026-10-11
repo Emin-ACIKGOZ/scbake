@@ -6,8 +6,16 @@ import (
 )
 
 // ResolveCachePath checks the registry cache for a template file belonging to
-// the requested template. It searches all cached registries in order, returning
-// the first match, or the empty string if the file is not found.
+// the requested template. It searches cached registries in precedence order,
+// returning the first match, or the empty string if the file is not found.
+//
+// Precedence is explicit and deterministic: registries are visited in the order
+// they were added to the config, as recorded in the cache's order file. This is
+// independent of the registry name, so an alphabetically earlier registry does
+// not silently shadow a later one. Registries not present in the order file are
+// visited in lexical order after the recorded ones. If the order file is
+// missing (for example a cache written before it existed), the fallback is
+// lexical order, matching the previous behavior.
 //
 // It only consults the verified per-template layout
 // <registry>/<templateName>/<cleanPath> and requires templateName to be
@@ -29,32 +37,53 @@ func ResolveCachePath(cacheDir, templateName, tplPath string) string {
 	if cacheDir == "" || templateName == "" {
 		return ""
 	}
+	if ValidateName(templateName) != nil {
+		return ""
+	}
 
 	entries, err := os.ReadDir(cacheDir)
 	if err != nil {
 		return ""
 	}
 
-	cleanPath := filepath.Clean(tplPath)
+	registryDirs := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		registryDir := entry.Name()
-
-		// Per-template layout: <registry>/<templateName>/<cleanPath>. The
-		// requested template name constrains the lookup; sibling template
-		// directories are never searched. The directory must verify against its
-		// manifest before any file is returned.
-		tplDir := filepath.Join(cacheDir, registryDir, templateName)
-		if cacheManifestValid(tplDir) {
-			nested := filepath.Join(tplDir, cleanPath)
-			if _, err := os.Stat(nested); err == nil {
-				return nested
-			}
+		if entry.IsDir() {
+			registryDirs = append(registryDirs, entry.Name())
 		}
 	}
 
+	cleanPath := filepath.Clean(tplPath)
+	for _, registryDir := range orderRegistries(cacheDir, registryDirs) {
+		if found := resolveInRegistry(cacheDir, registryDir, templateName, cleanPath); found != "" {
+			return found
+		}
+	}
+
+	return ""
+}
+
+// resolveInRegistry returns the verified path of cleanPath within the requested
+// template directory of a single cached registry, or the empty string when the
+// registry name is unsafe, the directory does not verify against its manifest,
+// or the file is absent.
+func resolveInRegistry(cacheDir, registryDir, templateName, cleanPath string) string {
+	if ValidateName(registryDir) != nil {
+		return ""
+	}
+
+	// Per-template layout: <registry>/<templateName>/<cleanPath>. The
+	// requested template name constrains the lookup; sibling template
+	// directories are never searched. The directory must verify against its
+	// manifest before any file is returned.
+	tplDir := filepath.Join(cacheDir, registryDir, templateName)
+	if !cacheManifestValid(tplDir) {
+		return ""
+	}
+	nested := filepath.Join(tplDir, cleanPath)
+	if _, err := os.Stat(nested); err == nil {
+		return nested
+	}
 	return ""
 }
 

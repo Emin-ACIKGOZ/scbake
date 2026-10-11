@@ -3,13 +3,13 @@ updates:
 {{ range .Projects }}
   {{ if eq .Language "go" }}
   - package-ecosystem: "gomod"
-    directory: "{{ .Path }}"
+    directory: {{ .Path | quote }}
     schedule:
       interval: "weekly"
   {{ end }}
   {{ if eq .Language "svelte" }}
   - package-ecosystem: "npm"
-    directory: "{{ .Path }}"
+    directory: {{ .Path | quote }}
     schedule:
       interval: "weekly"
   {{ end }}

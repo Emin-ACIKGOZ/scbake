@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"scbake/internal/util/fileutil"
 	"strings"
 )
 
@@ -26,7 +27,7 @@ func (m *Manager) Track(path string) error {
 		return nil
 	}
 
-	info, err := os.Stat(absPath)
+	info, err := os.Lstat(absPath)
 	if os.IsNotExist(err) {
 		// Case 1: File/Dir does not exist. We record it as "created".
 		m.created = append(m.created, absPath)
@@ -35,6 +36,16 @@ func (m *Manager) Track(path string) error {
 	if err != nil {
 		// Some other error (permission, etc)
 		return fmt.Errorf("failed to stat %s: %w", absPath, err)
+	}
+
+	// A symlink as the tracked leaf is never followed blindly. SafePath has
+	// already confirmed the link resolves inside the root. A symlink to a
+	// directory is transparent: MkdirAll merges into the directory, so treat it
+	// like any other directory (no backup). A symlink to a file is refused: the
+	// write helpers open with O_NOFOLLOW and would reject it anyway, and backing
+	// up through the link could touch a shared inode.
+	if info.Mode()&os.ModeSymlink != 0 {
+		return checkTrackedSymlink(absPath)
 	}
 
 	// Case 2: File exists.
@@ -49,43 +60,47 @@ func (m *Manager) Track(path string) error {
 		return nil
 	}
 
+	// Refuse hard-linked files (SCB-003): a file with more than one link shares
+	// its inode with a path that may live outside the project root, so backing
+	// up or overwriting it would read or modify data outside the root. The
+	// check is best-effort and inherently racy; on platforms without link-count
+	// reporting it is a no-op.
+	if nlink, ok := hardlinkCount(info); ok && nlink > 1 {
+		return fmt.Errorf(
+			"security violation: refusing to track hard-linked file %s (%d links)",
+			absPath, nlink,
+		)
+	}
+
 	return m.backupFile(absPath, info)
+}
+
+// checkTrackedSymlink validates the symlink at absPath. A symlink to a
+// directory is transparent (MkdirAll merges into it) and returns nil. A symlink
+// to a file returns an error: the write helpers open with O_NOFOLLOW and would
+// reject it anyway, and backing up through the link could touch a shared inode.
+// SafePath has already confirmed the link resolves inside the root.
+func checkTrackedSymlink(absPath string) error {
+	target, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to stat symlink target %s: %w", absPath, err)
+	}
+	if target.IsDir() {
+		return nil
+	}
+	return fmt.Errorf("security violation: refusing to track symlink %s", absPath)
 }
 
 func (m *Manager) resolveAndValidate(path string) (string, error) {
 	// Resolve relative paths against the manager's root, not the process
 	// working directory, so Track behaves consistently regardless of CWD.
-	// Absolute paths are validated against the root via the containment check
-	// below, exactly as before.
-	resolved := path
-	if !filepath.IsAbs(resolved) {
-		resolved = filepath.Join(m.rootPath, resolved)
-	}
-
-	absPath, err := filepath.Abs(resolved)
+	// Absolute paths are validated against the root directly. fileutil.SafePath
+	// performs both the lexical and the symlink-aware containment checks, so a
+	// path reached through a symlink that escapes the root is rejected.
+	absPath, err := fileutil.SafePath(m.rootPath, path)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve path %s: %w", path, err)
+		return "", fmt.Errorf("security violation: %w", err)
 	}
-
-	// Security Fix: Ensure path is within root using filepath.Rel
-	// This prevents prefix matching bugs (e.g. /tmp/root vs /tmp/root-evil)
-	// and handles cross-platform path separators correctly.
-	rel, err := filepath.Rel(m.rootPath, absPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to calculate relative path: %w", err)
-	}
-
-	// If the relative path is ".." or starts with "..<separator>", it means
-	// absPath is outside m.rootPath. Checking for the separator boundary avoids
-	// rejecting legitimate in-root names that merely begin with dots, such as
-	// "..hidden.xml".
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf(
-			"security violation: attempting to track path '%s' outside project root '%s'",
-			absPath, m.rootPath,
-		)
-	}
-
 	return absPath, nil
 }
 

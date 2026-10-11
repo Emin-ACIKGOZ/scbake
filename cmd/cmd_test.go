@@ -424,3 +424,36 @@ func TestApply_IdempotentRun(t *testing.T) {
 
 	verifyTransactionCleanup(t, tmpDir)
 }
+
+// TestRunNew_RejectsTraversalProjectName is a regression test for SCB-009:
+// 'new <project-name>' must reject traversal/absolute names before creating any
+// directory, so it can never create a directory outside the current working dir.
+func TestRunNew_RejectsTraversalProjectName(t *testing.T) {
+	resetFlags()
+
+	tmpDir := t.TempDir()
+	work := filepath.Join(tmpDir, "work")
+	if err := os.MkdirAll(work, fileutil.DirPerms); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+
+	oldWD, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	if err := os.Chdir(work); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	for _, name := range []string{"../evil", "..", "/abs", "a/b"} {
+		created := false
+		if err := runNew(name, &created); err == nil {
+			t.Errorf("runNew(%q) = nil, want error for traversal project name", name)
+		}
+		if created {
+			t.Errorf("runNew(%q) reported creating a directory for a rejected name", name)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(tmpDir, "evil")); !os.IsNotExist(err) {
+		t.Errorf("traversal project name created a directory outside the cwd: %v", err)
+	}
+}

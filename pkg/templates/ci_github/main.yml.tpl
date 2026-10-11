@@ -58,7 +58,7 @@ jobs:
           echo "Starting monorepo build..."
           
           {{ range .Projects }}
-            echo "--- Building {{ .Name }} ({{ .Language }}) ---"
+            echo {{ printf "--- Building %s (%s) ---" .Name .Language | quote }}
             
             {{ if eq .Language "go" }}
             # Build and Test Go Project

@@ -43,6 +43,9 @@ Token can also be provided via SCBAKE_REGISTRY_TOKEN_<NAME> env var at pull time
 The --token flag stores the token in the config file; use the env var to avoid that.`,
 	Args: cobra.ExactArgs(2), //nolint:mnd // 2 is the expected arg count for name+url
 	RunE: func(_ *cobra.Command, args []string) error {
+		if err := templateregistry.ValidateName(args[0]); err != nil {
+			return fmt.Errorf("invalid registry name: %w", err)
+		}
 		m, err := templateregistry.NewManager()
 		if err != nil {
 			return err
@@ -120,12 +123,21 @@ Authentication uses the stored token or the SCBAKE_REGISTRY_TOKEN_<NAME> env var
 The template is then available as an override for scbake new/apply.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
+		templateName := args[0]
+		if err := templateregistry.ValidateName(templateName); err != nil {
+			return fmt.Errorf("invalid template name: %w", err)
+		}
+		if pullRegistryName != "" {
+			if err := templateregistry.ValidateName(pullRegistryName); err != nil {
+				return fmt.Errorf("invalid registry name: %w", err)
+			}
+		}
+
 		m, err := templateregistry.NewManager()
 		if err != nil {
 			return err
 		}
 
-		templateName := args[0]
 		if pullRegistryName != "" {
 			if err := m.Pull(pullRegistryName, templateName); err != nil {
 				return fmt.Errorf("pulling template %q from registry %q: %w", templateName, pullRegistryName, err)

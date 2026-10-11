@@ -4,8 +4,12 @@
 package cighub
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
+	"strings"
 	"testing"
 )
 
@@ -51,5 +55,70 @@ func TestGetTasks_TemplateBinding(t *testing.T) {
 	_, err := templates.ReadFile(task.TemplatePath)
 	if err != nil {
 		t.Errorf("Embedded template file '%s' not found: %v", task.TemplatePath, err)
+	}
+}
+
+// renderWorkflow renders the embedded CI workflow for the given manifest and
+// returns its contents.
+func renderWorkflow(t *testing.T, m *types.Manifest) string {
+	t.Helper()
+
+	handler := &Handler{}
+	plan, err := handler.GetTasks("", "", "")
+	if err != nil {
+		t.Fatalf("GetTasks failed: %v", err)
+	}
+	task := plan[0].(*tasks.CreateTemplateTask)
+
+	dir := t.TempDir()
+	tc := types.TaskContext{Ctx: context.Background(), TargetPath: dir, Manifest: m}
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	out, err := os.ReadFile(filepath.Join(dir, ".github", "workflows", "main.yml")) //nolint:gosec // test temp path
+	if err != nil {
+		t.Fatalf("read generated workflow: %v", err)
+	}
+	return string(out)
+}
+
+// TestWorkflow_BenignProjectRendersUnchanged pins the benign rendering so the
+// injection hardening does not silently change ordinary output.
+func TestWorkflow_BenignProjectRendersUnchanged(t *testing.T) {
+	m := &types.Manifest{
+		Projects: []types.Project{{Name: "backend", Path: "services/backend", Language: "go"}},
+	}
+	out := renderWorkflow(t, m)
+
+	for _, want := range []string{
+		`echo "--- Building backend (go) ---"`,
+		"cd services/backend",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("generated workflow missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestWorkflow_ProjectNameCannotInject is a regression guard for SCB-006: a
+// project name containing a newline or quote must not break out of the `echo`
+// line in the generated `run:` block.
+func TestWorkflow_ProjectNameCannotInject(t *testing.T) {
+	m := &types.Manifest{
+		Projects: []types.Project{{
+			Name:     "evil\ntouch /tmp/pwned",
+			Path:     "backend",
+			Language: "go",
+		}},
+	}
+	out := renderWorkflow(t, m)
+
+	if strings.Contains(out, "\ntouch /tmp/pwned") {
+		t.Errorf("project name injected a new shell line:\n%s", out)
+	}
+	// The escaped form keeps the payload inert on the echo line.
+	if !strings.Contains(out, `evil\ntouch /tmp/pwned`) {
+		t.Errorf("expected the name to be rendered as an escaped scalar:\n%s", out)
 	}
 }
