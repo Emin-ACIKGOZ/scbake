@@ -8,14 +8,14 @@ import (
 
 func TestResolveCachePath_NotFound(t *testing.T) {
 	dir := t.TempDir()
-	result := ResolveCachePath(dir, "some/file.tpl")
+	result := ResolveCachePath(dir, "", "some/file.tpl")
 	if result != "" {
 		t.Errorf("expected empty for empty cache, got %q", result)
 	}
 }
 
 func TestResolveCachePath_EmptyCacheDir(t *testing.T) {
-	result := ResolveCachePath("", "some/file.tpl")
+	result := ResolveCachePath("", "", "some/file.tpl")
 	if result != "" {
 		t.Errorf("expected empty for empty cache dir, got %q", result)
 	}
@@ -34,7 +34,7 @@ func TestResolveCachePath_FindsFile(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	result := ResolveCachePath(dir, "templates/main.go.tpl")
+	result := ResolveCachePath(dir, "", "templates/main.go.tpl")
 	if result == "" {
 		t.Fatal("expected non-empty result for existing file")
 	}
@@ -62,7 +62,7 @@ func TestResolveCachePath_SearchesAllRegistries(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	result := ResolveCachePath(dir, "shared.tpl")
+	result := ResolveCachePath(dir, "", "shared.tpl")
 	if result == "" {
 		t.Fatal("expected to find file in registry-b")
 	}
@@ -85,12 +85,60 @@ func TestResolveCachePath_NestedTemplateDir(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	result := ResolveCachePath(dir, "main.go.tpl")
+	// The requested template name constrains the nested lookup to "editorconfig".
+	result := ResolveCachePath(dir, "editorconfig", "main.go.tpl")
 	if result == "" {
 		t.Fatal("expected non-empty result for file in nested template dir")
 	}
 	if result != tplPath {
 		t.Errorf("expected %q, got %q", tplPath, result)
+	}
+}
+
+// TestResolveCachePath_ConstrainsToRequestedTemplate is a regression test for
+// SCB-022: a request for one template must never resolve to a different
+// template's file that happens to share a name. Before the fix the resolver
+// scanned every template subdirectory and returned the first sibling match.
+func TestResolveCachePath_ConstrainsToRequestedTemplate(t *testing.T) {
+	dir := t.TempDir()
+	registryDir := filepath.Join(dir, "acme")
+
+	aDir := filepath.Join(registryDir, "a")
+	bDir := filepath.Join(registryDir, "b")
+	for _, d := range []string{aDir, bDir} {
+		//nolint:gosec // test temp directory
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("MkdirAll failed: %v", err)
+		}
+	}
+	aPath := filepath.Join(aDir, "main.go.tpl")
+	bPath := filepath.Join(bDir, "main.go.tpl")
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(aPath, []byte("template a"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(bPath, []byte("template b"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	result := ResolveCachePath(dir, "a", "main.go.tpl")
+	if result != aPath {
+		t.Fatalf("expected template a's file %q, got %q", aPath, result)
+	}
+	if result == bPath {
+		t.Fatalf("resolved to a different template's file %q", bPath)
+	}
+
+	// Requesting b must return b's file too. The old sibling scan returned the
+	// first match in directory order ("a"), so this direction catches the bug
+	// regardless of which directory sorts first.
+	result = ResolveCachePath(dir, "b", "main.go.tpl")
+	if result != bPath {
+		t.Fatalf("expected template b's file %q, got %q", bPath, result)
+	}
+	if result == aPath {
+		t.Fatalf("resolved to a different template's file %q", aPath)
 	}
 }
 

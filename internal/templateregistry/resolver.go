@@ -5,10 +5,16 @@ import (
 	"path/filepath"
 )
 
-// ResolveCachePath checks the registry cache for a template file.
-// It searches all cached registries in order, returning the first match.
-// Returns empty string if not found in any cache.
-func ResolveCachePath(cacheDir, tplPath string) string {
+// ResolveCachePath checks the registry cache for a template file belonging to
+// the requested template. It searches all cached registries in order, returning
+// the first match, or the empty string if the file is not found.
+//
+// For each registry directory it first checks the flat/legacy layout
+// <registry>/<cleanPath>, then — only when templateName is non-empty — the
+// per-template layout <registry>/<templateName>/<cleanPath>. Constraining the
+// nested lookup to the requested template prevents a request for one template
+// from resolving to a different template's file that happens to share a name.
+func ResolveCachePath(cacheDir, templateName, tplPath string) string {
 	if cacheDir == "" {
 		return ""
 	}
@@ -24,26 +30,22 @@ func ResolveCachePath(cacheDir, tplPath string) string {
 			continue
 		}
 		registryDir := entry.Name()
-		candidate := filepath.Join(cacheDir, registryDir, cleanPath)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+
+		// Flat/legacy layout: <registry>/<cleanPath>.
+		direct := filepath.Join(cacheDir, registryDir, cleanPath)
+		if _, err := os.Stat(direct); err == nil {
+			return direct
 		}
 
-		// Template caches are stored as <cacheDir>/<registry>/<templateName>/<file>.
-		// If not found directly under the registry dir, search one level deeper
-		// within each template subdirectory.
-		tplEntries, err := os.ReadDir(filepath.Dir(candidate))
-		if err != nil {
+		// Per-template layout: <registry>/<templateName>/<cleanPath>. The
+		// requested template name constrains the lookup; sibling template
+		// directories are never searched.
+		if templateName == "" {
 			continue
 		}
-		for _, tplEntry := range tplEntries {
-			if !tplEntry.IsDir() {
-				continue
-			}
-			nested := filepath.Join(cacheDir, registryDir, tplEntry.Name(), cleanPath)
-			if _, err := os.Stat(nested); err == nil {
-				return nested
-			}
+		nested := filepath.Join(cacheDir, registryDir, templateName, cleanPath)
+		if _, err := os.Stat(nested); err == nil {
+			return nested
 		}
 	}
 

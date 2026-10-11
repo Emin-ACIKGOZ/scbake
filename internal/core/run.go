@@ -17,6 +17,7 @@ import (
 	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/lang"
+	"scbake/pkg/tasks"
 	"scbake/pkg/templates"
 	"strings"
 	"time"
@@ -326,6 +327,21 @@ func validateSelectedTemplates(rc RunContext, metadata map[string]string) error 
 	return nil
 }
 
+// stampTemplateName records which registry template each CreateTemplateTask
+// renders. Handlers are selected by name but their tasks do not carry it, so
+// the plan builder fills it in here; registry cache resolution then stays
+// constrained to the requested template. Tasks that already name a template are
+// left untouched.
+func stampTemplateName(taskList []types.Task, templateName string) {
+	for _, task := range taskList {
+		ct, ok := task.(*tasks.CreateTemplateTask)
+		if !ok || ct.TemplateName != "" {
+			continue
+		}
+		ct.TemplateName = templateName
+	}
+}
+
 func deduplicateTemplates(requested []string) []string {
 	seen := make(map[string]bool)
 	var result []string
@@ -406,6 +422,7 @@ func handleLangFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) (
 		return "", fmt.Errorf("language handler '%s' returned no tasks (possible misconfiguration)", rc.LangFlag)
 	}
 
+	stampTemplateName(langTasks, rc.LangFlag)
 	plan.Tasks = append(plan.Tasks, langTasks...)
 
 	projectName, err := util.SanitizeModuleName(rc.ManifestPathArg)
@@ -434,6 +451,8 @@ func handleWithFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) e
 		if err != nil {
 			return fmt.Errorf("failed to get tasks for template '%s': %w", tmplName, err)
 		}
+
+		stampTemplateName(tmplTasks, tmplName)
 
 		if len(tmplTasks) > 0 {
 			plan.Tasks = append(plan.Tasks, tmplTasks...)

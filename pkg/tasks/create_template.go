@@ -75,6 +75,11 @@ type CreateTemplateTask struct {
 
 	// Optional: Custom data to pass to the template instead of the full manifest
 	TemplateData interface{}
+
+	// TemplateName identifies which registry template this task renders. It is
+	// threaded to ReadTemplate so registry cache resolution is constrained to
+	// the requested template and never reads a sibling template's file.
+	TemplateName string
 }
 
 // Description returns a human-readable summary of the task.
@@ -294,7 +299,7 @@ func recordedHash(m *types.Manifest, ledgerKey, legacyKey, existingHash string) 
 // Execute performs the template creation task.
 func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
 	// 1. Read and parse the template using the override-aware helper
-	tplContent, err := ReadTemplate(t.TemplateFS, t.TemplatePath, tc.TemplateDir, tc.RegistryCacheDir)
+	tplContent, err := ReadTemplate(t.TemplateFS, t.TemplatePath, tc.TemplateDir, tc.RegistryCacheDir, t.TemplateName)
 	if err != nil {
 		return fmt.Errorf("failed to read template %s: %w", t.TemplatePath, err)
 	}
