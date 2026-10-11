@@ -137,6 +137,56 @@ func TestReadTemplate_OverridePathTraversal(t *testing.T) {
 	}
 }
 
+func TestReadTemplate_OverrideDanglingSymlinkFallsThrough(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on Windows")
+	}
+
+	tmpDir := t.TempDir()
+	// An intermediate component of the requested path is a dangling symlink.
+	// SafePath/canonicalize fails closed on it with a wrapped os.ErrNotExist;
+	// resolution must treat that as a fall-through to the embedded template
+	// rather than a fatal error.
+	if err := os.Symlink(filepath.Join(tmpDir, "missing"), filepath.Join(tmpDir, "testdata")); err != nil {
+		t.Fatalf("Symlink failed: %v", err)
+	}
+
+	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir, "", "")
+	if err != nil {
+		t.Fatalf("ReadTemplate should fall through a dangling symlink to the embedded template: %v", err)
+	}
+	expected := "Hello {{ (index .Projects 0).Name }} from {{ .SbakeVersion }}"
+	if string(content) != expected {
+		t.Errorf("expected embedded content %q, got %q", expected, string(content))
+	}
+}
+
+func TestReadTemplate_OverrideEscapingSymlinkRejected(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on Windows")
+	}
+
+	tmpDir := t.TempDir()
+	outside := t.TempDir()
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(outside, "simple.tpl"), []byte("secret"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	// A symlink in the override dir that escapes it must stay a fatal error,
+	// not a silent fall-through.
+	if err := os.Symlink(outside, filepath.Join(tmpDir, "testdata")); err != nil {
+		t.Fatalf("Symlink failed: %v", err)
+	}
+
+	if _, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir, "", ""); err == nil {
+		t.Fatal("expected rejection of symlink escaping the override dir")
+	}
+}
+
 func TestReadTemplate_OverrideDirWithTrailingSlash(t *testing.T) {
 	t.Parallel()
 
