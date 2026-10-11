@@ -3,6 +3,7 @@ package templateregistry
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -95,13 +96,10 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 		return nil
 	}
 
-	if err := os.RemoveAll(pr.destDir); err != nil {
-		return fmt.Errorf("removing stale template cache: %w", err)
-	}
-	if err := os.Remove(manifestPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing stale cache manifest: %w", err)
-	}
-
+	// Do not touch the existing cache or manifest yet: a transient download or
+	// extraction failure must leave a previously valid cache intact.
+	// extractToCache stages the download in a temp directory and only replaces
+	// destDir once extraction has fully succeeded.
 	resp, err := doDownload(pr.downloadURL, pr.token, pr.templateName)
 	if err != nil {
 		return err
@@ -116,11 +114,16 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 
 	hash, err := hashTree(pr.destDir)
 	if err != nil {
+		// destDir now holds the freshly downloaded tree, not the old cache, so
+		// removing it is safe; drop the manifest too so nothing points at a
+		// half-written cache.
 		_ = os.RemoveAll(pr.destDir)
+		_ = os.Remove(manifestPath)
 		return fmt.Errorf("hashing extracted template: %w", err)
 	}
 	if err := writeCacheManifest(manifestPath, pr.templateName, hash); err != nil {
 		_ = os.RemoveAll(pr.destDir)
+		_ = os.Remove(manifestPath)
 		return err
 	}
 
@@ -129,7 +132,13 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 
 // cacheManifest records the provenance of a cached template: the template name
 // and a deterministic SHA-256 of the extracted tree. It lets the pull path and
-// the resolver detect a poisoned or stale cache directory.
+// the resolver detect a corrupted, stale, or naively tampered cache directory.
+//
+// The hash is unkeyed, so this is integrity checking, not authentication: an
+// actor who can write both the cache tree and its manifest can forge a matching
+// pair. It therefore defends against accidental corruption, staleness, and
+// tampering that does not also rewrite the manifest, but it is not a
+// cryptographic defense against a local writer with access to the cache root.
 type cacheManifest struct {
 	Name string `json:"name"`
 	Hash string `json:"hash"`
@@ -147,6 +156,9 @@ func cacheIsValid(destDir, manifestPath string) bool {
 // cacheManifestMatches reports whether the tree at dir hashes to the value
 // recorded in the manifest at manifestPath. A missing or unreadable manifest,
 // or a hash mismatch, is reported as not matching so callers fail closed.
+//
+// As noted on cacheManifest, the hash is unkeyed and only detects changes that
+// do not also rewrite the manifest.
 func cacheManifestMatches(dir, manifestPath string) bool {
 	mf, err := readCacheManifest(manifestPath)
 	if err != nil {
@@ -193,16 +205,25 @@ func writeCacheManifest(path, name, hash string) error {
 }
 
 // hashTree computes a deterministic SHA-256 over the regular files under dir.
-// Relative paths are slash-normalized and sorted, and each file contributes
-// "<relpath>\x00<bytes>" so both names and contents are covered.
+// Relative paths are slash-normalized and sorted, and each file contributes a
+// length-framed record (the byte length and bytes of the relative path, then the
+// byte length and bytes of the contents) so the encoding is unambiguous.
+//
+// Any entry that is neither a regular file nor a directory (a symlink, device,
+// socket, or fifo) makes hashTree fail. This keeps verification fail-closed:
+// SafeReadFile follows symlinks, so skipping one would let an attacker add a
+// symlink after the manifest was written without changing the hash.
 func hashTree(dir string) (string, error) {
 	var rels []string
 	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.Type().IsRegular() {
+		if d.IsDir() {
 			return nil
+		}
+		if !d.Type().IsRegular() {
+			return fmt.Errorf("refusing to hash non-regular entry %s (mode %s)", path, d.Type())
 		}
 		rel, err := filepath.Rel(dir, path)
 		if err != nil {
@@ -217,14 +238,18 @@ func hashTree(dir string) (string, error) {
 	sort.Strings(rels)
 
 	hasher := sha256.New()
+	var lenBuf [8]byte
 	for _, rel := range rels {
 		//nolint:gosec // path is within dir
 		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
 		if err != nil {
 			return "", err
 		}
+		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(rel)))
+		hasher.Write(lenBuf[:])
 		hasher.Write([]byte(rel))
-		hasher.Write([]byte{0})
+		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(data)))
+		hasher.Write(lenBuf[:])
 		hasher.Write(data)
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
@@ -289,9 +314,24 @@ func extractToCache(body io.Reader, destDir, subdirectory string) error {
 
 	sourceDir := promoteSubdirectory(tmpDir, subdirectory)
 
+	// Validate the staged tree before touching the existing cache so an empty
+	// or malformed archive cannot destroy a previously valid cache.
+	if err := validateTemplateCache(sourceDir); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return err
+	}
+
 	if err := os.MkdirAll(filepath.Dir(destDir), cacheDirPerm); err != nil {
 		_ = os.RemoveAll(tmpDir)
 		return fmt.Errorf("creating parent dir: %w", err)
+	}
+
+	// Replace the existing cache only now that extraction and validation have
+	// fully succeeded. A failure before this point leaves any previous cache
+	// (and its manifest) untouched.
+	if err := os.RemoveAll(destDir); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return fmt.Errorf("removing stale cache: %w", err)
 	}
 	if err := os.Rename(sourceDir, destDir); err != nil {
 		_ = os.RemoveAll(tmpDir)
@@ -300,11 +340,6 @@ func extractToCache(body io.Reader, destDir, subdirectory string) error {
 
 	if sourceDir != tmpDir {
 		_ = os.RemoveAll(tmpDir)
-	}
-
-	if err := validateTemplateCache(destDir); err != nil {
-		_ = os.RemoveAll(destDir)
-		return err
 	}
 
 	return nil

@@ -442,6 +442,100 @@ func TestPullFromURL_RepullsTamperedCache(t *testing.T) {
 	}
 }
 
+// TestPullFromURL_FailedRepullKeepsExistingCache is a regression test for F6:
+// a failed re-pull (the server returns 5xx) must not destroy an existing cache
+// directory. Before the fix pullFromURL removed the cache and manifest up front,
+// so a transient failure left the user with no cached template.
+func TestPullFromURL_FailedRepullKeepsExistingCache(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	// Plant an existing (unmanifested, so invalid) cache that the pull will try
+	// to refresh.
+	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(destDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	oldContent := []byte("previously cached content")
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(destDir, "main.go.tpl"), oldContent, 0640); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err == nil {
+		t.Fatal("expected PullFromURL to fail against a 5xx server")
+	}
+
+	//nolint:gosec // test temp directory
+	content, err := os.ReadFile(filepath.Join(destDir, "main.go.tpl"))
+	if err != nil {
+		t.Fatalf("failed re-pull destroyed the existing cache: %v", err)
+	}
+	if !bytes.Equal(content, oldContent) {
+		t.Errorf("expected existing cache content %q, got %q", oldContent, content)
+	}
+}
+
+// TestHashTree_FailsOnSymlink is a regression test for F7: hashTree must fail
+// closed when it encounters a non-regular entry such as a symlink. SafeReadFile
+// follows symlinks, so silently skipping one would let an attacker add a symlink
+// after the manifest was written without changing the verified hash.
+func TestHashTree_FailsOnSymlink(t *testing.T) {
+	dir := t.TempDir()
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(dir, "real.tpl"), []byte("data"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if err := os.Symlink("real.tpl", filepath.Join(dir, "link.tpl")); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+
+	if _, err := hashTree(dir); err == nil {
+		t.Fatal("expected hashTree to fail on a symlink entry, got nil")
+	}
+}
+
+// TestHashTree_LengthFraming is a regression test for F8: without length
+// framing, distinct trees can collide ({x:"X", y:"Y"} and {x:"Xy\x00Y"} both
+// encode to "x\x00Xy\x00Y"). Length-prefixing each component makes the encoding
+// unambiguous, so the two hashes must now differ.
+func TestHashTree_LengthFraming(t *testing.T) {
+	dirA := t.TempDir()
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(dirA, "x"), []byte("X"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(dirA, "y"), []byte("Y"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	dirB := t.TempDir()
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(dirB, "x"), []byte("Xy\x00Y"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	hashA, err := hashTree(dirA)
+	if err != nil {
+		t.Fatalf("hashTree(dirA) failed: %v", err)
+	}
+	hashB, err := hashTree(dirB)
+	if err != nil {
+		t.Fatalf("hashTree(dirB) failed: %v", err)
+	}
+
+	if hashA == hashB {
+		t.Fatalf("ambiguous trees hashed identically (%s); length framing is missing", hashA)
+	}
+}
+
 func TestValidateTemplateCache_Valid(t *testing.T) {
 	dir := t.TempDir()
 	//nolint:gosec // test temp directory

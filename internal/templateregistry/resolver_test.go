@@ -208,6 +208,41 @@ func TestResolveCachePath_IgnoresUnmanifestedTemplate(t *testing.T) {
 	}
 }
 
+// TestResolveCachePath_PrefersVerifiedTemplateOverLegacyFlat is a regression
+// test for F5: an unverified flat/legacy file must not shadow a verified
+// per-template file with the same relative path. Before the fix the resolver
+// checked the flat path first, so a planted legacy file won.
+func TestResolveCachePath_PrefersVerifiedTemplateOverLegacyFlat(t *testing.T) {
+	dir := t.TempDir()
+	registryDir := filepath.Join(dir, "acme")
+	tplDir := filepath.Join(registryDir, "go-api")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(tplDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+
+	// Verified per-template file.
+	nestedPath := filepath.Join(tplDir, "main.go.tpl")
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(nestedPath, []byte("verified"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	writeValidManifest(t, tplDir, "go-api")
+
+	// Unverified flat/legacy file with the same relative path, planted to shadow
+	// the verified one.
+	flatPath := filepath.Join(registryDir, "main.go.tpl")
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(flatPath, []byte("legacy attacker"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	got := ResolveCachePath(dir, "go-api", "main.go.tpl")
+	if got != nestedPath {
+		t.Fatalf("expected verified per-template file %q, got %q", nestedPath, got)
+	}
+}
+
 func TestLookupPath_Found(t *testing.T) {
 	dir := t.TempDir()
 	registryDir := filepath.Join(dir, "my-registry")
