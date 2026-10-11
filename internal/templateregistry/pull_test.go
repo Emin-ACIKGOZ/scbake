@@ -798,3 +798,44 @@ func TestExtractToCache_RejectsTraversalDestDir(t *testing.T) {
 		t.Fatal("expected extractToCache to reject a destDir outside the cache")
 	}
 }
+
+// TestPullFromURL_RejectsSymlinkedRegistryDir is a regression test for the
+// symlink bypass of the lexical containment checks: when <cache>/<registry> is
+// a symlink pointing outside the cache, the destination resolves through the
+// symlink, so a pull must fail closed instead of writing (and later removing)
+// the template outside the cache root.
+func TestPullFromURL_RejectsSymlinkedRegistryDir(t *testing.T) {
+	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	outside := filepath.Join(dir, "outside")
+	if err := os.MkdirAll(cacheDir, 0750); err != nil {
+		t.Fatalf("MkdirAll(cacheDir) failed: %v", err)
+	}
+	if err := os.MkdirAll(outside, 0750); err != nil {
+		t.Fatalf("MkdirAll(outside) failed: %v", err)
+	}
+	// <cache>/acme -> <dir>/outside, so cacheDir/acme/go-api is outside.
+	if err := os.Symlink(outside, filepath.Join(cacheDir, "acme")); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err == nil {
+		t.Error("expected PullFromURL to reject a symlinked registry directory")
+	}
+
+	// Nothing may have been written or deleted through the symlink outside the
+	// cache root.
+	for _, name := range []string{"go-api", "go-api.tmp", "go-api.manifest.json"} {
+		if _, statErr := os.Lstat(filepath.Join(outside, name)); !os.IsNotExist(statErr) {
+			t.Errorf("pull touched %q outside the cache through a symlink (stat err: %v)", name, statErr)
+		}
+	}
+}

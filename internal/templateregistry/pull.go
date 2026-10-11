@@ -441,34 +441,78 @@ func promoteSubdirectory(tmpDir, subdirectory string) string {
 	return tmpDir
 }
 
-// ensureStrictlyWithin returns an error unless target is strictly inside base.
-// It is used before destructive operations so that a bad name can never reach
-// outside the template cache.
+// ensureStrictlyWithin returns an error unless target is strictly inside base
+// after resolving symlinks. It is used before destructive operations so that a
+// bad name, or a symlinked directory inside the cache, can never reach outside
+// the template cache.
 func ensureStrictlyWithin(base, target string) error {
-	rel, err := filepath.Rel(base, target)
+	return ensureContained(base, target, false)
+}
+
+// ensureWithin returns an error unless target is base itself or strictly inside
+// base after resolving symlinks. It is used to confirm a promoted subdirectory
+// did not escape its temp dir (the whole-archive case returns base unchanged).
+func ensureWithin(base, target string) error {
+	return ensureContained(base, target, true)
+}
+
+// ensureContained resolves symlinks in base and target and reports whether the
+// resolved target stays inside the resolved base. allowEqual permits the two to
+// resolve to the same path (the whole-archive promotion case); otherwise the
+// target must be strictly inside base. Every failure mode is treated as an
+// error (fail closed) so a path that cannot be resolved is never trusted.
+func ensureContained(base, target string, allowEqual bool) error {
+	resolvedBase, err := resolveExistingPrefix(base)
+	if err != nil {
+		return fmt.Errorf("resolving base path %q: %w", base, err)
+	}
+	resolvedTarget, err := resolveExistingPrefix(target)
+	if err != nil {
+		return fmt.Errorf("resolving path %q: %w", target, err)
+	}
+	rel, err := filepath.Rel(resolvedBase, resolvedTarget)
 	if err != nil {
 		return fmt.Errorf("resolving %q relative to %q: %w", target, base, err)
 	}
-	if rel == "." || rel == ".." || filepath.IsAbs(rel) ||
-		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if filepath.IsAbs(rel) || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) ||
+		(!allowEqual && rel == ".") {
 		return fmt.Errorf("refusing to use path %q outside %q", target, base)
 	}
 	return nil
 }
 
-// ensureWithin returns an error unless target is base itself or strictly inside
-// base. It is used to confirm a promoted subdirectory did not escape its temp
-// dir (the whole-archive case returns base unchanged).
-func ensureWithin(base, target string) error {
-	rel, err := filepath.Rel(base, target)
+// resolveExistingPrefix returns target with every symlink in its longest
+// existing prefix resolved. The non-existent tail (which cannot contain a
+// symlink yet) is appended lexically to the resolved prefix. It fails closed:
+// if no prefix can be resolved, or a component is not a directory, it returns
+// an error instead of a path that might escape containment.
+func resolveExistingPrefix(target string) (string, error) {
+	abs, err := filepath.Abs(target)
 	if err != nil {
-		return fmt.Errorf("resolving %q relative to %q: %w", target, base, err)
+		return "", err
 	}
-	if rel == ".." || filepath.IsAbs(rel) ||
-		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("refusing to use path %q outside %q", target, base)
+	cur := filepath.Clean(abs)
+	remainder := ""
+	for {
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			if remainder == "" {
+				return resolved, nil
+			}
+			return filepath.Join(resolved, remainder), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			// Walked up to the filesystem root without resolving anything.
+			return "", err
+		}
+		remainder = filepath.Join(filepath.Base(cur), remainder)
+		cur = parent
 	}
-	return nil
 }
 
 // validateTemplateCache checks that a cached template directory contains at

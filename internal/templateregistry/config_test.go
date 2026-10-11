@@ -317,6 +317,13 @@ func TestValidateName(t *testing.T) {
 		"bad\x00name",
 		"bad\nname",
 		"colon:name",
+		"CON",
+		"nul",
+		"COM1",
+		"LPT9",
+		"trailing.",
+		"trailing ",
+		".. ",
 	}
 	for _, name := range invalid {
 		if err := ValidateName(name); err == nil {
@@ -345,7 +352,7 @@ func TestAddRejectsTraversalSubdirectory(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
 
-	for _, sub := range []string{"../..", "..", "nested/../../etc", "/abs", `..\..`} {
+	for _, sub := range []string{"../..", "..", "nested/../../etc", "/abs", `..\..`, ".. ", "template/CON"} {
 		if err := m.Add("acme", "https://example.com/v1", "", "", sub); err == nil {
 			t.Errorf("Add with subdirectory %q = nil, want error", sub)
 		}

@@ -113,6 +113,14 @@ func ValidateName(name string) error {
 	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
 		return fmt.Errorf("name %q must not be absolute", name)
 	}
+	// Windows silently strips trailing dots and spaces, so ".." spelled with a
+	// trailing space would collapse to a traversal segment; reject them.
+	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return fmt.Errorf("name %q must not end with a dot or space", name)
+	}
+	if isReservedWindowsName(name) {
+		return fmt.Errorf("name %q is a reserved device name", name)
+	}
 	for _, r := range name {
 		if r < 0x20 || r == 0x7f {
 			return fmt.Errorf("name %q must not contain control characters", name)
@@ -121,10 +129,34 @@ func ValidateName(name string) error {
 	return nil
 }
 
+// windowsReservedNames are the classic DOS device names that Windows treats as
+// special, so a path segment equal to one of them cannot name an ordinary file
+// or directory. The COM1-COM9 and LPT1-LPT9 ranges are handled separately.
+var windowsReservedNames = map[string]struct{}{
+	"CON": {}, "PRN": {}, "AUX": {}, "NUL": {},
+}
+
+// isReservedWindowsName reports whether segment (case-insensitively) names a
+// Windows reserved device, so a cache path built from it cannot be created on
+// Windows (or could resolve to a device rather than a file).
+func isReservedWindowsName(segment string) bool {
+	upper := strings.ToUpper(segment)
+	if _, ok := windowsReservedNames[upper]; ok {
+		return true
+	}
+	if len(upper) == 4 &&
+		(strings.HasPrefix(upper, "COM") || strings.HasPrefix(upper, "LPT")) &&
+		upper[3] >= '1' && upper[3] <= '9' {
+		return true
+	}
+	return false
+}
+
 // validateSubdirectory rejects a registry subdirectory that is absolute or that
 // contains a ".." segment. Such a value would make promoteSubdirectory return a
 // directory outside the extraction temp dir, which the pull path would then
-// rename into the cache.
+// rename into the cache. Each segment is normalized (Windows strips trailing
+// dots and spaces) before the traversal check so ".. " cannot slip through.
 func validateSubdirectory(subdirectory string) error {
 	if subdirectory == "" {
 		return nil
@@ -137,11 +169,18 @@ func validateSubdirectory(subdirectory string) error {
 			return fmt.Errorf("subdirectory %q must not contain control characters", subdirectory)
 		}
 	}
-	for _, seg := range strings.FieldsFunc(subdirectory, func(r rune) bool {
+	for _, raw := range strings.FieldsFunc(subdirectory, func(r rune) bool {
 		return r == '/' || r == '\\'
 	}) {
-		if seg == ".." {
+		// Windows strips trailing dots and spaces from a path component, so a
+		// segment written as ".. " (or "..") can collapse to a traversal
+		// segment. Reject both the raw and space/dot-stripped forms.
+		if raw == ".." || strings.TrimRight(raw, " ") == ".." ||
+			strings.TrimRight(raw, ".") == ".." {
 			return fmt.Errorf("subdirectory %q must not contain %q", subdirectory, "..")
+		}
+		if isReservedWindowsName(raw) || isReservedWindowsName(strings.TrimRight(raw, " .")) {
+			return fmt.Errorf("subdirectory %q contains a reserved device name", subdirectory)
 		}
 	}
 	return nil
