@@ -52,8 +52,9 @@ func TestGitHandler_Structure(t *testing.T) {
 }
 
 // TestGitHandler_ExistingRepo_Structure validates that when the target already
-// contains a .git directory the plan is fail-closed: no `git init` is scheduled
-// and every mutating command disables hooks.
+// contains a .git directory the plan is fully fail-closed: NO Git tasks at all
+// are scheduled, so no `git init`, `git add`, or `git commit` can execute
+// attacker-controlled repository config (hooks, filters, fsmonitor, gpg).
 func TestGitHandler_ExistingRepo_Structure(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmpDir, fileutil.GitDir), 0700); err != nil {
@@ -66,29 +67,13 @@ func TestGitHandler_ExistingRepo_Structure(t *testing.T) {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
 
-	if len(plan) != 2 {
-		t.Fatalf("Expected exactly 2 tasks for existing repo, got %d", len(plan))
-	}
-
-	noHooks := "core.hooksPath=" + os.DevNull
-	expected := []struct {
-		cmd  string
-		args []string
-	}{
-		{"git", []string{"-c", noHooks, "add", "."}},
-		{"git", []string{"-c", noHooks, "commit", "--allow-empty", "-m", "scbake: Apply templates"}},
+	if len(plan) != 0 {
+		t.Fatalf("Expected no tasks for an existing repo, got %d: %v", len(plan), plan)
 	}
 
 	for i, task := range plan {
-		execTask := assertExecTask(t, task, i)
-		assertCommandIdentity(t, execTask, expected[i], i)
-		assertSequentialPriority(t, plan, execTask, i)
-		assertBandBoundary(t, execTask, i)
-
-		for _, arg := range execTask.Args {
-			if arg == "init" {
-				t.Errorf("Task %d: must not schedule git init on an existing repo", i)
-			}
+		if execTask, ok := task.(*tasks.ExecCommandTask); ok && execTask.Cmd == "git" {
+			t.Errorf("Task %d: must not schedule any git command on an existing repo: %v", i, execTask.Args)
 		}
 	}
 }
@@ -196,10 +181,14 @@ func TestGitTemplate_Fresh(t *testing.T) {
 	}
 }
 
-// TestGitTemplate_ExistingRepo_IgnoresHooks is the SCB-037 regression test.
-// A target that already contains a .git directory is untrusted input: a planted
-// pre-commit hook must NOT be executed while scaffolding stages and commits.
-func TestGitTemplate_ExistingRepo_IgnoresHooks(t *testing.T) {
+// TestGitTemplate_ExistingRepo_RunsNoGitTasks is the SCB-037 regression test.
+// A target that already contains a .git directory is untrusted input. Disabling
+// hooks via `-c core.hooksPath=<devnull>` is insufficient because `git add` and
+// `git status` still execute attacker-controlled `filter.*.clean` and
+// `core.fsmonitor` programs from the untrusted `.git/config`. The handler must
+// therefore schedule NO git tasks at all for a pre-existing repository, so none
+// of these vectors can run.
+func TestGitTemplate_ExistingRepo_RunsNoGitTasks(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -213,16 +202,33 @@ func TestGitTemplate_ExistingRepo_IgnoresHooks(t *testing.T) {
 	runInDir(t, tmpDir, "git", "config", "user.email", "scbake-test@scbake.dev")
 	runInDir(t, tmpDir, "git", "config", "user.name", "scbake-test-user")
 
-	// Plant a malicious hook that would drop a marker if it ever runs.
+	hookMarker := filepath.Join(tmpDir, "hook-executed.marker")
+	filterMarker := filepath.Join(tmpDir, "filter-executed.marker")
+	fsmonitorMarker := filepath.Join(tmpDir, "fsmonitor-executed.marker")
+
+	// Vector 1: a malicious pre-commit hook.
 	hooksDir := filepath.Join(tmpDir, fileutil.GitDir, "hooks")
 	if err := os.MkdirAll(hooksDir, 0700); err != nil {
 		t.Fatalf("Failed to create hooks dir: %v", err)
 	}
-	markerName := "hook-executed.marker"
-	hookScript := "#!/bin/sh\ntouch " + markerName + "\n"
-	if err := os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte(hookScript), 0700); err != nil {
-		t.Fatalf("Failed to plant pre-commit hook: %v", err)
+	writeExecutableScript(t, filepath.Join(hooksDir, "pre-commit"), "touch "+hookMarker)
+
+	// Vector 2: a malicious clean filter that `git add` would execute.
+	filterScript := filepath.Join(tmpDir, "evil-clean.sh")
+	writeExecutableScript(t, filterScript, "touch "+filterMarker+"\ncat")
+	runInDir(t, tmpDir, "git", "config", "filter.evil.clean", filterScript)
+	runInDir(t, tmpDir, "git", "config", "filter.evil.required", "true")
+	if err := os.WriteFile(filepath.Join(tmpDir, ".gitattributes"), []byte("*.txt filter=evil\n"), 0600); err != nil {
+		t.Fatalf("Failed to write .gitattributes: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "evil.txt"), []byte("payload"), 0600); err != nil {
+		t.Fatalf("Failed to write evil.txt: %v", err)
+	}
+
+	// Vector 3: a malicious fsmonitor that `git add`/`git status` would execute.
+	fsmonitorScript := filepath.Join(tmpDir, "evil-fsmonitor.sh")
+	writeExecutableScript(t, fsmonitorScript, "touch "+fsmonitorMarker)
+	runInDir(t, tmpDir, "git", "config", "core.fsmonitor", fsmonitorScript)
 
 	if err := os.WriteFile(filepath.Join(tmpDir, "scbake.toml"), []byte(""), 0600); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
@@ -233,10 +239,16 @@ func TestGitTemplate_ExistingRepo_IgnoresHooks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
-	if len(plan) != 2 {
-		t.Fatalf("Expected 2 tasks for an existing repo (add, commit), got %d", len(plan))
+	if len(plan) != 0 {
+		t.Fatalf("Expected no git tasks for an existing repo, got %d", len(plan))
+	}
+	for i, task := range plan {
+		if execTask, ok := task.(*tasks.ExecCommandTask); ok && execTask.Cmd == "git" {
+			t.Errorf("Task %d: git command scheduled on existing repo: %v", i, execTask.Args)
+		}
 	}
 
+	// Execute the (empty) plan end-to-end. Nothing must run.
 	tc := types.TaskContext{
 		Ctx:        context.Background(),
 		TargetPath: tmpDir,
@@ -247,27 +259,30 @@ func TestGitTemplate_ExistingRepo_IgnoresHooks(t *testing.T) {
 		}
 	}
 
-	if _, statErr := os.Stat(filepath.Join(tmpDir, markerName)); !os.IsNotExist(statErr) {
-		t.Fatalf("SECURITY: planted pre-commit hook executed during scaffolding (marker present)")
-	}
-
-	// The commit must still have happened; otherwise the assertion above would
-	// pass vacuously. Confirm the scaffolding commit landed.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	logCmd := exec.CommandContext(ctx, "git", "log", "-1", "--pretty=%B")
-	logCmd.Dir = tmpDir
-	out, err := logCmd.Output()
-	if err != nil {
-		t.Fatalf("Failed to read git log: %v", err)
-	}
-	if !strings.Contains(string(out), "scbake: Apply templates") {
-		t.Errorf("Commit message mismatch. Got: %s", string(out))
+	for name, marker := range map[string]string{
+		"pre-commit hook": hookMarker,
+		"clean filter":    filterMarker,
+		"fsmonitor":       fsmonitorMarker,
+	} {
+		if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+			t.Fatalf("SECURITY: planted %s executed during scaffolding (marker present)", name)
+		}
 	}
 }
 
-// TestGitTemplate_Idempotent ensures re-running Git tasks on a clean repo is safe.
-// Validates that --allow-empty prevents crashes during maintenance runs.
+// writeExecutableScript writes a #!/bin/sh script with the given body and marks
+// it executable, so Git would be able to run it if it were ever invoked.
+func writeExecutableScript(t *testing.T, path, body string) {
+	t.Helper()
+	script := "#!/bin/sh\n" + body + "\n"
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatalf("Failed to write script %s: %v", path, err)
+	}
+}
+
+// TestGitTemplate_Idempotent ensures re-running the handler against an existing
+// repository is safe: no Git tasks are scheduled, so the repository is left
+// untouched (fail-closed).
 func TestGitTemplate_Idempotent(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -296,6 +311,9 @@ func TestGitTemplate_Idempotent(t *testing.T) {
 	plan, err := h.GetTasks(tmpDir, "", "")
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
+	}
+	if len(plan) != 0 {
+		t.Fatalf("Expected no git tasks for an existing repo, got %d", len(plan))
 	}
 
 	tc := types.TaskContext{
