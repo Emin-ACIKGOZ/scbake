@@ -168,7 +168,32 @@ func cacheManifestMatches(dir, manifestPath string) bool {
 	if err != nil {
 		return false
 	}
-	return hash == mf.Hash
+	if hash != mf.Hash {
+		return false
+	}
+	// An empty tree has a well-defined hash, so a manifest can record it and
+	// make an empty directory look valid. That would suppress a re-pull and let
+	// an empty template masquerade as a cache hit, so a tree with no regular
+	// files is never considered valid.
+	return treeHasRegularFile(dir)
+}
+
+// treeHasRegularFile reports whether dir contains at least one regular file at
+// any depth. It mirrors hashTree's walk and treats a walk error as "no file" so
+// callers fail closed.
+func treeHasRegularFile(dir string) bool {
+	found := false
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && d.Type().IsRegular() {
+			found = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 // cacheManifestValid reports whether the template directory at tplDir matches

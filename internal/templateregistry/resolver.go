@@ -9,26 +9,24 @@ import (
 // the requested template. It searches all cached registries in order, returning
 // the first match, or the empty string if the file is not found.
 //
-// For each registry directory it first checks the verified per-template layout
-// <registry>/<templateName>/<cleanPath> (only when templateName is non-empty),
-// then falls back to the flat/legacy layout <registry>/<cleanPath>. Trying the
-// per-template path first prevents an unverified flat file from shadowing a
-// verified per-template file that has the same relative path. Constraining the
-// nested lookup to the requested template also prevents a request for one
-// template from resolving to a different template's file that happens to share
-// a name.
+// It only consults the verified per-template layout
+// <registry>/<templateName>/<cleanPath> and requires templateName to be
+// non-empty. Constraining the lookup to the requested template prevents a
+// request for one template from resolving to a different template's file that
+// happens to share a name.
 //
-// The per-template lookup is fail-closed: the template directory is only
-// consulted when its integrity manifest verifies against a freshly computed
-// tree hash. A poisoned directory, or a cache written before manifests existed,
-// is skipped so its content is never rendered; it will be re-pulled on the next
-// Pull.
+// The lookup is fail-closed: the template directory is only consulted when its
+// integrity manifest verifies against a freshly computed tree hash. A poisoned
+// directory, a cache written before manifests existed, or an empty template
+// tree is skipped so its content is never rendered; it will be re-pulled on the
+// next Pull.
 //
-// The flat/legacy layout is unverified legacy: it predates manifests and is
-// consulted only as a fallback for backward compatibility. Files resolved
-// through it carry no integrity guarantee.
+// There is deliberately no flat/legacy fallback: Pull and PullFromURL have
+// always written the per-template layout, and an unverified <registry>/<cleanPath>
+// file could otherwise be planted locally and rendered, defeating the manifest
+// check.
 func ResolveCachePath(cacheDir, templateName, tplPath string) string {
-	if cacheDir == "" {
+	if cacheDir == "" || templateName == "" {
 		return ""
 	}
 
@@ -47,23 +45,13 @@ func ResolveCachePath(cacheDir, templateName, tplPath string) string {
 		// Per-template layout: <registry>/<templateName>/<cleanPath>. The
 		// requested template name constrains the lookup; sibling template
 		// directories are never searched. The directory must verify against its
-		// manifest before any file is returned, so this path is preferred over
-		// the unverified flat/legacy layout.
-		if templateName != "" {
-			tplDir := filepath.Join(cacheDir, registryDir, templateName)
-			if cacheManifestValid(tplDir) {
-				nested := filepath.Join(tplDir, cleanPath)
-				if _, err := os.Stat(nested); err == nil {
-					return nested
-				}
+		// manifest before any file is returned.
+		tplDir := filepath.Join(cacheDir, registryDir, templateName)
+		if cacheManifestValid(tplDir) {
+			nested := filepath.Join(tplDir, cleanPath)
+			if _, err := os.Stat(nested); err == nil {
+				return nested
 			}
-		}
-
-		// Flat/legacy layout: <registry>/<cleanPath>. Unverified legacy layout,
-		// kept only as a fallback.
-		direct := filepath.Join(cacheDir, registryDir, cleanPath)
-		if _, err := os.Stat(direct); err == nil {
-			return direct
 		}
 	}
 

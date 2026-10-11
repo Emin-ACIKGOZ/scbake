@@ -442,6 +442,75 @@ func TestPullFromURL_RepullsTamperedCache(t *testing.T) {
 	}
 }
 
+// TestCacheIsValid_RejectsEmptyTree is a regression test for the empty-tree
+// cache hit: an empty template directory whose manifest records the empty-tree
+// hash must not be treated as valid, which would suppress a re-pull and let an
+// empty tree masquerade as a cache hit.
+func TestCacheIsValid_RejectsEmptyTree(t *testing.T) {
+	dir := t.TempDir()
+	destDir := filepath.Join(dir, "acme", "go-api")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(destDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	hash, err := hashTree(destDir)
+	if err != nil {
+		t.Fatalf("hashTree failed: %v", err)
+	}
+	manifestPath := TemplateManifestPath(dir, "acme", "go-api")
+	if err := writeCacheManifest(manifestPath, "go-api", hash); err != nil {
+		t.Fatalf("writeCacheManifest failed: %v", err)
+	}
+
+	if cacheIsValid(destDir, manifestPath) {
+		t.Error("expected empty template tree to be rejected as an invalid cache")
+	}
+}
+
+// TestPullFromURL_RepullsEmptyTreeCache verifies end to end that a cache
+// directory with no regular files is re-pulled even when its manifest records
+// the empty-tree hash, so an empty tree cannot suppress a download.
+func TestPullFromURL_RepullsEmptyTreeCache(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": "trusted content"}))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(destDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	hash, err := hashTree(destDir)
+	if err != nil {
+		t.Fatalf("hashTree failed: %v", err)
+	}
+	if err := writeCacheManifest(TemplateManifestPath(m.cacheDir, "acme", "go-api"), "go-api", hash); err != nil {
+		t.Fatalf("writeCacheManifest failed: %v", err)
+	}
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err != nil {
+		t.Fatalf("PullFromURL failed: %v", err)
+	}
+
+	if callCount != 1 {
+		t.Fatalf("expected empty-tree cache to trigger a re-download, got %d server calls", callCount)
+	}
+	//nolint:gosec // test temp directory
+	content, err := os.ReadFile(filepath.Join(destDir, "main.go.tpl"))
+	if err != nil {
+		t.Fatalf("reading re-downloaded template failed: %v", err)
+	}
+	if string(content) != "trusted content" {
+		t.Errorf("expected re-downloaded content %q, got %q", "trusted content", string(content))
+	}
+}
+
 // TestPullFromURL_FailedRepullKeepsExistingCache is a regression test for F6:
 // a failed re-pull (the server returns 5xx) must not destroy an existing cache
 // directory. Before the fix pullFromURL removed the cache and manifest up front,

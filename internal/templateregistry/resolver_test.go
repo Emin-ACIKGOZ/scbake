@@ -37,7 +37,8 @@ func TestResolveCachePath_EmptyCacheDir(t *testing.T) {
 func TestResolveCachePath_FindsFile(t *testing.T) {
 	dir := t.TempDir()
 	registryDir := filepath.Join(dir, "acme")
-	tplPath := filepath.Join(registryDir, "templates/main.go.tpl")
+	tplDir := filepath.Join(registryDir, "go-api")
+	tplPath := filepath.Join(tplDir, "templates/main.go.tpl")
 	//nolint:gosec // test temp directory
 	if err := os.MkdirAll(filepath.Dir(tplPath), 0755); err != nil {
 		t.Fatalf("MkdirAll failed: %v", err)
@@ -46,8 +47,9 @@ func TestResolveCachePath_FindsFile(t *testing.T) {
 	if err := os.WriteFile(tplPath, []byte("content"), 0644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
+	writeValidManifest(t, tplDir, "go-api")
 
-	result := ResolveCachePath(dir, "", "templates/main.go.tpl")
+	result := ResolveCachePath(dir, "go-api", "templates/main.go.tpl")
 	if result == "" {
 		t.Fatal("expected non-empty result for existing file")
 	}
@@ -69,13 +71,21 @@ func TestResolveCachePath_SearchesAllRegistries(t *testing.T) {
 		t.Fatalf("MkdirAll failed: %v", err)
 	}
 
-	tplPath := filepath.Join(registry2, "shared.tpl")
+	// Only registry-b holds a verified template; registry-a must be skipped and
+	// the search must continue until the file is found.
+	tplDir := filepath.Join(registry2, "go-api")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(tplDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	tplPath := filepath.Join(tplDir, "shared.tpl")
 	//nolint:gosec // test temp directory
 	if err := os.WriteFile(tplPath, []byte("content"), 0644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
+	writeValidManifest(t, tplDir, "go-api")
 
-	result := ResolveCachePath(dir, "", "shared.tpl")
+	result := ResolveCachePath(dir, "go-api", "shared.tpl")
 	if result == "" {
 		t.Fatal("expected to find file in registry-b")
 	}
@@ -240,6 +250,30 @@ func TestResolveCachePath_PrefersVerifiedTemplateOverLegacyFlat(t *testing.T) {
 	got := ResolveCachePath(dir, "go-api", "main.go.tpl")
 	if got != nestedPath {
 		t.Fatalf("expected verified per-template file %q, got %q", nestedPath, got)
+	}
+}
+
+// TestResolveCachePath_IgnoresFlatLegacyFile is a regression test for the
+// unverified flat cache bypass: a flat <registry>/<cleanPath> file must never be
+// returned, even when no verified per-template copy exists. Pull/PullFromURL
+// only ever write the per-template layout, so a flat file can only be planted
+// locally and must not be rendered.
+func TestResolveCachePath_IgnoresFlatLegacyFile(t *testing.T) {
+	dir := t.TempDir()
+	registryDir := filepath.Join(dir, "acme")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(registryDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+
+	flatPath := filepath.Join(registryDir, "main.go.tpl")
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(flatPath, []byte("legacy attacker"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if got := ResolveCachePath(dir, "go-api", "main.go.tpl"); got != "" {
+		t.Errorf("expected flat legacy file to be ignored, got %q", got)
 	}
 }
 

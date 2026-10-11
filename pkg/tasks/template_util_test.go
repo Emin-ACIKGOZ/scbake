@@ -2,14 +2,36 @@ package tasks
 
 import (
 	"embed"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"scbake/internal/templateregistry"
+	"scbake/internal/testutil"
 	"testing"
 )
 
 //go:embed testdata/simple.tpl
 var testEmbedFS embed.FS
+
+// pullIntoCache downloads a single-file template into registryCacheDir so the
+// registry cache holds a manifest-verified per-template entry, matching how
+// Pull/PullFromURL populate the cache. The flat/legacy layout is unverified and
+// no longer resolvable, so tests must set up the real layout.
+func pullIntoCache(t *testing.T, registryCacheDir, registryName, templateName, tplPath, content string) {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{tplPath: content}))
+	}))
+	t.Cleanup(srv.Close)
+
+	m := templateregistry.NewManagerWithPaths(filepath.Join(t.TempDir(), "registries.json"), registryCacheDir)
+	if err := m.PullFromURL(registryName, templateName, srv.URL, ""); err != nil {
+		t.Fatalf("PullFromURL failed: %v", err)
+	}
+}
 
 func TestReadTemplate_FromEmbedded(t *testing.T) {
 	t.Parallel()
@@ -209,20 +231,10 @@ func TestReadTemplate_RegistryCacheFallback(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	registryCacheDir := filepath.Join(tmpDir, "registry-cache")
-	registryDir := filepath.Join(registryCacheDir, "acme")
-	tplDir := filepath.Join(registryDir, "testdata")
-	//nolint:gosec // test temp directory
-	if err := os.MkdirAll(tplDir, 0755); err != nil {
-		t.Fatalf("MkdirAll failed: %v", err)
-	}
-
 	cacheContent := "from registry cache"
-	//nolint:gosec // test temp directory
-	if err := os.WriteFile(filepath.Join(tplDir, "simple.tpl"), []byte(cacheContent), 0644); err != nil {
-		t.Fatalf("WriteFile failed: %v", err)
-	}
+	pullIntoCache(t, registryCacheDir, "acme", "go-api", "testdata/simple.tpl", cacheContent)
 
-	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "", registryCacheDir, "")
+	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "", registryCacheDir, "go-api")
 	if err != nil {
 		t.Fatalf("ReadTemplate failed: %v", err)
 	}
@@ -247,18 +259,9 @@ func TestReadTemplate_OverrideBeatsRegistryCache(t *testing.T) {
 	}
 
 	registryCacheDir := filepath.Join(tmpDir, "registry-cache")
-	registryDir := filepath.Join(registryCacheDir, "acme")
-	tplDir := filepath.Join(registryDir, "testdata")
-	//nolint:gosec // test temp directory
-	if err := os.MkdirAll(tplDir, 0755); err != nil {
-		t.Fatalf("MkdirAll failed: %v", err)
-	}
-	//nolint:gosec // test temp directory
-	if err := os.WriteFile(filepath.Join(tplDir, "simple.tpl"), []byte("from registry"), 0644); err != nil {
-		t.Fatalf("WriteFile failed: %v", err)
-	}
+	pullIntoCache(t, registryCacheDir, "acme", "go-api", "testdata/simple.tpl", "from registry")
 
-	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir, registryCacheDir, "")
+	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir, registryCacheDir, "go-api")
 	if err != nil {
 		t.Fatalf("ReadTemplate failed: %v", err)
 	}

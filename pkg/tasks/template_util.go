@@ -17,7 +17,7 @@ import (
 // templateName identifies which registry template the file belongs to so the
 // registry cache lookup is constrained to that template. Pass the empty string
 // only for embedded-only templates that never use the registry cache; an empty
-// name skips the per-template lookup and resolves only the flat/legacy layout.
+// name skips the registry cache lookup entirely.
 //
 // If overrideDir or registryCacheDir is empty, those steps are skipped.
 // Permission errors on override files are propagated; missing files fall through.
