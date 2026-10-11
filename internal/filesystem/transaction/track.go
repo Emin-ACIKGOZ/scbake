@@ -31,6 +31,7 @@ func (m *Manager) Track(path string) error {
 	if os.IsNotExist(err) {
 		// Case 1: File/Dir does not exist. We record it as "created".
 		m.created = append(m.created, absPath)
+		m.createdSet[absPath] = struct{}{}
 		return nil
 	}
 	if err != nil {
@@ -108,12 +109,8 @@ func (m *Manager) alreadyTracked(absPath string) bool {
 	if _, backedUp := m.backups[absPath]; backedUp {
 		return true
 	}
-	for _, created := range m.created {
-		if created == absPath {
-			return true
-		}
-	}
-	return false
+	_, found := m.createdSet[absPath]
+	return found
 }
 
 func (m *Manager) backupFile(absPath string, info os.FileInfo) error {
