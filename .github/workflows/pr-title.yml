@@ -18,7 +18,13 @@ jobs:
     name: PR title
     runs-on: ubuntu-latest
     steps:
+      # Dependabot's generated subject ("Bump <dep> ...") starts uppercase,
+      # which the subjectPattern below rejects. Skip the bot; the step is
+      # skipped (not the job), so the required check still reports success.
       - uses: amannn/action-semantic-pull-request@v5
+        if: >-
+          github.actor != 'dependabot[bot]' &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
