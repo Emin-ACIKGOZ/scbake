@@ -44,6 +44,11 @@ var applyCmd = &cobra.Command{
 			return err
 		}
 
+		// Reject --set keys not declared by any selected schema before running.
+		if err := core.ValidateSetKeys(withFlag, langFlag, setVars); err != nil {
+			return err
+		}
+
 		// Convert to absolute path for robust execution (npm, go build).
 		absPath, err := filepath.Abs(targetPath)
 		if err != nil {

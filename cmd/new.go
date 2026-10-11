@@ -70,6 +70,11 @@ func runNew(projectName string, dirCreated *bool) error {
 		return err
 	}
 
+	// Reject --set keys not declared by any selected schema before running.
+	if err := core.ValidateSetKeys(newWithFlag, newLangFlag, setVars); err != nil {
+		return err
+	}
+
 	// Delegate template and language pack application to the core executor
 	reporter.Step("🚀", "Applying templates...")
 	rc := core.RunContext{
