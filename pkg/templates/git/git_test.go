@@ -95,76 +95,81 @@ func TestGitHandler_SymlinkGit_NoTasks(t *testing.T) {
 		name  string
 		setup func(t *testing.T, target string)
 	}{
-		{
-			name: "dangling symlink",
-			setup: func(t *testing.T, target string) {
-				t.Helper()
-				if err := os.Symlink(filepath.Join(target, "does-not-exist"), filepath.Join(target, fileutil.GitDir)); err != nil {
-					t.Fatalf("failed to create dangling .git symlink: %v", err)
-				}
-			},
-		},
-		{
-			name: "symlink to outside directory",
-			setup: func(t *testing.T, target string) {
-				t.Helper()
-				outside := t.TempDir()
-				if err := os.Symlink(outside, filepath.Join(target, fileutil.GitDir)); err != nil {
-					t.Fatalf("failed to create .git symlink: %v", err)
-				}
-			},
-		},
-		{
-			name: "symlink to regular file",
-			setup: func(t *testing.T, target string) {
-				t.Helper()
-				outside := filepath.Join(t.TempDir(), "gitfile")
-				if err := os.WriteFile(outside, []byte("gitdir: elsewhere\n"), 0600); err != nil {
-					t.Fatalf("failed to create symlink target file: %v", err)
-				}
-				if err := os.Symlink(outside, filepath.Join(target, fileutil.GitDir)); err != nil {
-					t.Fatalf("failed to create .git symlink: %v", err)
-				}
-			},
-		},
+		{"dangling symlink", setupDanglingGitSymlink},
+		{"symlink to outside directory", setupOutsideDirGitSymlink},
+		{"symlink to regular file", setupFileGitSymlink},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			tc.setup(t, tmpDir)
-
-			h := &Handler{}
-			plan, err := h.GetTasks(tmpDir, "", "")
-			if err != nil {
-				t.Fatalf("GetTasks failed: %v", err)
-			}
-			if len(plan) != 0 {
-				t.Fatalf("Expected no git tasks for a symlinked .git, got %d: %v", len(plan), plan)
-			}
-
-			// Executing the returned plan must not create a repository anywhere
-			// outside the target (nor turn the symlink target into a repo).
-			tc2 := types.TaskContext{
-				Ctx:        context.Background(),
-				TargetPath: tmpDir,
-			}
-			for _, task := range plan {
-				if err := task.Execute(tc2); err != nil {
-					t.Fatalf("plan execution failed at task '%s': %v", task.Description(), err)
-				}
-			}
-
-			// The `.git` entry must still be the symlink we planted, not a
-			// directory git init would have created by following it.
-			info, err := os.Lstat(filepath.Join(tmpDir, fileutil.GitDir))
-			if err != nil {
-				t.Fatalf("planted .git entry disappeared: %v", err)
-			}
-			if info.Mode()&os.ModeSymlink == 0 {
-				t.Fatalf("SECURITY: .git symlink was replaced by a real %v entry", info.Mode())
-			}
+			assertSymlinkedGitSchedulesNoTasks(t, tmpDir)
 		})
+	}
+}
+
+func setupDanglingGitSymlink(t *testing.T, target string) {
+	t.Helper()
+	if err := os.Symlink(filepath.Join(target, "does-not-exist"), filepath.Join(target, fileutil.GitDir)); err != nil {
+		t.Fatalf("failed to create dangling .git symlink: %v", err)
+	}
+}
+
+func setupOutsideDirGitSymlink(t *testing.T, target string) {
+	t.Helper()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(target, fileutil.GitDir)); err != nil {
+		t.Fatalf("failed to create .git symlink: %v", err)
+	}
+}
+
+func setupFileGitSymlink(t *testing.T, target string) {
+	t.Helper()
+	outside := filepath.Join(t.TempDir(), "gitfile")
+	if err := os.WriteFile(outside, []byte("gitdir: elsewhere\n"), 0600); err != nil {
+		t.Fatalf("failed to create symlink target file: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(target, fileutil.GitDir)); err != nil {
+		t.Fatalf("failed to create .git symlink: %v", err)
+	}
+}
+
+// assertSymlinkedGitSchedulesNoTasks verifies that a target whose `.git` entry
+// is a symlink yields no git tasks and that executing the returned (empty) plan
+// neither creates a repository outside the target nor replaces the symlink.
+func assertSymlinkedGitSchedulesNoTasks(t *testing.T, target string) {
+	t.Helper()
+
+	h := &Handler{}
+	plan, err := h.GetTasks(target, "", "")
+	if err != nil {
+		t.Fatalf("GetTasks failed: %v", err)
+	}
+	if len(plan) != 0 {
+		t.Fatalf("Expected no git tasks for a symlinked .git, got %d: %v", len(plan), plan)
+	}
+
+	// Executing the returned plan must not create a repository anywhere
+	// outside the target (nor turn the symlink target into a repo).
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: target,
+	}
+	for _, task := range plan {
+		if err := task.Execute(tc); err != nil {
+			t.Fatalf("plan execution failed at task '%s': %v", task.Description(), err)
+		}
+	}
+
+	// The `.git` entry must still be the symlink we planted, not a
+	// directory git init would have created by following it.
+	info, err := os.Lstat(filepath.Join(target, fileutil.GitDir))
+	if err != nil {
+		t.Fatalf("planted .git entry disappeared: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("SECURITY: .git symlink was replaced by a real %v entry", info.Mode())
 	}
 }
 
@@ -286,8 +291,31 @@ func TestGitTemplate_ExistingRepo_RunsNoGitTasks(t *testing.T) {
 	isolateGitEnv(t)
 
 	tmpDir := t.TempDir()
+	markers := plantUntrustedRepoVectors(t, tmpDir)
 
-	// Simulate a pre-existing, attacker-controlled repository.
+	if err := os.WriteFile(filepath.Join(tmpDir, "scbake.toml"), []byte(""), 0600); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	h := &Handler{}
+	plan, err := h.GetTasks(tmpDir, "", "")
+	if err != nil {
+		t.Fatalf("GetTasks failed: %v", err)
+	}
+	assertNoGitTasks(t, plan)
+
+	// Execute the (empty) plan end-to-end. Nothing must run.
+	executeTaskPlan(t, plan, tmpDir)
+
+	assertMarkersAbsent(t, markers)
+}
+
+// plantUntrustedRepoVectors initializes an attacker-controlled repository in
+// tmpDir and installs a malicious pre-commit hook, clean filter, and fsmonitor.
+// It returns the marker file each vector would touch if it ever executed.
+func plantUntrustedRepoVectors(t *testing.T, tmpDir string) map[string]string {
+	t.Helper()
+
 	runInDir(t, tmpDir, "git", "init")
 	runInDir(t, tmpDir, "git", "config", "user.email", "scbake-test@scbake.dev")
 	runInDir(t, tmpDir, "git", "config", "user.name", "scbake-test-user")
@@ -320,15 +348,17 @@ func TestGitTemplate_ExistingRepo_RunsNoGitTasks(t *testing.T) {
 	writeExecutableScript(t, fsmonitorScript, "touch "+fsmonitorMarker)
 	runInDir(t, tmpDir, "git", "config", "core.fsmonitor", fsmonitorScript)
 
-	if err := os.WriteFile(filepath.Join(tmpDir, "scbake.toml"), []byte(""), 0600); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
+	return map[string]string{
+		"pre-commit hook": hookMarker,
+		"clean filter":    filterMarker,
+		"fsmonitor":       fsmonitorMarker,
 	}
+}
 
-	h := &Handler{}
-	plan, err := h.GetTasks(tmpDir, "", "")
-	if err != nil {
-		t.Fatalf("GetTasks failed: %v", err)
-	}
+// assertNoGitTasks fails if the plan schedules any git command at all.
+func assertNoGitTasks(t *testing.T, plan []types.Task) {
+	t.Helper()
+
 	if len(plan) != 0 {
 		t.Fatalf("Expected no git tasks for an existing repo, got %d", len(plan))
 	}
@@ -337,23 +367,29 @@ func TestGitTemplate_ExistingRepo_RunsNoGitTasks(t *testing.T) {
 			t.Errorf("Task %d: git command scheduled on existing repo: %v", i, execTask.Args)
 		}
 	}
+}
 
-	// Execute the (empty) plan end-to-end. Nothing must run.
+// executeTaskPlan runs every task in the plan against target.
+func executeTaskPlan(t *testing.T, plan []types.Task, target string) {
+	t.Helper()
+
 	tc := types.TaskContext{
 		Ctx:        context.Background(),
-		TargetPath: tmpDir,
+		TargetPath: target,
 	}
 	for _, task := range plan {
 		if err := task.Execute(tc); err != nil {
 			t.Fatalf("Existing-repo lifecycle failed at task '%s': %v", task.Description(), err)
 		}
 	}
+}
 
-	for name, marker := range map[string]string{
-		"pre-commit hook": hookMarker,
-		"clean filter":    filterMarker,
-		"fsmonitor":       fsmonitorMarker,
-	} {
+// assertMarkersAbsent fails if any planted marker file exists, proving that the
+// corresponding untrusted program executed during scaffolding.
+func assertMarkersAbsent(t *testing.T, markers map[string]string) {
+	t.Helper()
+
+	for name, marker := range markers {
 		if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
 			t.Fatalf("SECURITY: planted %s executed during scaffolding (marker present)", name)
 		}
@@ -365,8 +401,12 @@ func TestGitTemplate_ExistingRepo_RunsNoGitTasks(t *testing.T) {
 func writeExecutableScript(t *testing.T, path, body string) {
 	t.Helper()
 	script := "#!/bin/sh\n" + body + "\n"
-	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
 		t.Fatalf("Failed to write script %s: %v", path, err)
+	}
+	//nolint:gosec // G302: test fixture must stay executable so git would run it if invoked
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatalf("Failed to mark script %s executable: %v", path, err)
 	}
 }
 
