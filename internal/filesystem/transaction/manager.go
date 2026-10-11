@@ -175,6 +175,12 @@ func (m *Manager) ensureTempDir() error {
 	// which makes file moves atomic and avoids cross-device link errors.
 	path := filepath.Join(m.rootPath, fileutil.InternalDir, fileutil.TmpDir, dirName)
 
+	// Refuse to create the transaction directory through a symlink that
+	// escapes the root (for example a symlinked .scbake or .scbake/tmp).
+	if _, err := fileutil.SafePath(m.rootPath, path); err != nil {
+		return fmt.Errorf("refusing to create transaction temp dir: %w", err)
+	}
+
 	if err := os.MkdirAll(path, fileutil.DirPerms); err != nil {
 		return fmt.Errorf("failed to create temp dir %s: %w", path, err)
 	}

@@ -6,6 +6,7 @@ package transaction
 import (
 	"fmt"
 	"os"
+	"scbake/internal/util/fileutil"
 )
 
 // Rollback undoes all tracked changes.
@@ -30,9 +31,18 @@ func (m *Manager) Rollback() error {
 	for i := len(m.created) - 1; i >= 0; i-- {
 		path := m.created[i]
 
+		// Re-validate containment (SCB-001/SCB-002) before deleting. A created
+		// entry must still resolve inside the root: a symlink swapped in after
+		// tracking must never redirect RemoveAll outside the project.
+		if _, err := fileutil.SafePath(m.rootPath, path); err != nil {
+			errs = append(errs, fmt.Errorf("refusing to delete created path %s: %w", path, err))
+			continue
+		}
+
 		// We use RemoveAll for safety, but Remove would suffice if strict LIFO is met.
-		// Check existence first to avoid errors if a task failed before creation.
-		if _, err := os.Stat(path); err == nil {
+		// Lstat is used so a symlink is never followed: RemoveAll removes the
+		// link itself rather than its target.
+		if _, err := os.Lstat(path); err == nil {
 			if err := os.RemoveAll(path); err != nil {
 				errs = append(errs, fmt.Errorf("failed to delete created path %s: %w", path, err))
 			}
@@ -41,6 +51,13 @@ func (m *Manager) Rollback() error {
 
 	// 2. Restore backed up files
 	for originalPath, backup := range m.backups {
+		// Re-validate containment before restoring so a path swapped for an
+		// escaping symlink after tracking cannot redirect the write.
+		if _, err := fileutil.SafePath(m.rootPath, originalPath); err != nil {
+			errs = append(errs, fmt.Errorf("refusing to restore %s: %w", originalPath, err))
+			continue
+		}
+
 		// Restore content
 		// We purposefully overwrite whatever is currently at originalPath
 		if err := copyFile(backup.tempPath, originalPath, backup.mode); err != nil {

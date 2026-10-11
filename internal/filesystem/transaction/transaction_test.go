@@ -451,3 +451,167 @@ func TestNew_SweepDoesNotFollowSymlinkedTmpDir(t *testing.T) {
 		t.Errorf("sweep followed a symlinked .scbake/tmp and deleted a directory outside the root: %v", err)
 	}
 }
+
+// TestTrack_RejectsSymlinkEscapingRoot is a regression test for SCB-001: Track
+// must not accept a path reached through a symlink that escapes the root.
+func TestTrack_RejectsSymlinkEscapingRoot(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim.txt")
+	createFile(t, victim, "victim", fileutil.FilePerms)
+
+	root := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	tx, err := New(root)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	if err := tx.Track(filepath.Join(root, "escape", "victim.txt")); err == nil {
+		t.Error("Track accepted a path reached through an escaping symlink")
+	}
+}
+
+// TestTrack_RejectsSymlinkLeaf verifies a symlinked final component is refused
+// rather than backed up (which would read the link target).
+func TestTrack_RejectsSymlinkLeaf(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	root := t.TempDir()
+	real := filepath.Join(root, "real.txt")
+	createFile(t, real, "data", fileutil.FilePerms)
+	if err := os.Symlink(real, filepath.Join(root, "link.txt")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	tx, err := New(root)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	if err := tx.Track(filepath.Join(root, "link.txt")); err == nil {
+		t.Error("Track accepted a symlinked leaf")
+	}
+}
+
+// TestTrack_InRootSymlinkDirectoryAllowed verifies that a symlinked directory
+// resolving inside the root is transparent and does not fail tracking.
+func TestTrack_InRootSymlinkDirectoryAllowed(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	if err := os.MkdirAll(real, fileutil.DirPerms); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Symlink(real, filepath.Join(root, "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	tx, err := New(root)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	if err := tx.Track(filepath.Join(root, "link")); err != nil {
+		t.Fatalf("Track rejected an in-root symlinked directory: %v", err)
+	}
+	if len(tx.created) != 0 || len(tx.backups) != 0 {
+		t.Errorf("in-root symlinked directory should be a no-op, got created=%v backups=%v", tx.created, tx.backups)
+	}
+}
+
+// TestTrack_RejectsHardlinkedFile is a regression test for SCB-003.
+func TestTrack_RejectsHardlinkedFile(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("hard links are not portable in this test")
+	}
+
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim.txt")
+	createFile(t, victim, "victim", fileutil.FilePerms)
+
+	root := t.TempDir()
+	if err := os.Link(victim, filepath.Join(root, "hardlink.txt")); err != nil {
+		t.Skipf("hard links unsupported: %v", err)
+	}
+
+	tx, err := New(root)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	if err := tx.Track(filepath.Join(root, "hardlink.txt")); err == nil {
+		t.Error("Track accepted a hard-linked file")
+	}
+}
+
+// TestRollback_RefusesEscapingCreatedPath verifies Rollback re-validates
+// containment before removing a recorded created path.
+func TestRollback_RefusesEscapingCreatedPath(t *testing.T) {
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "keep.txt")
+	createFile(t, victim, "keep", fileutil.FilePerms)
+
+	root := t.TempDir()
+	tx, err := New(root)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	// Simulate a recorded path that lies outside the root (for example because
+	// it was swapped after tracking).
+	tx.created = append(tx.created, victim)
+
+	if err := tx.Rollback(); err == nil {
+		t.Error("Rollback did not report the refused escaping path")
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("Rollback deleted a path outside the root: %v", err)
+	}
+}
+
+// TestRollback_RefusesSymlinkedCreatedPath verifies that a symlink swapped in
+// for a tracked created path is not followed by RemoveAll.
+func TestRollback_RefusesSymlinkedCreatedPath(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim")
+	if err := os.MkdirAll(victim, fileutil.DirPerms); err != nil {
+		t.Fatalf("mkdir victim: %v", err)
+	}
+
+	root := t.TempDir()
+	tx, err := New(root)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	created := filepath.Join(root, "created")
+	if err := tx.Track(created); err != nil {
+		t.Fatalf("Track() failed: %v", err)
+	}
+	if err := os.Symlink(outside, created); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if err := tx.Rollback(); err == nil {
+		t.Error("Rollback did not report the escaping symlink")
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("Rollback removed a directory outside the root: %v", err)
+	}
+}
