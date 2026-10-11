@@ -357,6 +357,91 @@ func TestPullFromURL_CachedSkipRedownload(t *testing.T) {
 	}
 }
 
+// TestPullFromURL_RepullsPoisonedCacheWithoutManifest is a regression test for
+// SCB-025: a pre-existing cache directory with no manifest is not trusted, so
+// the pull re-downloads the template and records a manifest.
+func TestPullFromURL_RepullsPoisonedCacheWithoutManifest(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": "trusted content"}))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	// Plant attacker content with no manifest, as if the cache were poisoned.
+	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(destDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(destDir, "main.go.tpl"), []byte("attacker"), 0640); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err != nil {
+		t.Fatalf("PullFromURL failed: %v", err)
+	}
+
+	if callCount != 1 {
+		t.Fatalf("expected poisoned cache to trigger a re-download, got %d server calls", callCount)
+	}
+	//nolint:gosec // test temp directory
+	content, err := os.ReadFile(filepath.Join(destDir, "main.go.tpl"))
+	if err != nil {
+		t.Fatalf("reading re-downloaded template failed: %v", err)
+	}
+	if string(content) != "trusted content" {
+		t.Errorf("expected re-downloaded content %q, got %q", "trusted content", string(content))
+	}
+	if _, err := os.Stat(TemplateManifestPath(m.cacheDir, "acme", "go-api")); err != nil {
+		t.Errorf("expected a cache manifest to be written: %v", err)
+	}
+}
+
+// TestPullFromURL_RepullsTamperedCache verifies that editing a cached file
+// after a successful pull invalidates the cache and triggers a re-download.
+func TestPullFromURL_RepullsTamperedCache(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": "trusted content"}))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err != nil {
+		t.Fatalf("first PullFromURL failed: %v", err)
+	}
+
+	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(destDir, "main.go.tpl"), []byte("attacker"), 0640); err != nil {
+		t.Fatalf("tampering failed: %v", err)
+	}
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err != nil {
+		t.Fatalf("second PullFromURL failed: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Fatalf("expected tampered cache to trigger a re-download, got %d server calls", callCount)
+	}
+	//nolint:gosec // test temp directory
+	content, err := os.ReadFile(filepath.Join(destDir, "main.go.tpl"))
+	if err != nil {
+		t.Fatalf("reading restored template failed: %v", err)
+	}
+	if string(content) != "trusted content" {
+		t.Errorf("expected restored content %q, got %q", "trusted content", string(content))
+	}
+}
+
 func TestValidateTemplateCache_Valid(t *testing.T) {
 	dir := t.TempDir()
 	//nolint:gosec // test temp directory

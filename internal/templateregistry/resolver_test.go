@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+// writeValidManifest records a manifest matching tplDir's current contents so
+// tests exercise the verified cache-hit path.
+func writeValidManifest(t *testing.T, tplDir, name string) {
+	t.Helper()
+	hash, err := hashTree(tplDir)
+	if err != nil {
+		t.Fatalf("hashTree failed: %v", err)
+	}
+	if err := writeCacheManifest(tplDir+manifestSuffix, name, hash); err != nil {
+		t.Fatalf("writeCacheManifest failed: %v", err)
+	}
+}
+
 func TestResolveCachePath_NotFound(t *testing.T) {
 	dir := t.TempDir()
 	result := ResolveCachePath(dir, "", "some/file.tpl")
@@ -84,6 +97,7 @@ func TestResolveCachePath_NestedTemplateDir(t *testing.T) {
 	if err := os.WriteFile(tplPath, []byte("content"), 0644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
+	writeValidManifest(t, tplDir, "editorconfig")
 
 	// The requested template name constrains the nested lookup to "editorconfig".
 	result := ResolveCachePath(dir, "editorconfig", "main.go.tpl")
@@ -121,6 +135,8 @@ func TestResolveCachePath_ConstrainsToRequestedTemplate(t *testing.T) {
 	if err := os.WriteFile(bPath, []byte("template b"), 0644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
+	writeValidManifest(t, aDir, "a")
+	writeValidManifest(t, bDir, "b")
 
 	result := ResolveCachePath(dir, "a", "main.go.tpl")
 	if result != aPath {
@@ -139,6 +155,56 @@ func TestResolveCachePath_ConstrainsToRequestedTemplate(t *testing.T) {
 	}
 	if result == aPath {
 		t.Fatalf("resolved to a different template's file %q", aPath)
+	}
+}
+
+// TestResolveCachePath_IgnoresTamperedTemplate is a regression test for
+// SCB-025: a template directory whose contents no longer match its manifest
+// must not be rendered.
+func TestResolveCachePath_IgnoresTamperedTemplate(t *testing.T) {
+	dir := t.TempDir()
+	tplDir := filepath.Join(dir, "acme", "go-api")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(tplDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	tplPath := filepath.Join(tplDir, "main.go.tpl")
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(tplPath, []byte("trusted"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	writeValidManifest(t, tplDir, "go-api")
+
+	if got := ResolveCachePath(dir, "go-api", "main.go.tpl"); got != tplPath {
+		t.Fatalf("expected verified template to resolve to %q, got %q", tplPath, got)
+	}
+
+	// Tamper with the file after the manifest was recorded.
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(tplPath, []byte("attacker"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if got := ResolveCachePath(dir, "go-api", "main.go.tpl"); got != "" {
+		t.Errorf("expected tampered template to be ignored, got %q", got)
+	}
+}
+
+// TestResolveCachePath_IgnoresUnmanifestedTemplate verifies the fail-closed
+// behavior: a template directory without a manifest is never rendered.
+func TestResolveCachePath_IgnoresUnmanifestedTemplate(t *testing.T) {
+	dir := t.TempDir()
+	tplDir := filepath.Join(dir, "acme", "go-api")
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(tplDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(tplDir, "main.go.tpl"), []byte("content"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if got := ResolveCachePath(dir, "go-api", "main.go.tpl"); got != "" {
+		t.Errorf("expected template without a manifest to be ignored, got %q", got)
 	}
 }
 

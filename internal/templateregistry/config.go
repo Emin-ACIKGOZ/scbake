@@ -268,3 +268,15 @@ func (m *Manager) CacheDir() string {
 func TemplateCachePath(cacheDir, registryName, templateName string) string {
 	return filepath.Join(cacheDir, registryName, templateName)
 }
+
+// manifestSuffix is appended to a template cache directory to form the path of
+// the integrity manifest that accompanies it.
+const manifestSuffix = ".manifest.json"
+
+// TemplateManifestPath returns the path of the integrity manifest recorded for
+// a cached template. The manifest is a sibling of the template directory
+// (never inside it) so its own bytes are excluded from the tree hash:
+// <cacheDir>/<registry>/<template>.manifest.json
+func TemplateManifestPath(cacheDir, registryName, templateName string) string {
+	return TemplateCachePath(cacheDir, registryName, templateName) + manifestSuffix
+}

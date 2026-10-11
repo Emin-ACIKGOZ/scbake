@@ -14,6 +14,12 @@ import (
 // per-template layout <registry>/<templateName>/<cleanPath>. Constraining the
 // nested lookup to the requested template prevents a request for one template
 // from resolving to a different template's file that happens to share a name.
+//
+// The per-template lookup is fail-closed: the template directory is only
+// consulted when its integrity manifest verifies against a freshly computed
+// tree hash. A poisoned directory, or a cache written before manifests existed,
+// is skipped so its content is never rendered; it will be re-pulled on the next
+// Pull. The flat/legacy layout is left unguarded for backward compatibility.
 func ResolveCachePath(cacheDir, templateName, tplPath string) string {
 	if cacheDir == "" {
 		return ""
@@ -39,11 +45,16 @@ func ResolveCachePath(cacheDir, templateName, tplPath string) string {
 
 		// Per-template layout: <registry>/<templateName>/<cleanPath>. The
 		// requested template name constrains the lookup; sibling template
-		// directories are never searched.
+		// directories are never searched. The directory must verify against its
+		// manifest before any file is returned.
 		if templateName == "" {
 			continue
 		}
-		nested := filepath.Join(cacheDir, registryDir, templateName, cleanPath)
+		tplDir := filepath.Join(cacheDir, registryDir, templateName)
+		if !cacheManifestValid(tplDir) {
+			continue
+		}
+		nested := filepath.Join(tplDir, cleanPath)
 		if _, err := os.Stat(nested); err == nil {
 			return nested
 		}
