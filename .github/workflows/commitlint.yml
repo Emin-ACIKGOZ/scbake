@@ -23,7 +23,13 @@ jobs:
 
       # Uses commitlint.config.mjs and @commitlint/config-conventional,
       # which the action bundles. See docs/COMMIT_MESSAGES.md.
+      #
+      # Dependabot's generated subject ("Bump <dep> from <old> to <new>") is
+      # sentence-case, which config-conventional rejects. Skip the bot so its
+      # otherwise-conventional updates are not blocked; the step is skipped (not
+      # the job), so the required check still reports success.
       - name: Lint commit messages
+        if: github.actor != 'dependabot[bot]'
         uses: wagoid/commitlint-github-action@v6
         with:
           helpURL: https://github.com/Emin-ACIKGOZ/scbake/blob/master/docs/COMMIT_MESSAGES.md
