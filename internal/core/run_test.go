@@ -481,16 +481,19 @@ func TestBuildTaskContextAcceptsBenignProjects(t *testing.T) {
 // repo-relative paths so the manifest stays portable and the validator can
 // require a repo-relative value.
 func TestRepoRelativeProjectPath(t *testing.T) {
+	// Build the root as a platform-absolute path so the absolute-path branch is
+	// exercised on Windows too (a POSIX "/repo" is not absolute there).
+	root := filepath.Join(t.TempDir(), "repo")
 	tests := []struct {
 		root, arg, want string
 	}{
-		{"/repo", "/repo/backend", "backend"},
-		{"/repo", "/repo/services/api", "services/api"},
-		{"/repo", "/repo", "."},
-		{"/repo", "backend", "backend"},
-		{"/repo", "./services/api", "services/api"},
-		{"/repo", ".", "."},
-		{"/repo", "/other/x", "../other/x"},
+		{root, filepath.Join(root, "backend"), "backend"},
+		{root, filepath.Join(root, "services", "api"), "services/api"},
+		{root, root, "."},
+		{root, "backend", "backend"},
+		{root, filepath.Join(".", "services", "api"), "services/api"},
+		{root, ".", "."},
+		{root, filepath.Join(root, "..", "other", "x"), "../other/x"},
 	}
 	for _, tt := range tests {
 		got, err := repoRelativeProjectPath(tt.root, tt.arg)
@@ -502,7 +505,7 @@ func TestRepoRelativeProjectPath(t *testing.T) {
 			t.Errorf("repoRelativeProjectPath(%q, %q) = %q, want %q", tt.root, tt.arg, got, tt.want)
 		}
 	}
-	if _, err := repoRelativeProjectPath("/repo", ""); err == nil {
+	if _, err := repoRelativeProjectPath(root, ""); err == nil {
 		t.Error("repoRelativeProjectPath with empty arg = nil error, want error")
 	}
 }
