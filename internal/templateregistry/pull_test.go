@@ -18,6 +18,7 @@ import (
 const (
 	testTplContent = "package main"
 	testHandler    = "func handler() {}"
+	testTrusted    = "trusted content"
 )
 
 func TestExtractTarGz_Basic(t *testing.T) {
@@ -364,7 +365,7 @@ func TestPullFromURL_RepullsPoisonedCacheWithoutManifest(t *testing.T) {
 	callCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		callCount++
-		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": "trusted content"}))
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": testTrusted}))
 	}))
 	defer srv.Close()
 
@@ -373,7 +374,6 @@ func TestPullFromURL_RepullsPoisonedCacheWithoutManifest(t *testing.T) {
 
 	// Plant attacker content with no manifest, as if the cache were poisoned.
 	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
-	//nolint:gosec // test temp directory
 	if err := os.MkdirAll(destDir, 0750); err != nil {
 		t.Fatalf("MkdirAll failed: %v", err)
 	}
@@ -394,8 +394,8 @@ func TestPullFromURL_RepullsPoisonedCacheWithoutManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading re-downloaded template failed: %v", err)
 	}
-	if string(content) != "trusted content" {
-		t.Errorf("expected re-downloaded content %q, got %q", "trusted content", string(content))
+	if string(content) != testTrusted {
+		t.Errorf("expected re-downloaded content %q, got %q", testTrusted, string(content))
 	}
 	if _, err := os.Stat(TemplateManifestPath(m.cacheDir, "acme", "go-api")); err != nil {
 		t.Errorf("expected a cache manifest to be written: %v", err)
@@ -408,7 +408,7 @@ func TestPullFromURL_RepullsTamperedCache(t *testing.T) {
 	callCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		callCount++
-		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": "trusted content"}))
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": testTrusted}))
 	}))
 	defer srv.Close()
 
@@ -437,8 +437,8 @@ func TestPullFromURL_RepullsTamperedCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading restored template failed: %v", err)
 	}
-	if string(content) != "trusted content" {
-		t.Errorf("expected restored content %q, got %q", "trusted content", string(content))
+	if string(content) != testTrusted {
+		t.Errorf("expected restored content %q, got %q", testTrusted, string(content))
 	}
 }
 
@@ -449,7 +449,6 @@ func TestPullFromURL_RepullsTamperedCache(t *testing.T) {
 func TestCacheIsValid_RejectsEmptyTree(t *testing.T) {
 	dir := t.TempDir()
 	destDir := filepath.Join(dir, "acme", "go-api")
-	//nolint:gosec // test temp directory
 	if err := os.MkdirAll(destDir, 0750); err != nil {
 		t.Fatalf("MkdirAll failed: %v", err)
 	}
@@ -474,7 +473,7 @@ func TestPullFromURL_RepullsEmptyTreeCache(t *testing.T) {
 	callCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		callCount++
-		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": "trusted content"}))
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": testTrusted}))
 	}))
 	defer srv.Close()
 
@@ -482,7 +481,6 @@ func TestPullFromURL_RepullsEmptyTreeCache(t *testing.T) {
 	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
 
 	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
-	//nolint:gosec // test temp directory
 	if err := os.MkdirAll(destDir, 0750); err != nil {
 		t.Fatalf("MkdirAll failed: %v", err)
 	}
@@ -506,8 +504,8 @@ func TestPullFromURL_RepullsEmptyTreeCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading re-downloaded template failed: %v", err)
 	}
-	if string(content) != "trusted content" {
-		t.Errorf("expected re-downloaded content %q, got %q", "trusted content", string(content))
+	if string(content) != testTrusted {
+		t.Errorf("expected re-downloaded content %q, got %q", testTrusted, string(content))
 	}
 }
 
@@ -527,7 +525,6 @@ func TestPullFromURL_FailedRepullKeepsExistingCache(t *testing.T) {
 	// Plant an existing (unmanifested, so invalid) cache that the pull will try
 	// to refresh.
 	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
-	//nolint:gosec // test temp directory
 	if err := os.MkdirAll(destDir, 0750); err != nil {
 		t.Fatalf("MkdirAll failed: %v", err)
 	}

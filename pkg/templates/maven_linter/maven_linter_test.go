@@ -223,7 +223,7 @@ func TestHandler_FullExecution_NoOrphanedFile(t *testing.T) {
 // F9: the handler must read pom_snippet.xml.tpl from its own per-template
 // registry cache directory. Before the fix ReadTemplate was called without a
 // template name, so only the flat/legacy layout resolved and a correctly cached
-// per-template file was ignored in favour of the embedded template.
+// per-template file was ignored in favor of the embedded template.
 func TestHandler_GetTasks_UsesPerTemplateRegistryCache(t *testing.T) {
 	const cachedSnippet = "<plugin>from-per-template-cache</plugin>"
 
