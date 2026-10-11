@@ -46,7 +46,7 @@ jobs:
           cache: true
 
       - name: Install svu
-        run: go install github.com/caarlos0/svu/v3@latest
+        run: go install github.com/caarlos0/svu/v3@v3.4.1
 
       - name: Determine version
         id: version
