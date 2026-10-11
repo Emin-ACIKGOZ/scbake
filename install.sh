@@ -216,7 +216,9 @@ download_file() {
         fi
     done
 
-    die "Failed to download after $retries attempts: $url"
+    # Return non-zero instead of dying so the caller can add context (binary
+    # vs. checksums) while still treating exhaustion as fatal.
+    return 1
 }
 
 # Verify the downloaded binary against the release's SHA256SUMS. This check is
@@ -364,7 +366,7 @@ main() {
     log_info "Downloading binary..."
     log_info "Source: $download_url"
 
-    download_file "$download_url" "$binary_name"
+    download_file "$download_url" "$binary_name" || die "Failed to download binary from $download_url"
     log_success "Downloaded successfully"
 
     log_info "Validating binary..."
@@ -389,15 +391,11 @@ main() {
 
     # Download the checksum manifest. Unlike before, this is not best-effort:
     # if it cannot be fetched we abort rather than install an unverified binary.
+    # Route it through download_file so a transient network blip gets the same
+    # retries + exponential backoff as the binary; exhaustion is still fatal.
     log_info "Verifying checksums..."
     local checksums_url="${RELEASE_URL}/${VERSION}/SHA256SUMS"
-    if command_exists curl; then
-        curl -fsSL -o SHA256SUMS "$checksums_url" 2>/dev/null || die "Failed to download checksums from $checksums_url"
-    elif command_exists wget; then
-        wget -q -O SHA256SUMS "$checksums_url" 2>/dev/null || die "Failed to download checksums from $checksums_url"
-    else
-        die "Neither curl nor wget found. Please install one to download scbake."
-    fi
+    download_file "$checksums_url" "SHA256SUMS" || die "Failed to download checksums from $checksums_url"
 
     if [ ! -s SHA256SUMS ]; then
         die "Downloaded checksum file is empty: $checksums_url"

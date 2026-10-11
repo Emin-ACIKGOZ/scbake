@@ -7,11 +7,18 @@ scbake is a single-binary CLI tool. Choose your preferred installation method be
 Install from a **pinned release tag** for macOS, Linux, and Windows
 (WSL/Git Bash). A release tag is immutable, and the installer is published as a
 release asset alongside its checksum, so you can verify what you are about to
-run:
+run.
+
+`install.sh` is attached to releases starting with the first release that
+includes this installer change; earlier tags do not contain the asset and their
+`install.sh` URL 404s. Use the **latest** tag from
+<https://github.com/Emin-ACIKGOZ/scbake/releases/latest>:
 
 ```bash
-# Pick a tag from https://github.com/Emin-ACIKGOZ/scbake/releases
-TAG=v0.5.15
+# Set TAG to a release that ships install.sh. Use the latest release tag
+# (see https://github.com/Emin-ACIKGOZ/scbake/releases/latest) — older tags
+# do not contain the installer asset.
+TAG=<tag>
 BASE="https://github.com/Emin-ACIKGOZ/scbake/releases/download/${TAG}"
 
 # Download the installer and verify it against the release checksums
@@ -35,7 +42,7 @@ bash install.sh "${TAG}"
 bash install.sh
 
 # Install a specific version (tag)
-bash install.sh v0.5.15
+bash install.sh vX.Y.Z
 
 # Install to custom directory
 bash install.sh latest /opt/bin
@@ -44,7 +51,7 @@ bash install.sh latest /opt/bin
 bash install.sh latest --quiet
 
 # Combined: specific version, custom path, quiet
-bash install.sh v0.5.15 ~/.local/bin --quiet
+bash install.sh vX.Y.Z ~/.local/bin --quiet
 ```
 
 The installer will:

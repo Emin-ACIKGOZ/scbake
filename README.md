@@ -65,11 +65,18 @@ graph LR
 ### Quick Install (macOS, Linux, Windows)
 
 Install from a **pinned release tag**. Unlike a branch URL, a release tag is
-immutable, and the installer is attached to the release alongside its checksum:
+immutable, and the installer is attached to the release alongside its checksum.
+
+`install.sh` is published as a release asset starting with the first release
+that includes this installer change; older tags predate it and do not have the
+asset (their `install.sh` URL 404s). Use the **latest** tag from
+<https://github.com/Emin-ACIKGOZ/scbake/releases/latest>:
 
 ```bash
-# Pick a tag from https://github.com/Emin-ACIKGOZ/scbake/releases
-TAG=v0.5.15
+# Set TAG to a release that ships install.sh. Use the latest release tag
+# (see https://github.com/Emin-ACIKGOZ/scbake/releases/latest) — older tags
+# do not contain the installer asset.
+TAG=<tag>
 BASE="https://github.com/Emin-ACIKGOZ/scbake/releases/download/${TAG}"
 
 # Download the installer and verify it against the release checksums
