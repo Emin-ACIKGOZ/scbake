@@ -45,14 +45,7 @@ func (m *Manager) Track(path string) error {
 	// write helpers open with O_NOFOLLOW and would reject it anyway, and backing
 	// up through the link could touch a shared inode.
 	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Stat(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to stat symlink target %s: %w", absPath, err)
-		}
-		if target.IsDir() {
-			return nil
-		}
-		return fmt.Errorf("security violation: refusing to track symlink %s", absPath)
+		return checkTrackedSymlink(absPath)
 	}
 
 	// Case 2: File exists.
@@ -80,6 +73,22 @@ func (m *Manager) Track(path string) error {
 	}
 
 	return m.backupFile(absPath, info)
+}
+
+// checkTrackedSymlink validates the symlink at absPath. A symlink to a
+// directory is transparent (MkdirAll merges into it) and returns nil. A symlink
+// to a file returns an error: the write helpers open with O_NOFOLLOW and would
+// reject it anyway, and backing up through the link could touch a shared inode.
+// SafePath has already confirmed the link resolves inside the root.
+func checkTrackedSymlink(absPath string) error {
+	target, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to stat symlink target %s: %w", absPath, err)
+	}
+	if target.IsDir() {
+		return nil
+	}
+	return fmt.Errorf("security violation: refusing to track symlink %s", absPath)
 }
 
 func (m *Manager) resolveAndValidate(path string) (string, error) {

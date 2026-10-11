@@ -243,11 +243,11 @@ func TestSafePath_InRootSymlinkAllowed(t *testing.T) {
 	skipIfNoSymlinks(t)
 
 	root := t.TempDir()
-	real := filepath.Join(root, "real")
-	if err := os.MkdirAll(real, DirPerms); err != nil {
+	realPath := filepath.Join(root, "real")
+	if err := os.MkdirAll(realPath, DirPerms); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.Symlink(real, filepath.Join(root, "link")); err != nil {
+	if err := os.Symlink(realPath, filepath.Join(root, "link")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
 
@@ -285,11 +285,11 @@ func TestSafeReadWriteFile_SymlinkLeafRejected(t *testing.T) {
 	skipIfNoSymlinks(t)
 
 	root := t.TempDir()
-	real := filepath.Join(root, "real.txt")
-	if err := os.WriteFile(real, []byte("data"), FilePerms); err != nil {
+	realPath := filepath.Join(root, "real.txt")
+	if err := os.WriteFile(realPath, []byte("data"), FilePerms); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := os.Symlink(real, filepath.Join(root, "link.txt")); err != nil {
+	if err := os.Symlink(realPath, filepath.Join(root, "link.txt")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
 
@@ -304,7 +304,7 @@ func TestSafeReadWriteFile_SymlinkLeafRejected(t *testing.T) {
 		t.Error("SafeOpenFile followed a symlinked final component")
 	}
 
-	got, err := os.ReadFile(real)
+	got, err := os.ReadFile(realPath) //nolint:gosec // test temp path
 	if err != nil {
 		t.Fatalf("read target: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestSafeWriteFile_HardlinkedTargetRejected(t *testing.T) {
 		t.Error("SafeWriteFile wrote through a hard link")
 	}
 
-	got, err := os.ReadFile(victim)
+	got, err := os.ReadFile(victim) //nolint:gosec // test temp path
 	if err != nil {
 		t.Fatalf("read victim: %v", err)
 	}

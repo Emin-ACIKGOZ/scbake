@@ -486,9 +486,9 @@ func TestTrack_RejectsSymlinkLeaf(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	real := filepath.Join(root, "real.txt")
-	createFile(t, real, "data", fileutil.FilePerms)
-	if err := os.Symlink(real, filepath.Join(root, "link.txt")); err != nil {
+	realPath := filepath.Join(root, "real.txt")
+	createFile(t, realPath, "data", fileutil.FilePerms)
+	if err := os.Symlink(realPath, filepath.Join(root, "link.txt")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
 
@@ -510,11 +510,11 @@ func TestTrack_InRootSymlinkDirectoryAllowed(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	real := filepath.Join(root, "real")
-	if err := os.MkdirAll(real, fileutil.DirPerms); err != nil {
+	realPath := filepath.Join(root, "real")
+	if err := os.MkdirAll(realPath, fileutil.DirPerms); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.Symlink(real, filepath.Join(root, "link")); err != nil {
+	if err := os.Symlink(realPath, filepath.Join(root, "link")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
 

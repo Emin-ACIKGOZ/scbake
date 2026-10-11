@@ -14,10 +14,14 @@ import (
 	"scbake/internal/util/fileutil"
 )
 
+// osWindows is the GOOS value used to skip tests that require unprivileged
+// symlink or hard-link creation.
+const osWindows = "windows"
+
 // requireSymlinks skips tests that require unprivileged symlink creation.
 func requireSymlinks(t *testing.T) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == osWindows {
 		t.Skip("symlink creation requires elevated privileges on Windows")
 	}
 }
@@ -78,7 +82,7 @@ func TestAppendFileTask_SymlinkLeafRejected(t *testing.T) {
 		t.Error("AppendFileTask followed a symlinked leaf")
 	}
 
-	got, err := os.ReadFile(victim)
+	got, err := os.ReadFile(victim) //nolint:gosec // test temp path
 	if err != nil {
 		t.Fatalf("read victim: %v", err)
 	}
@@ -133,7 +137,7 @@ func TestInsertXMLTask_SymlinkDirectoryEscapeRejected(t *testing.T) {
 		t.Error("InsertXMLTask accepted an escaping symlinked directory")
 	}
 
-	got, err := os.ReadFile(outFile)
+	got, err := os.ReadFile(outFile) //nolint:gosec // test temp path
 	if err != nil {
 		t.Fatalf("read outside xml: %v", err)
 	}
@@ -171,7 +175,7 @@ func TestInsertXMLTask_SymlinkLeafRejected(t *testing.T) {
 		t.Error("InsertXMLTask followed a symlinked leaf")
 	}
 
-	got, err := os.ReadFile(outFile)
+	got, err := os.ReadFile(outFile) //nolint:gosec // test temp path
 	if err != nil {
 		t.Fatalf("read outside xml: %v", err)
 	}
@@ -227,11 +231,11 @@ func TestCreateTemplateTask_SymlinkDirectoryEscapeRejected(t *testing.T) {
 func TestAppendFileTask_InRootSymlinkAllowed(t *testing.T) {
 	requireSymlinks(t)
 	root := t.TempDir()
-	real := filepath.Join(root, "real")
-	if err := os.MkdirAll(real, fileutil.DirPerms); err != nil {
+	realPath := filepath.Join(root, "real")
+	if err := os.MkdirAll(realPath, fileutil.DirPerms); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.Symlink(real, filepath.Join(root, "link")); err != nil {
+	if err := os.Symlink(realPath, filepath.Join(root, "link")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
 
@@ -247,7 +251,7 @@ func TestAppendFileTask_InRootSymlinkAllowed(t *testing.T) {
 		t.Fatalf("in-root symlinked directory was rejected: %v", err)
 	}
 
-	got, err := os.ReadFile(filepath.Join(real, "created.txt"))
+	got, err := os.ReadFile(filepath.Join(realPath, "created.txt")) //nolint:gosec // test temp path
 	if err != nil {
 		t.Fatalf("file was not created under the resolved directory: %v", err)
 	}

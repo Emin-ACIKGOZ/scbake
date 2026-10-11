@@ -105,7 +105,7 @@ func TestReadTemplate_EmbeddedFileNotFound(t *testing.T) {
 func TestReadTemplate_OverrideWithPermissionError(t *testing.T) {
 	t.Parallel()
 
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == osWindows {
 		t.Skip("Windows does not enforce POSIX mode bits; a 0000 file is still readable")
 	}
 
@@ -140,7 +140,7 @@ func TestReadTemplate_OverridePathTraversal(t *testing.T) {
 func TestReadTemplate_OverrideDanglingSymlinkFallsThrough(t *testing.T) {
 	t.Parallel()
 
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == osWindows {
 		t.Skip("symlink creation requires privileges on Windows")
 	}
 
@@ -166,7 +166,7 @@ func TestReadTemplate_OverrideDanglingSymlinkFallsThrough(t *testing.T) {
 func TestReadTemplate_OverrideEscapingSymlinkRejected(t *testing.T) {
 	t.Parallel()
 
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == osWindows {
 		t.Skip("symlink creation requires privileges on Windows")
 	}
 

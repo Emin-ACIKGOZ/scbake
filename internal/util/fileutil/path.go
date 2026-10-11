@@ -164,7 +164,7 @@ func canonicalize(p string, depth int) (string, error) {
 // directory has already been validated by SafePath, and rejecting a symlinked
 // leaf narrows the check→use window described on SafePath.
 func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
-	return os.OpenFile(path, flag|oNoFollow, perm)
+	return os.OpenFile(path, flag|oNoFollow, perm) //nolint:gosec // path validated by SafePath before opening
 }
 
 // writeIntent reports whether flag opens the file for modification.
@@ -181,7 +181,10 @@ func writeIntent(flag int) bool {
 func refuseHardlinkedTarget(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return nil // Non-existent target: the subsequent open handles it.
+		if os.IsNotExist(err) {
+			return nil // Non-existent target: the subsequent open handles it.
+		}
+		return err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return nil // openNoFollow rejects symlinks.
