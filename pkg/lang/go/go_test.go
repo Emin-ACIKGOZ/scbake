@@ -6,6 +6,7 @@ package golang
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"scbake/internal/types"
@@ -104,6 +105,19 @@ func TestGetTasks_PrioritySafety(t *testing.T) {
 				task.Description(), p,
 				types.PrioLangSetup, types.MaxLangSetup)
 		}
+	}
+}
+
+// TestGitignoreTemplateIgnoresScbakeDir is a regression test for issue #35
+// (SCB-032): generated Go projects must ignore the .scbake/ internal state
+// directory so transaction backups are never committed.
+func TestGitignoreTemplateIgnoresScbakeDir(t *testing.T) {
+	data, err := templates.ReadFile("gitignore.tpl")
+	if err != nil {
+		t.Fatalf("failed to read embedded gitignore template: %v", err)
+	}
+	if !strings.Contains(string(data), ".scbake/") {
+		t.Error("gitignore.tpl must ignore the .scbake/ internal state directory")
 	}
 }
 

@@ -17,3 +17,6 @@ coverage.out
 # OS
 .DS_Store
 .env
+
+# scbake internal state (transaction backups)
+.scbake/

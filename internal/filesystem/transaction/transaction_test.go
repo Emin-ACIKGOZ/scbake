@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"scbake/internal/util/fileutil"
 	"testing"
+	"time"
 )
 
 const osWindows = "windows"
@@ -46,6 +47,58 @@ func TestNew(t *testing.T) {
 	}
 	if !filepath.IsAbs(tx.rootPath) {
 		t.Errorf("expected absolute root path, got %s", tx.rootPath)
+	}
+}
+
+// TestNew_SweepsStaleTransactionDirs is a regression test for issue #35
+// (SCB-032): a crash during an apply skips Commit/Rollback and leaves a
+// transaction backup directory behind. New() must reclaim it on the next run.
+func TestNew_SweepsStaleTransactionDirs(t *testing.T) {
+	rootDir := t.TempDir()
+
+	staleDir := filepath.Join(rootDir, fileutil.InternalDir, fileutil.TmpDir, "tx-old")
+	createFile(t, filepath.Join(staleDir, "backup.bak"), "secret", fileutil.PrivateFilePerms)
+
+	// Age the directory well past the sweep threshold.
+	old := time.Now().Add(-2 * staleTransactionThreshold)
+	if err := os.Chtimes(staleDir, old, old); err != nil {
+		t.Fatalf("failed to age stale transaction dir: %v", err)
+	}
+
+	if _, err := New(rootDir); err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
+		t.Errorf("New() did not sweep stale transaction dir %s", staleDir)
+	}
+}
+
+// TestNew_KeepsRecentTransactionDirs ensures the sweep never reclaims a
+// transaction that may still be active.
+func TestNew_KeepsRecentTransactionDirs(t *testing.T) {
+	rootDir := t.TempDir()
+
+	recentDir := filepath.Join(rootDir, fileutil.InternalDir, fileutil.TmpDir, "tx-recent")
+	if err := os.MkdirAll(recentDir, fileutil.DirPerms); err != nil {
+		t.Fatalf("failed to create recent transaction dir: %v", err)
+	}
+
+	if _, err := New(rootDir); err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	if _, err := os.Stat(recentDir); err != nil {
+		t.Errorf("New() removed a recent transaction dir %s: %v", recentDir, err)
+	}
+}
+
+// TestNew_SweepNoTempDir ensures New() is a no-op when no temp directory exists.
+func TestNew_SweepNoTempDir(t *testing.T) {
+	rootDir := t.TempDir()
+
+	if _, err := New(rootDir); err != nil {
+		t.Fatalf("New() failed when .scbake/tmp is absent: %v", err)
 	}
 }
 
@@ -362,5 +415,39 @@ func TestTrack_ExistingDirectory_NoBackup(t *testing.T) {
 
 	if len(tx.created) != 0 {
 		t.Errorf("existing directory was marked as created")
+	}
+}
+
+// TestNew_SweepDoesNotFollowSymlinkedTmpDir verifies the startup sweep refuses
+// to delete paths outside the project root when .scbake/tmp is a symlink.
+func TestNew_SweepDoesNotFollowSymlinkedTmpDir(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	outside := t.TempDir()
+	victim := filepath.Join(outside, txDirPrefix+"victim")
+	if err := os.MkdirAll(victim, fileutil.DirPerms); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	old := time.Now().Add(-2 * staleTransactionThreshold)
+	if err := os.Chtimes(victim, old, old); err != nil {
+		t.Fatalf("Chtimes failed: %v", err)
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, fileutil.InternalDir), fileutil.DirPerms); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir)); err != nil {
+		t.Fatalf("Symlink failed: %v", err)
+	}
+
+	if _, err := New(root); err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("sweep followed a symlinked .scbake/tmp and deleted a directory outside the root: %v", err)
 	}
 }
