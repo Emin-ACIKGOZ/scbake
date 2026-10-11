@@ -78,25 +78,12 @@ func New(rootPath string) (*Manager, error) {
 // It is a best-effort, no-op operation: a missing directory or any filesystem
 // error is ignored.
 func sweepStaleTransactions(rootPath string) {
-	tmpDir := filepath.Join(rootPath, fileutil.InternalDir, fileutil.TmpDir)
-
-	// Resolve symlinks and refuse to sweep a temp directory that escapes the
-	// project root (for example when .scbake/tmp is a symlink to shared
-	// storage). The manager must never delete paths outside its root.
-	resolvedRoot, err := filepath.EvalSymlinks(rootPath)
-	if err != nil {
-		return
-	}
-	resolvedTmp, err := filepath.EvalSymlinks(tmpDir)
-	if err != nil {
-		return // No temp directory yet.
-	}
-	rel, err := filepath.Rel(resolvedRoot, resolvedTmp)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	tmpDir, ok := resolvedTmpDir(rootPath)
+	if !ok {
 		return
 	}
 
-	entries, err := os.ReadDir(resolvedTmp)
+	entries, err := os.ReadDir(tmpDir)
 	if err != nil {
 		return
 	}
@@ -110,15 +97,32 @@ func sweepStaleTransactions(rootPath string) {
 		}
 
 		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().After(cutoff) {
+		if err != nil || info.ModTime().After(cutoff) {
 			continue
 		}
 
-		_ = os.RemoveAll(filepath.Join(resolvedTmp, entry.Name()))
+		_ = os.RemoveAll(filepath.Join(tmpDir, entry.Name()))
 	}
+}
+
+// resolvedTmpDir returns the symlink-resolved <root>/.scbake/tmp directory, but
+// only when it lies inside the resolved root. ok is false when the directory is
+// missing or resolves outside the root (for example a symlinked .scbake/tmp);
+// the manager must never delete paths outside its root.
+func resolvedTmpDir(rootPath string) (string, bool) {
+	resolvedRoot, err := filepath.EvalSymlinks(rootPath)
+	if err != nil {
+		return "", false
+	}
+	resolvedTmp, err := filepath.EvalSymlinks(filepath.Join(rootPath, fileutil.InternalDir, fileutil.TmpDir))
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedTmp)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return resolvedTmp, true
 }
 
 // Root returns the absolute project root the transaction is scoped to. Callers
