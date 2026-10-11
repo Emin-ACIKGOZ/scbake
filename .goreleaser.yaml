@@ -45,6 +45,28 @@ checksum:
   extra_files:
     - glob: ./install.sh
 
+# Generate an SPDX JSON SBOM for every binary with Syft and publish it as a
+# release asset. syft must be on PATH (the release workflow installs it).
+sboms:
+  - id: scbake
+    artifacts: binary
+
+# Sign SHA256SUMS keylessly with cosign (Sigstore Fulcio/Rekor). Signing the
+# checksum file transitively authenticates every binary it lists, so individual
+# binaries do not each need a signature. cosign must be on PATH and the release
+# workflow must grant `id-token: write`; the workflow also attests build
+# provenance. Verification is documented in docs/INSTALLING.md.
+signs:
+  - id: cosign-checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+
 changelog:
   sort: asc
   groups:

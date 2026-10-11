@@ -19,6 +19,11 @@ on:
 
 permissions:
   contents: write
+  # Keyless Sigstore signing (cosign) and build-provenance attestations mint a
+  # short-lived OIDC token and persist the resulting attestations. Neither
+  # requires a stored secret: the identity is this workflow's OIDC subject.
+  id-token: write
+  attestations: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -44,6 +49,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install cosign
+        # Keyless (OIDC) signing and verification of SHA256SUMS. Also lets the
+        # goreleaser-action verify the GoReleaser binary's own cosign signature.
+        uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0
+
+      - name: Install syft
+        # GoReleaser's `sboms` pipe shells out to syft to build the SPDX SBOMs.
+        uses: anchore/sbom-action/download-syft@da167eac915b4e86f08b264dbdbc867b61be6f0c # v0.20.5
 
       - name: Install svu
         # actions/setup-go v6+ exports GOTOOLCHAIN=local, which prevents Go from
@@ -130,3 +144,19 @@ jobs:
           args: release --clean --config ${{ runner.temp }}/goreleaser.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest build provenance
+        # SLSA build provenance for the published artifacts, signed with the
+        # same keyless identity. Verify with:
+        #   gh attestation verify <file> --repo Emin-ACIKGOZ/scbake
+        #
+        # GoReleaser keeps the built binaries under dist/scbake_<os>_<arch>_<variant>/
+        # (it renames them to scbake-<os>-<arch> only when uploading), so the
+        # binary subject glob must match that build layout, not the asset name.
+        if: steps.version.outputs.version != ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: |
+            dist/scbake_*/scbake*
+            dist/*.sbom.json
+            dist/SHA256SUMS

@@ -45,6 +45,21 @@ change them without updating `install.sh` and `README.md`:
 
 - Binaries: `scbake-<os>-<arch>` (`scbake-windows-<arch>.exe` on Windows).
 - Checksums: a file named exactly `SHA256SUMS`.
+- SBOMs: `scbake_<version>_<os>_<arch>.sbom.json` (or
+  `scbake.exe_<version>_<os>_<arch>.sbom.json` on Windows), SPDX JSON via Syft.
+- Signature: `SHA256SUMS.sigstore.json`, a keyless cosign (Sigstore) bundle over
+  `SHA256SUMS`. Built-provenance attestations are stored on the repository.
+
+Because the signature covers the checksum file and the checksum file lists every
+binary and `install.sh`, a valid signature authenticates all of them. The
+signing OIDC identity is this workflow on the ref that triggered the run
+(`…/.github/workflows/release.yml@refs/heads/master` for the normal `master`
+push and for `workflow_dispatch` runs, which default to `master`). **Run a
+manual dispatch from `master`** (passing the tag as the `tag` input): running
+the workflow from a tag changes the identity to `@refs/tags/<tag>`, which
+`install.sh`'s pinned identity will not accept. See
+[docs/INSTALLING.md](../docs/INSTALLING.md#verifying-a-release) for the exact
+verification commands.
 
 ## Guardrails
 
@@ -106,7 +121,11 @@ first (`gh release delete vX.Y.Z --yes`) if you want a clean replacement.
 ## Permissions and secrets
 
 - The workflow uses the default `GITHUB_TOKEN` with `contents: write`.
-- No external secrets or tokens are required.
+- `id-token: write` lets cosign and the attestation action mint a short-lived
+  Sigstore signing certificate from GitHub's OIDC issuer.
+- `attestations: write` stores the SLSA build-provenance attestations.
+- No external secrets or signing keys are required: signing is **keyless**
+  (Sigstore Fulcio/Rekor), so there is no long-lived key to leak or rotate.
 
 ## Related
 

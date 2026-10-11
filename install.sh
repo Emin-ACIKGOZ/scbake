@@ -168,6 +168,7 @@ get_latest_version() {
 download_file() {
     local url="$1"
     local output="$2"
+    local label="${3:-Downloading binary...}"
     local retries=3
     local delay=1
     local attempt
@@ -186,7 +187,7 @@ download_file() {
             if [ "$QUIET" -eq 0 ]; then
                 curl -fsSL -o "$output" "$url" 2>/dev/null &
                 dl_pid=$!
-                spinner "Downloading binary..."
+                spinner "$label"
                 wait "$dl_pid" || status=$?
             else
                 curl -fsSL -o "$output" "$url" 2>/dev/null || status=$?
@@ -195,7 +196,7 @@ download_file() {
             if [ "$QUIET" -eq 0 ]; then
                 wget -q -O "$output" "$url" 2>/dev/null &
                 dl_pid=$!
-                spinner "Downloading binary..."
+                spinner "$label"
                 wait "$dl_pid" || status=$?
             else
                 wget -q -O "$output" "$url" 2>/dev/null || status=$?
@@ -261,6 +262,54 @@ verify_checksum() {
     fi
 
     log_success "Checksum verified"
+}
+
+# Verify the SHA256SUMS signature with cosign when available.
+#
+# SHA256SUMS is signed keylessly by the release workflow (Sigstore), so a valid
+# signature is cryptographically bound to that workflow's OIDC identity and
+# cannot be forged by whoever can merely serve files from the release. cosign is
+# not installed everywhere, so when it is absent we warn and continue by
+# default; set SCBAKE_REQUIRE_SIGNATURE=1 to make an unverifiable release fatal.
+verify_release_signature() {
+    local version="$1"
+
+    local bundle="SHA256SUMS.sigstore.json"
+    local bundle_url="${RELEASE_URL}/${version}/${bundle}"
+    local identity="https://github.com/${GITHUB_REPO}/.github/workflows/release.yml@refs/heads/master"
+    local issuer="https://token.actions.githubusercontent.com"
+    local manual="cosign verify-blob --bundle ${bundle} --certificate-identity '${identity}' --certificate-oidc-issuer '${issuer}' SHA256SUMS"
+
+    if ! command_exists cosign; then
+        log_warn "cosign is not installed; skipping signature verification"
+        log_info "After installing cosign (https://docs.sigstore.dev/cosign/system_config/installation/), verify with:"
+        log_info "  $manual"
+        if [ "${SCBAKE_REQUIRE_SIGNATURE:-0}" = "1" ]; then
+            die "SCBAKE_REQUIRE_SIGNATURE=1 but cosign is not installed"
+        fi
+        return 0
+    fi
+
+    # Releases published before signing was introduced have no bundle. Treat a
+    # missing bundle as "unsigned", not as a verification failure, so a pinned
+    # install of an older tag keeps working.
+    if ! download_file "$bundle_url" "$bundle" "Downloading signature..."; then
+        log_warn "No signature bundle at $bundle_url (unsigned release or pre-signing tag)"
+        if [ "${SCBAKE_REQUIRE_SIGNATURE:-0}" = "1" ]; then
+            die "SCBAKE_REQUIRE_SIGNATURE=1 but $bundle could not be downloaded"
+        fi
+        return 0
+    fi
+
+    if ! cosign verify-blob \
+        --bundle "$bundle" \
+        --certificate-identity "$identity" \
+        --certificate-oidc-issuer "$issuer" \
+        "SHA256SUMS" >/dev/null 2>&1; then
+        die "Signature verification failed for SHA256SUMS (cosign verify-blob rejected the bundle)"
+    fi
+
+    log_success "Signature verified"
 }
 
 # Determine install directory
@@ -402,6 +451,9 @@ main() {
     fi
 
     verify_checksum "$binary_name" "SHA256SUMS" "$filename"
+
+    log_info "Verifying signature..."
+    verify_release_signature "$VERSION"
 
     # Make executable
     make_executable "$binary_name"
