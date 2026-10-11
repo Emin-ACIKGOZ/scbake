@@ -64,16 +64,39 @@ graph LR
 
 ### Quick Install (macOS, Linux, Windows)
 
+Install from a **pinned release tag**. Unlike a branch URL, a release tag is
+immutable, and the installer is attached to the release alongside its checksum.
+
+`install.sh` is published as a release asset starting with the first release
+that includes this installer change; older tags predate it and do not have the
+asset (their `install.sh` URL 404s). Use the **latest** tag from
+<https://github.com/Emin-ACIKGOZ/scbake/releases/latest>:
+
 ```bash
-curl -sSL https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh | bash
+# Set TAG to a release that ships install.sh. Use the latest release tag
+# (see https://github.com/Emin-ACIKGOZ/scbake/releases/latest) — older tags
+# do not contain the installer asset.
+TAG=<tag>
+BASE="https://github.com/Emin-ACIKGOZ/scbake/releases/download/${TAG}"
+
+# Download the installer and verify it against the release checksums
+# (on macOS, use: shasum -a 256 -c -)
+curl -fsSL -o install.sh "${BASE}/install.sh"
+curl -fsSL -o SHA256SUMS "${BASE}/SHA256SUMS"
+grep 'install.sh$' SHA256SUMS | sha256sum -c -
+
+# Run the installer, pinned to the same tag
+bash install.sh "${TAG}"
 ```
 
-Or with `wget`:
-```bash
-wget -qO- https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh | bash
-```
+The installer detects your OS/architecture and installs that release's binary to
+your PATH. It downloads the release's `SHA256SUMS` and verifies the binary
+against it, aborting if the checksums file is missing or the hash does not match.
 
-The installer detects your OS/architecture and installs the latest binary to your PATH.
+> **Do not** pipe a branch URL such as
+> `https://raw.githubusercontent.com/Emin-ACIKGOZ/scbake/master/install.sh`
+> into `bash`: `master` is mutable, so the script can change between review and
+> execution. Download a pinned release (and verify it) instead.
 
 **See [INSTALLING.md](docs/INSTALLING.md)** for detailed instructions, troubleshooting, and alternative installation methods:
 - Go Install
