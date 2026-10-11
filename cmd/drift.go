@@ -31,11 +31,13 @@ var driftCmd = &cobra.Command{
 	Short: "Detect local changes to managed files",
 	Long: `Compares the managed_files hashes recorded in scbake.toml against the
 working tree and lists any file that was modified or deleted since scbake wrote
-it. Exits non-zero when drift is found, so it can gate a CI pipeline.
+it. Detection always scans every managed file in the manifest, regardless of
+<path>, and exits non-zero when drift is found, so it can gate a CI pipeline.
 
 With --repair, the recorded templates are re-applied through the same
 reconciliation used by 'update', restoring generated content while preserving
-local edits according to --conflict-strategy.`,
+local edits according to --conflict-strategy. Because 'merge' preserves local
+edits it does not clear drift; use 'overwrite' to force restoration.`,
 	Args:         cobra.MaximumNArgs(1),
 	SilenceUsage: true,
 	RunE: func(_ *cobra.Command, args []string) error {

@@ -219,11 +219,14 @@ scbake drift [--repair] [--conflict-strategy <strategy>] [<path>]
 | `<path>` | Target directory | `.`     |
 
 - **Detection is read-only.** No templates are rendered, no transaction is
-  opened, and the network is never touched.
+  opened, and the network is never touched. Detection always scans every
+  managed file recorded in the manifest, not just the `<path>` project.
 - **Modified vs. missing.** Each managed file is reported as `modified` (bytes
   changed) or `missing` (deleted), with its recorded and on-disk hashes.
 - **Repair** (`--repair`) reuses the same reconciliation as `update`, so local
   edits are preserved according to `--conflict-strategy` (`merge` by default).
+  Because `merge` preserves local edits, it does not clear drift; use
+  `--conflict-strategy overwrite` to force generated content back.
 
 **Example:**
 
@@ -231,8 +234,11 @@ scbake drift [--repair] [--conflict-strategy <strategy>] [<path>]
 # Fail a CI job if generated infrastructure was edited or deleted.
 scbake drift
 
-# Restore generated content, preserving non-overlapping local edits.
-scbake drift --repair
+# Force generated content back (discarding local edits).
+scbake drift --repair --conflict-strategy overwrite
+
+# Re-apply template changes, keeping non-overlapping local edits.
+scbake drift --repair --conflict-strategy merge
 ```
 
 

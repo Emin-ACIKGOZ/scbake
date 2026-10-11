@@ -175,18 +175,28 @@ func TestDetect_ScopedSubprojects(t *testing.T) {
 	}
 }
 
+// legacyProject builds a pre-SCB-057 manifest whose flat key points at a
+// project-relative file, returning the root, manifest and pristine content.
+func legacyProject(t *testing.T, projects ...types.Project) (string, *types.Manifest, []byte) {
+	t.Helper()
+	root := t.TempDir()
+	content := []byte("legacy license\n")
+	for _, p := range projects {
+		mustWrite(t, filepath.Join(root, filepath.FromSlash(p.Path), "LICENSE"), content)
+	}
+	m := &types.Manifest{
+		Projects:     projects,
+		ManagedFiles: map[string]string{"LICENSE": hashOf(content)},
+	}
+	return root, m, content
+}
+
 // TestDetect_LegacyFlatKeyNotFalseMissing: a pre-SCB-057 manifest stores the
 // project-relative key. The write path still honors it, so detection must too,
 // or `drift` would report drift for a file `apply` considers clean.
 func TestDetect_LegacyFlatKeyNotFalseMissing(t *testing.T) {
-	root := t.TempDir()
-	content := []byte("legacy license\n")
-	mustWrite(t, filepath.Join(root, "services", "a", "LICENSE"), content)
+	root, m, _ := legacyProject(t, types.Project{Name: "a", Path: "services/a", Language: "go"})
 
-	m := &types.Manifest{
-		Projects:     []types.Project{{Name: "a", Path: "services/a", Language: "go"}},
-		ManagedFiles: map[string]string{"LICENSE": hashOf(content)},
-	}
 	got, err := Detect(m, root)
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
@@ -194,10 +204,16 @@ func TestDetect_LegacyFlatKeyNotFalseMissing(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("legacy managed file reported as drift: %+v", got)
 	}
+}
 
-	// An edited legacy file is Modified, not falsely Missing.
-	mustWrite(t, filepath.Join(root, "services", "a", "LICENSE"), []byte("alice edited\n"))
-	got, err = Detect(m, root)
+// TestDetect_LegacyFlatKeyEditedThenDeleted: an edited legacy file is Modified
+// (not falsely Missing), and a deleted one is Missing.
+func TestDetect_LegacyFlatKeyEditedThenDeleted(t *testing.T) {
+	root, m, _ := legacyProject(t, types.Project{Name: "a", Path: "services/a", Language: "go"})
+	license := filepath.Join(root, "services", "a", "LICENSE")
+
+	mustWrite(t, license, []byte("alice edited\n"))
+	got, err := Detect(m, root)
 	if err != nil {
 		t.Fatalf("Detect after edit: %v", err)
 	}
@@ -205,8 +221,7 @@ func TestDetect_LegacyFlatKeyNotFalseMissing(t *testing.T) {
 		t.Fatalf("edited legacy file = %+v, want Modified", got)
 	}
 
-	// And a genuinely deleted legacy file is still Missing.
-	if err := os.Remove(filepath.Join(root, "services", "a", "LICENSE")); err != nil {
+	if err := os.Remove(license); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	got, err = Detect(m, root)
@@ -215,6 +230,25 @@ func TestDetect_LegacyFlatKeyNotFalseMissing(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Kind != Missing {
 		t.Fatalf("deleted legacy file = %+v, want Missing", got)
+	}
+}
+
+// TestDetect_LegacyDivergenceInAnyProjectIsDrift: a legacy flat key is the
+// baseline for every project that holds that filename, so a divergence in one
+// project must not be masked by a pristine copy in another.
+func TestDetect_LegacyDivergenceInAnyProjectIsDrift(t *testing.T) {
+	root, m, _ := legacyProject(t,
+		types.Project{Name: "a", Path: "services/a", Language: "go"},
+		types.Project{Name: "b", Path: "services/b", Language: "go"},
+	)
+	mustWrite(t, filepath.Join(root, "services", "a", "LICENSE"), []byte("alice edited\n"))
+
+	got, err := Detect(m, root)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != Modified {
+		t.Fatalf("divergence masked by a pristine sibling: %+v", got)
 	}
 }
 

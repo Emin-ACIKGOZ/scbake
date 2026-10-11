@@ -94,11 +94,13 @@ func inspect(m *types.Manifest, root, key, recorded string) (Finding, bool, erro
 // inspectLegacy resolves a key that is absent at the manifest root against the
 // manifest's project paths. This is the read-only mirror of the write path's
 // legacy-key migration rule: a project-relative file whose content still
-// matches the recorded hash is clean. A project-relative file that exists but
-// no longer matches is Modified; no file anywhere is Missing.
+// matches the recorded hash is clean. Because a flat legacy key is the baseline
+// for every project that holds that filename, a divergence in any one of them
+// is drift and must not be masked by a pristine copy elsewhere. No copy
+// anywhere is Missing.
 func inspectLegacy(m *types.Manifest, root, key, recorded string) (Finding, bool, error) {
 	keyPath := filepath.FromSlash(key)
-	var actual string
+	var matched bool
 	for _, p := range m.Projects {
 		if p.Path == "" || p.Path == "." {
 			continue // Already probed as the root-relative path.
@@ -109,13 +111,13 @@ func inspectLegacy(m *types.Manifest, root, key, recorded string) (Finding, bool
 			continue
 		}
 		h := tasks.HashContent(data)
-		if h == recorded {
-			return Finding{}, false, nil
+		if h != recorded {
+			return Finding{Path: key, Kind: Modified, Recorded: recorded, Actual: h}, true, nil
 		}
-		actual = h
+		matched = true
 	}
-	if actual != "" {
-		return Finding{Path: key, Kind: Modified, Recorded: recorded, Actual: actual}, true, nil
+	if matched {
+		return Finding{}, false, nil
 	}
 	return Finding{Path: key, Kind: Missing, Recorded: recorded}, true, nil
 }
