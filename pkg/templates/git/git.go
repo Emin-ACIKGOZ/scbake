@@ -15,6 +15,9 @@ import (
 // Handler implements the templates.Handler interface for Git.
 type Handler struct{}
 
+// gitCmd is the Git executable invoked for repository setup tasks.
+const gitCmd = "git"
+
 // GetTasks returns the plan to initialize a Git repository.
 // It performs `git init`, `git add .`, and `git commit` for a fresh target.
 //
@@ -69,7 +72,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		return nil, err
 	}
 	plan = append(plan, &tasks.ExecCommandTask{
-		Cmd:              "git",
+		Cmd:              gitCmd,
 		Args:             []string{"init"},
 		Desc:             "Initialize Git repository",
 		TaskPrio:         int(prio),
@@ -83,7 +86,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		return nil, err
 	}
 	plan = append(plan, &tasks.ExecCommandTask{
-		Cmd:         "git",
+		Cmd:         gitCmd,
 		Args:        []string{"-c", noHooks, "add", "."},
 		Desc:        "Stage files",
 		TaskPrio:    int(prio),
@@ -99,7 +102,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		return nil, err
 	}
 	plan = append(plan, &tasks.ExecCommandTask{
-		Cmd:         "git",
+		Cmd:         gitCmd,
 		Args:        []string{"-c", noHooks, "commit", "--allow-empty", "-m", "scbake: Apply templates"},
 		Desc:        "Create initial commit",
 		TaskPrio:    int(prio),

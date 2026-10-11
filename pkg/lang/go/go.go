@@ -17,6 +17,9 @@ import (
 //go:embed main.go.tpl gitignore.tpl schema.json
 var templates embed.FS
 
+// goModSubcommand is the `go mod` subcommand used for module management.
+const goModSubcommand = "mod"
+
 // Handler implements the lang.Handler interface for Go projects.
 type Handler struct{}
 
@@ -80,7 +83,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		}
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "go",
-			Args:        []string{"mod", "init", moduleName}, // Use sanitized name
+			Args:        []string{goModSubcommand, "init", moduleName}, // Use sanitized name
 			Desc:        "Run go mod init " + moduleName,
 			TaskPrio:    int(p),
 			RunInTarget: true,
@@ -93,7 +96,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		}
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "go",
-			Args:        []string{"mod", "tidy"},
+			Args:        []string{goModSubcommand, "tidy"},
 			Desc:        "Run go mod tidy",
 			TaskPrio:    int(p),
 			RunInTarget: true,
@@ -107,7 +110,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		}
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:         "go",
-			Args:        []string{"mod", "tidy"},
+			Args:        []string{goModSubcommand, "tidy"},
 			Desc:        "Run go mod tidy (project exists)",
 			TaskPrio:    int(p),
 			RunInTarget: true,
