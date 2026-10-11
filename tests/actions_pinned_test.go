@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,44 +43,66 @@ func TestWorkflowActionsPinnedToSHA(t *testing.T) {
 
 	total := 0
 	for _, path := range paths {
-		data, err := os.ReadFile(path) //nolint:gosec // fixed path under the module root
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-
-		for i, line := range strings.Split(string(data), "\n") {
-			m := usesKeyRe.FindStringSubmatch(line)
-			if m == nil {
-				continue
-			}
-
-			// Drop a trailing `# comment` (e.g. `...@<sha> # v7`).
-			value := strings.TrimSpace(m[1])
-			if idx := strings.Index(value, "#"); idx >= 0 {
-				value = strings.TrimSpace(value[:idx])
-			}
-			if value == "" {
-				continue
-			}
-
-			total++
-
-			// Out of scope: container image references are not actions.
-			if strings.HasPrefix(value, "docker://") {
-				continue
-			}
-			// Local actions are pinned to the checked-out repository itself.
-			if strings.HasPrefix(value, "./") {
-				continue
-			}
-
-			if !pinnedActionRe.MatchString(value) {
-				t.Errorf("%s:%d: third-party action must be pinned to a full-length commit SHA (got %q)", path, i+1, value)
-			}
+		n, findings := scanWorkflowUses(t, path)
+		total += n
+		for _, finding := range findings {
+			t.Error(finding)
 		}
 	}
 
 	if total == 0 {
 		t.Fatalf("%s: no `uses:` entries detected; the scanner is broken", dir)
 	}
+}
+
+// scanWorkflowUses returns the number of `uses:` entries in a workflow file and
+// the unpinned third-party references found, one message per offending line.
+func scanWorkflowUses(t *testing.T, path string) (int, []string) {
+	t.Helper()
+
+	data, err := os.ReadFile(path) //nolint:gosec // fixed path under the module root
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	total := 0
+	var findings []string
+	for i, line := range strings.Split(string(data), "\n") {
+		value, ok := usesValue(line)
+		if !ok {
+			continue
+		}
+		total++
+		if !actionPinned(value) {
+			findings = append(findings, fmt.Sprintf(
+				"%s:%d: third-party action must be pinned to a full-length commit SHA (got %q)",
+				path, i+1, value,
+			))
+		}
+	}
+	return total, findings
+}
+
+// usesValue extracts the value of a `uses:` entry, dropping a trailing
+// `# comment` (e.g. `...@<sha> # v7`). ok is false for non-`uses:` lines.
+func usesValue(line string) (value string, ok bool) {
+	m := usesKeyRe.FindStringSubmatch(line)
+	if m == nil {
+		return "", false
+	}
+	value = strings.TrimSpace(m[1])
+	if idx := strings.Index(value, "#"); idx >= 0 {
+		value = strings.TrimSpace(value[:idx])
+	}
+	return value, value != ""
+}
+
+// actionPinned reports whether value is an acceptable action reference: a local
+// path, a `docker://` image (out of scope), or an `<owner>/<repo>@<40-hex-sha>`
+// pin.
+func actionPinned(value string) bool {
+	if strings.HasPrefix(value, "docker://") || strings.HasPrefix(value, "./") {
+		return true
+	}
+	return pinnedActionRe.MatchString(value)
 }
