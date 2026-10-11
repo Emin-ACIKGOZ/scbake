@@ -8,6 +8,17 @@ import (
 	"scbake/internal/filesystem/transaction"
 )
 
+// Conflict resolution strategies accepted by --conflict-strategy.
+const (
+	ConflictFail      = "fail"
+	ConflictOverwrite = "overwrite"
+	ConflictArtifact  = "artifact"
+	ConflictKeepLocal = "keep-local"
+	// ConflictMerge performs a three-way merge against the pristine base shadow,
+	// falling back to an artifact when no base exists or the merge conflicts.
+	ConflictMerge = "merge"
+)
+
 // TaskContext holds all the data a Task needs to run.
 type TaskContext struct {
 	// Ctx is the application context, for cancellation.

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"scbake/internal/merge"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 	"strings"
@@ -100,26 +101,31 @@ func HashContent(content []byte) string {
 }
 
 // checkReconciliation evaluates drift and conflict strategies.
-// Returns the path to write to, or an error if the operation should abort.
+//
+// It returns the path to write to (empty to skip), an optional replacement for
+// the pending render (used by the merge strategy), and an error if the
+// operation should abort.
 //
 // outputRelPath is the target-relative path used to read the file; ledgerKey is
-// the project-scoped managed_files key used for state lookup.
+// the project-scoped managed_files key used for state lookup; newContent is the
+// pristine render the template is trying to write.
 func checkReconciliation(
 	absFinalPath, outputRelPath, ledgerKey, newContentHash string,
+	newContent []byte,
 	tc types.TaskContext,
-) (string, error) {
+) (string, []byte, error) {
 	// If force is enabled, we always overwrite the original file, ignoring state.
 	if tc.Force {
-		return absFinalPath, nil
+		return absFinalPath, nil, nil
 	}
 
 	// Read existing file
 	existingContent, err := fileutil.SafeReadFile(tc.TargetPath, outputRelPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return absFinalPath, nil // Safe to write, file doesn't exist
+			return absFinalPath, nil, nil // Safe to write, file doesn't exist
 		}
-		return "", fmt.Errorf("failed to read existing file %s: %w", outputRelPath, err)
+		return "", nil, fmt.Errorf("failed to read existing file %s: %w", outputRelPath, err)
 	}
 
 	existingHash := HashContent(existingContent)
@@ -129,34 +135,67 @@ func checkReconciliation(
 
 	// If the file exists but we've never managed it (or didn't record it), it's a conflict
 	if originalHash == "" {
-		return handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
+		p, cErr := handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
+		return p, nil, cErr
 	}
 
-	// If the file exactly matches what we originally generated, it hasn't drifted. Safe to update.
+	// The template has not changed since we recorded this file. For the merge
+	// strategy there is nothing to apply regardless of local edits, which is
+	// what makes a second `update` a no-op. Other strategies keep the historic
+	// behavior of surfacing drift.
+	if newContentHash == originalHash && tc.ConflictStrategy == types.ConflictMerge {
+		return "", nil, nil
+	}
+
+	// The file still matches what scbake last wrote, so it has no local drift
+	// and the new template content can be written directly.
 	if existingHash == originalHash {
-		return absFinalPath, nil
+		return absFinalPath, nil, nil
 	}
 
-	// If the existing file happens to already match what we're trying to generate, we're good (idempotent).
+	// The on-disk file already equals the pending render: converged.
 	if existingHash == newContentHash {
-		return absFinalPath, nil
+		return absFinalPath, nil, nil
 	}
 
-	// Drift detected! The user modified the file.
-	return handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
+	// Both the template and the file changed. Merge when asked and a pristine
+	// base is available; otherwise fall back to an artifact so local edits are
+	// never clobbered.
+	if tc.ConflictStrategy == types.ConflictMerge {
+		return reconcileMerge(absFinalPath, outputRelPath, ledgerKey, existingContent, newContent, tc)
+	}
+
+	p, cErr := handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
+	return p, nil, cErr
+}
+
+// reconcileMerge performs the `merge` strategy: a clean three-way merge writes
+// the merged content, anything else writes an artifact so no local edit is lost.
+func reconcileMerge(
+	absFinalPath, outputRelPath, ledgerKey string,
+	existingContent, newContent []byte,
+	tc types.TaskContext,
+) (string, []byte, error) {
+	if base, ok := readBaseShadow(tc, ledgerKey); ok {
+		if merged, status := merge.Merge(base, existingContent, newContent); status == merge.Clean {
+			return absFinalPath, merged, nil
+		}
+	}
+	p, cErr := handleConflict(absFinalPath, outputRelPath, types.ConflictMerge)
+	return p, nil, cErr
 }
 
 func handleConflict(absFinalPath, outputRelPath, strategy string) (string, error) {
 	switch strategy {
-	case "overwrite":
+	case types.ConflictOverwrite:
 		return absFinalPath, nil
-	case "artifact":
+	case types.ConflictArtifact, types.ConflictMerge:
 		fmt.Fprintf(os.Stderr, "⚠️  Conflict in %s (user modifications detected). Writing new template to artifact.\n", outputRelPath)
 		return absFinalPath + ".scbake-new", nil
-	case "keep-local":
+	case types.ConflictKeepLocal:
 		fmt.Fprintf(os.Stderr, "⚠️  Conflict in %s (user modifications detected). Skipping update (--strategy=keep-local).\n", outputRelPath)
 		return "", nil // Signal to skip
-	case "fail":
+	case types.ConflictFail:
 		fallthrough
 	default:
 		return "", fmt.Errorf("file %s has manual modifications (drift detected). Use --conflict-strategy to resolve", outputRelPath)
@@ -198,44 +237,188 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 	}
 
 	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
-	writePath, err := checkReconciliation(absPath, outputRelPath, ledgerKey, newHash, tc)
+	writePath, override, err := checkReconciliation(absPath, outputRelPath, ledgerKey, newHash, content, tc)
 	if err != nil {
 		return err // Conflict strategy is 'fail'
 	}
 	if writePath == "" {
-		return nil // Conflict strategy is 'keep-local' (skip)
+		return nil // Skip (keep-local, unchanged, or a no-op)
 	}
 
 	if tc.DryRun {
 		return nil
 	}
 
+	// Idempotent artifact: a repeated conflict must not rewrite a side artifact
+	// whose content is already identical.
+	if writePath != absPath && sameFileContent(writePath, content) {
+		return nil
+	}
+
+	toWrite := content
+	if override != nil {
+		toWrite = override
+	}
+	if err := trackAndWrite(tc, writePath, toWrite, perm); err != nil {
+		return err
+	}
+
+	// The ledger entry (and the pristine base shadow that mirrors it) only
+	// advances when we actually wrote the canonical path. Under artifact or
+	// keep-local we write elsewhere (or nowhere), so the original file keeps its
+	// previous baseline (SCB-056). The recorded hash is always the pristine
+	// render, never the possibly-merged content, so a merged file stays
+	// recognized as locally modified.
+	if writePath == absPath {
+		recordManagedHash(tc.Manifest, ledgerKey, newHash)
+		return writeBaseShadow(tc, ledgerKey, content)
+	}
+	return nil
+}
+
+// trackAndWrite registers path with the transaction and writes content to it
+// through the symlink-safe helpers.
+func trackAndWrite(tc types.TaskContext, path string, content []byte, perm os.FileMode) error {
 	if tc.Tx != nil {
-		if err := tc.Tx.Track(writePath); err != nil {
-			return fmt.Errorf("failed to track file %s: %w", writePath, err)
+		if err := tc.Tx.Track(path); err != nil {
+			return fmt.Errorf("failed to track file %s: %w", path, err)
 		}
 	}
 
-	dir := filepath.Dir(writePath)
-	base := filepath.Base(writePath)
-	f, err := fileutil.SafeOpenFile(dir, base, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	f, err := fileutil.SafeOpenFile(filepath.Dir(path), filepath.Base(path), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
-		return fmt.Errorf("failed to create file %s: %w", writePath, err)
+		return fmt.Errorf("failed to create file %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
 
-	if _, err = f.Write(content); err != nil {
-		return fmt.Errorf("failed to write to %s: %w", writePath, err)
-	}
-
-	// Only record the ledger entry when we actually wrote the content to the
-	// reconciled original path. Under --conflict-strategy=artifact we write to
-	// a "<path>.scbake-new" sibling, leaving the original file untouched, so its
-	// previously recorded hash must be preserved.
-	if writePath == absPath {
-		recordManagedHash(tc.Manifest, ledgerKey, newHash)
+	if _, err := f.Write(content); err != nil {
+		return fmt.Errorf("failed to write to %s: %w", path, err)
 	}
 	return nil
+}
+
+// sameFileContent reports whether path already holds content byte-for-byte.
+func sameFileContent(path string, content []byte) bool {
+	existing, err := fileutil.SafeReadFile(filepath.Dir(path), filepath.Base(path))
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(existing, content)
+}
+
+// taskRoot returns the absolute root a task's state lives under: the
+// transaction root when present, else the absolute target path.
+func taskRoot(tc types.TaskContext) string {
+	if tc.Tx != nil && tc.Tx.Root() != "" {
+		return tc.Tx.Root()
+	}
+	if tc.TargetPath == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(tc.TargetPath)
+	if err != nil {
+		return ""
+	}
+	return abs
+}
+
+// baseShadowPath returns the .scbake base path for a ledger key.
+func baseShadowPath(root, ledgerKey string) (string, error) {
+	rel := filepath.Join(fileutil.InternalDir, fileutil.BaseDir, filepath.FromSlash(ledgerKey))
+	return fileutil.SafePath(root, rel)
+}
+
+// trackBaseAncestors registers the not-yet-existing directories of a base
+// shadow with the transaction, stopping below .scbake. The transaction's own
+// temp directory also lives under .scbake, so .scbake itself must never be
+// registered as created: a rollback would RemoveAll it and delete the backups.
+func trackBaseAncestors(tc types.TaskContext, absPath string) error {
+	if tc.Tx == nil || tc.DryRun {
+		return nil
+	}
+	root := tc.Tx.Root()
+	if root == "" {
+		return nil
+	}
+	stop := filepath.Join(root, fileutil.InternalDir)
+
+	var missing []string
+	for dir := filepath.Dir(absPath); dir != stop && isStrictlyWithin(stop, dir); dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(dir); err == nil {
+			break // First existing ancestor: everything above it already exists.
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("failed to inspect base shadow ancestor %s: %w", dir, err)
+		}
+		missing = append(missing, dir)
+	}
+	// Register shallowest-first so reverse-order rollback removes the deepest
+	// first; RemoveAll on .scbake/base is safe and leaves .scbake/tmp intact.
+	for i := len(missing) - 1; i >= 0; i-- {
+		if err := tc.Tx.Track(missing[i]); err != nil {
+			return fmt.Errorf("failed to track base shadow ancestor %s: %w", missing[i], err)
+		}
+	}
+	return nil
+}
+
+// writeBaseShadow stores the pristine rendered content of a managed file under
+// <root>/.scbake/base/<ledgerKey>. `update` reads it back as the common ancestor
+// for a three-way merge. It is tracked by the transaction so a rollback removes
+// or restores it alongside the file it mirrors.
+func writeBaseShadow(tc types.TaskContext, ledgerKey string, content []byte) error {
+	if tc.Tx == nil || tc.DryRun || ledgerKey == "" {
+		return nil
+	}
+	root := tc.Tx.Root()
+	if root == "" {
+		return nil
+	}
+	absPath, err := baseShadowPath(root, ledgerKey)
+	if err != nil {
+		return fmt.Errorf("invalid base shadow path for %s: %w", ledgerKey, err)
+	}
+	if err := tc.Tx.Track(absPath); err != nil {
+		return fmt.Errorf("failed to track base shadow %s: %w", absPath, err)
+	}
+	if err := trackBaseAncestors(tc, absPath); err != nil {
+		return err
+	}
+	return writeBaseFile(absPath, content)
+}
+
+// writeBaseFile creates the base shadow's parent directory and writes content.
+func writeBaseFile(absPath string, content []byte) error {
+	dir := filepath.Dir(absPath)
+	if err := os.MkdirAll(dir, fileutil.DirPerms); err != nil {
+		return fmt.Errorf("failed to create base shadow directory %s: %w", dir, err)
+	}
+	f, err := fileutil.SafeOpenFile(dir, filepath.Base(absPath), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileutil.PrivateFilePerms)
+	if err != nil {
+		return fmt.Errorf("failed to create base shadow %s: %w", absPath, err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.Write(content); err != nil {
+		return fmt.Errorf("failed to write base shadow %s: %w", absPath, err)
+	}
+	return nil
+}
+
+// readBaseShadow returns the pristine base content for a managed file, if it
+// exists.
+func readBaseShadow(tc types.TaskContext, ledgerKey string) ([]byte, bool) {
+	if ledgerKey == "" {
+		return nil, false
+	}
+	root := taskRoot(tc)
+	if root == "" {
+		return nil, false
+	}
+	rel := filepath.Join(fileutil.InternalDir, fileutil.BaseDir, filepath.FromSlash(ledgerKey))
+	data, err := fileutil.SafeReadFile(root, rel)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
 }
 
 // recordManagedHash stores the SHA-256 hash of a file scbake wrote at key in the

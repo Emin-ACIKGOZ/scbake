@@ -13,6 +13,10 @@ const (
 	// TmpDir is the subdirectory for transactional backups.
 	TmpDir = "tmp"
 
+	// BaseDir is the subdirectory that stores the pristine rendered content of
+	// managed files. It is the common ancestor used by `update` three-way merges.
+	BaseDir = "base"
+
 	// GitDir is the standard Git repository directory marker.
 	GitDir = ".git"
 

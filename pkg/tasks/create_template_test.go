@@ -10,10 +10,11 @@ import (
 	"path/filepath"
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/types"
+	"scbake/internal/util/fileutil"
 	"testing"
 )
 
-//go:embed testdata/simple.tpl
+//go:embed testdata/simple.tpl testdata/merge_echo.tpl
 var testTemplates embed.FS
 
 func TestCreateTemplateTask(t *testing.T) {
@@ -650,5 +651,184 @@ func TestWriteManagedFile_LegacyFlatKeyStillRecognized(t *testing.T) {
 	tc := types.TaskContext{TargetPath: target, Manifest: manifest, Tx: tx}
 	if err := WriteManagedFile(tc, "LICENSE", content, 0o600); err != nil {
 		t.Fatalf("legacy flat key not honored (false drift): %v", err)
+	}
+}
+
+// newMergeTask returns a CreateTemplateTask that writes body to Makefile.
+func newMergeTask(body string) *CreateTemplateTask {
+	return &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/merge_echo.tpl",
+		OutputPath:   "Makefile",
+		TemplateData: body,
+		Desc:         "render",
+		TaskPrio:     100,
+	}
+}
+
+// mergeTestContext builds a task context wired to a live transaction so the
+// base shadow is exercised.
+func mergeTestContext(t *testing.T) (string, *transaction.Manager, types.TaskContext) {
+	t.Helper()
+	root := t.TempDir()
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+	m := &types.Manifest{SbakeVersion: "v1.0.0"}
+	tc := types.TaskContext{
+		TargetPath:       root,
+		Manifest:         m,
+		Tx:               tx,
+		ConflictStrategy: types.ConflictMerge,
+	}
+	return root, tx, tc
+}
+
+// TestWriteManagedFile_MergeStrategyMergesDisjointEdits is the positive path:
+// a local edit and a disjoint template edit are both preserved.
+func TestWriteManagedFile_MergeStrategyMergesDisjointEdits(t *testing.T) {
+	root, tx, tc := mergeTestContext(t)
+	defer func() { _ = tx.Rollback() }()
+
+	if err := newMergeTask("alpha\nshared\nomega\n").Execute(tc); err != nil {
+		t.Fatalf("initial execute: %v", err)
+	}
+	// I5: the pristine base shadow is captured for future merges.
+	if _, err := os.Stat(filepath.Join(root, fileutil.InternalDir, fileutil.BaseDir, "Makefile")); err != nil {
+		t.Fatalf("base shadow missing: %v", err)
+	}
+
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("alpha-local\nshared\nomega\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := newMergeTask("alpha\nshared\nomega-template\n").Execute(tc); err != nil {
+		t.Fatalf("merge execute: %v", err)
+	}
+
+	//nolint:gosec // test temp directory
+	got, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "alpha-local\nshared\nomega-template\n"
+	if string(got) != want {
+		t.Fatalf("merged = %q, want %q", got, want)
+	}
+}
+
+// TestWriteManagedFile_MergeConflictWritesArtifact is the conflicting path: the
+// local file is preserved and the template render lands in an artifact, and the
+// ledger is not advanced (SCB-056).
+func TestWriteManagedFile_MergeConflictWritesArtifact(t *testing.T) {
+	root, tx, tc := mergeTestContext(t)
+	defer func() { _ = tx.Rollback() }()
+
+	if err := newMergeTask("alpha\nshared\nomega\n").Execute(tc); err != nil {
+		t.Fatalf("initial execute: %v", err)
+	}
+	baseHash := tc.Manifest.ManagedFiles["Makefile"]
+
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("alpha\nshared-LOCAL\nomega\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := newMergeTask("alpha\nshared-TEMPLATE\nomega\n").Execute(tc); err != nil {
+		t.Fatalf("merge execute: %v", err)
+	}
+
+	//nolint:gosec // test temp directory
+	local, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(local) != "alpha\nshared-LOCAL\nomega\n" {
+		t.Fatalf("conflict clobbered local file: %q", local)
+	}
+	//nolint:gosec // test temp directory
+	artifact, err := os.ReadFile(filepath.Join(root, "Makefile.scbake-new"))
+	if err != nil {
+		t.Fatalf("artifact not written: %v", err)
+	}
+	if string(artifact) != "alpha\nshared-TEMPLATE\nomega\n" {
+		t.Fatalf("artifact = %q", artifact)
+	}
+	if got := tc.Manifest.ManagedFiles["Makefile"]; got != baseHash {
+		t.Fatalf("artifact advanced the ledger: got %s, want %s", got, baseHash)
+	}
+}
+
+// TestWriteManagedFile_MergeWithoutBaseFallsBackToArtifact covers the migration
+// path: a managed file with drift but no base shadow must not crash and must
+// not clobber the local file.
+func TestWriteManagedFile_MergeWithoutBaseFallsBackToArtifact(t *testing.T) {
+	root := t.TempDir()
+	original := []byte("original\n")
+	m := &types.Manifest{ManagedFiles: map[string]string{"config.txt": HashContent(original)}}
+	tc := types.TaskContext{
+		TargetPath:       root,
+		Manifest:         m,
+		ConflictStrategy: types.ConflictMerge,
+	}
+
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(root, "config.txt"), []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	task := &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/merge_echo.tpl",
+		OutputPath:   "config.txt",
+		TemplateData: "remote\n",
+		Desc:         "render",
+		TaskPrio:     100,
+	}
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("merge execute without base: %v", err)
+	}
+
+	//nolint:gosec // test temp directory
+	local, _ := os.ReadFile(filepath.Join(root, "config.txt"))
+	if string(local) != "local\n" {
+		t.Fatalf("local file clobbered: %q", local)
+	}
+	if _, err := os.Stat(filepath.Join(root, "config.txt.scbake-new")); err != nil {
+		t.Fatalf("expected artifact: %v", err)
+	}
+}
+
+// TestWriteManagedFile_MergeUnmanagedExistingFileWritesArtifact ensures the
+// merge strategy never overwrites a pre-existing file scbake never managed.
+func TestWriteManagedFile_MergeUnmanagedExistingFileWritesArtifact(t *testing.T) {
+	root := t.TempDir()
+	m := &types.Manifest{}
+	tc := types.TaskContext{
+		TargetPath:       root,
+		Manifest:         m,
+		ConflictStrategy: types.ConflictMerge,
+	}
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(root, "config.txt"), []byte("user\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	task := &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/merge_echo.tpl",
+		OutputPath:   "config.txt",
+		TemplateData: "template\n",
+		Desc:         "render",
+		TaskPrio:     100,
+	}
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("merge execute on unmanaged file: %v", err)
+	}
+	//nolint:gosec // test temp directory
+	local, _ := os.ReadFile(filepath.Join(root, "config.txt"))
+	if string(local) != "user\n" {
+		t.Fatalf("unmanaged file clobbered: %q", local)
+	}
+	if _, err := os.Stat(filepath.Join(root, "config.txt.scbake-new")); err != nil {
+		t.Fatalf("expected artifact: %v", err)
 	}
 }

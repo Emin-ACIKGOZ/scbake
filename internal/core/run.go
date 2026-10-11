@@ -48,6 +48,11 @@ type RunContext struct {
 	License          string
 	CopyrightHolder  string
 	SetVars          map[string]string
+
+	// Update indicates a manifest-driven `update` rather than a flag-driven
+	// `apply`. It restricts execution to managed file writes and skips
+	// environment prerequisites, so re-running a project is safe.
+	Update bool
 }
 
 // A struct to hold all proposed manifest changes
@@ -82,6 +87,12 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 		return err
 	}
 
+	// `update` reconciles managed files only. Re-running side-effecting tasks
+	// (go mod init, npm install, ...) would fail or mutate the environment.
+	if rc.Update {
+		plan.Tasks = managedWriteTasks(plan.Tasks)
+	}
+
 	// 4. Build Task Context & Validate Schemas
 	tc, cancelCtx, err := buildTaskContext(rc, m, changes, tx)
 	if err != nil {
@@ -94,6 +105,75 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	}
 
 	return executeAndFinalize(reporter, plan, tc, m, changes, rootPath, tx)
+}
+
+// RunUpdate re-applies the template selection recorded in the manifest to an
+// already-generated project. It is `apply` driven by the manifest instead of by
+// flags, which is what makes it idempotent and non-interactive.
+func RunUpdate(rc RunContext, reporter types.Reporter) error {
+	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
+
+	m, rootPath, err := manifest.Load(rc.TargetPath)
+	if err != nil {
+		return fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
+	}
+
+	lang, withTemplates, relPath, err := resolveUpdateSelection(m, rootPath, rc.TargetPath)
+	if err != nil {
+		return err
+	}
+	if lang == "" && len(withTemplates) == 0 {
+		return fmt.Errorf("%s records no templates for %q; nothing to update", fileutil.ManifestFileName, rc.ManifestPathArg)
+	}
+
+	rc.LangFlag = lang
+	rc.WithFlag = withTemplates
+	rc.ManifestPathArg = relPath
+	rc.Update = true
+
+	return RunApply(rc, reporter)
+}
+
+// resolveUpdateSelection derives the language and tooling templates that were
+// applied to targetPath from the manifest, along with the repo-relative path
+// used to key them. Both the project and template entries must match the
+// normalized path, so monorepo subprojects do not alias each other.
+func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (string, []string, string, error) {
+	if m == nil {
+		return "", nil, "", errors.New("manifest is empty")
+	}
+	rel, err := repoRelativeProjectPath(rootPath, targetPath)
+	if err != nil {
+		return "", nil, "", err
+	}
+
+	var lang string
+	for _, p := range m.Projects {
+		if p.Path == rel {
+			lang = p.Language
+			break
+		}
+	}
+
+	var with []string
+	for _, t := range m.Templates {
+		if t.Path == rel {
+			with = append(with, t.Name)
+		}
+	}
+	return lang, deduplicateTemplates(with), rel, nil
+}
+
+// managedWriteTasks keeps only file-reconciling tasks. `update` must not re-run
+// environment or side-effecting tasks (go mod init, npm install, git hooks).
+func managedWriteTasks(plan []types.Task) []types.Task {
+	out := make([]types.Task, 0, len(plan))
+	for _, t := range plan {
+		if _, ok := t.(*tasks.CreateTemplateTask); ok {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // setupTransaction initializes the transaction safety net and returns a cleanup rollback deferral.
@@ -584,8 +664,12 @@ func checkLangPrerequisites(langFlag string) error {
 
 // handleLangFlag processes the --lang flag, adding language tasks and project info.
 func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *manifestChanges) (string, error) {
-	if err := checkLangPrerequisites(rc.LangFlag); err != nil {
-		return "", err
+	// `update` only writes managed files, so language toolchains (go, npm,
+	// java) need not be installed.
+	if !rc.Update {
+		if err := checkLangPrerequisites(rc.LangFlag); err != nil {
+			return "", err
+		}
 	}
 
 	handler, err := lang.GetHandler(rc.LangFlag)
@@ -650,12 +734,15 @@ func handleWithFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) e
 		} else {
 			fmt.Fprintf(os.Stderr, "⚠️  Template handler '%s' returned no tasks (possible misconfiguration)\n", tmplName)
 		}
+
+		// Record the real template reference (name + manifest-relative path) so
+		// `update` can reproduce what was applied (SCB-064, D2). The previous
+		// placeholder ({name: "root-templates"}) could not.
+		changes.Templates = append(changes.Templates, types.Template{
+			Name: tmplName,
+			Path: rc.ManifestPathArg,
+		})
 	}
 
-	// Simplified change tracking for root templates:
-	changes.Templates = append(changes.Templates, types.Template{
-		Name: "root-templates",
-		Path: rc.ManifestPathArg,
-	})
 	return nil
 }
