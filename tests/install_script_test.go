@@ -105,6 +105,19 @@ case "$url" in
         fi
         printf '%s' "$body"
         ;;
+    *releases/download*SHA256SUMS.sigstore.json*)
+        # missing_signature emulates a release with no signature bundle (HTTP
+        # 404, e.g. a tag published before signing was introduced).
+        if [ "$mode" = "missing_signature" ]; then
+            exit 22
+        fi
+        body='{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}'
+        if [ -n "$output" ]; then
+            printf '%s' "$body" > "$output"
+        else
+            printf '%s' "$body"
+        fi
+        ;;
     *releases/download*SHA256SUMS*)
         # missing_checksums emulates a release with no SHA256SUMS asset (HTTP
         # 404): curl -f must fail, and the installer must abort.
@@ -172,6 +185,21 @@ const stubWgetScript = `#!/usr/bin/env bash
 exit 8
 `
 
+// stubCosignScript is a deterministic stand-in for cosign. Behavior is selected
+// by STUB_COSIGN_MODE: success (default) exits 0, bad_signature exits 1.
+// Invocations are appended to the file named by STUB_COSIGN_LOG when set. It
+// makes the install.sh signature path testable without a real cosign (and keeps
+// the suite independent of whatever is installed on the host).
+const stubCosignScript = `#!/usr/bin/env bash
+if [ -n "${STUB_COSIGN_LOG:-}" ]; then
+    printf '%s\n' "$*" >> "$STUB_COSIGN_LOG"
+fi
+case "${STUB_COSIGN_MODE:-success}" in
+    bad_signature) exit 1 ;;
+    *) exit 0 ;;
+esac
+`
+
 // requireBash skips the test when bash is unavailable (e.g. Windows CI).
 func requireBash(t *testing.T) string {
 	t.Helper()
@@ -202,7 +230,7 @@ func installScriptPath(t *testing.T) string {
 func setupStubBinaries(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for name, content := range map[string]string{"curl": stubCurlScript, "wget": stubWgetScript} {
+	for name, content := range map[string]string{"curl": stubCurlScript, "wget": stubWgetScript, "cosign": stubCosignScript} {
 		path := filepath.Join(dir, name)
 		if err := os.WriteFile(path, []byte(content), 0o755); err != nil { //nolint:gosec // test stub
 			t.Fatalf("write stub %s: %v", name, err)

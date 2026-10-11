@@ -70,6 +70,48 @@ The installer will:
 | macOS | x86_64, ARM64 (Apple Silicon) | ✅ Tested |
 | Windows | x86_64, ARM64 (WSL/Git Bash) | ✅ Tested |
 
+## Verifying a release
+
+Every release publishes, alongside the binaries and `SHA256SUMS`:
+
+- `SHA256SUMS.sigstore.json` — a keyless [Sigstore](https://www.sigstore.dev/)
+  signature over `SHA256SUMS`, produced by cosign in the release workflow.
+- `scbake_<version>_<os>_<arch>.sbom.json` — an SPDX SBOM (generated with Syft).
+- SLSA build provenance attestations (verified with `gh`).
+
+`install.sh` verifies the signature automatically when
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/) is on your
+`PATH`; set `SCBAKE_REQUIRE_SIGNATURE=1` to make a release without a verifiable
+signature abort the install.
+
+To verify by hand (cosign and GNU `sha256sum`/`shasum`):
+
+```bash
+TAG=<tag>   # e.g. v0.5.22
+BASE="https://github.com/Emin-ACIKGOZ/scbake/releases/download/${TAG}"
+
+curl -fsSL -O "${BASE}/SHA256SUMS"
+curl -fsSL -O "${BASE}/SHA256SUMS.sigstore.json"
+
+# 1. Verify the signature over SHA256SUMS against the release workflow identity.
+#    The signature is created by the workflow run on refs/heads/master.
+cosign verify-blob \
+  --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity 'https://github.com/Emin-ACIKGOZ/scbake/.github/workflows/release.yml@refs/heads/master' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  SHA256SUMS
+
+# 2. Only then check the artifact hash.
+curl -fsSL -O "${BASE}/scbake-linux-amd64"
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+Verify build provenance with the GitHub CLI:
+
+```bash
+gh attestation verify scbake-linux-amd64 --repo Emin-ACIKGOZ/scbake
+```
+
 ## Alternative: Go Install
 
 If you have Go 1.26+ installed:
@@ -159,6 +201,8 @@ Or reinstall using the quick install command at the top of this page.
 
 - **HTTPS-only downloads** - All downloads use secure HTTPS connections
 - **Mandatory checksum verification** - The installer downloads the release's `SHA256SUMS` and verifies the binary against it; installation aborts if the checksums file is missing or the hash does not match
+- **Signed checksums** - The release workflow signs `SHA256SUMS` keylessly with cosign (Sigstore); when cosign is available the installer verifies the signature and pins it to this repository's release workflow identity and the GitHub Actions OIDC issuer. Set `SCBAKE_REQUIRE_SIGNATURE=1` to make verification mandatory
+- **SBOM and provenance** - Each release ships an SPDX SBOM and SLSA build provenance you can verify with `gh attestation verify`
 - **Binary validation** - Checks downloaded file is a valid executable (not corrupted or HTML error page)
 - **Sudo escalation warnings** - Warns before requesting sudo for elevated installations
 - **Retry with backoff** - Failed downloads retry with exponential backoff (1s, 2s, 4s)

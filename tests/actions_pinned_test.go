@@ -17,8 +17,12 @@ import (
 var usesKeyRe = regexp.MustCompile(`^\s*(?:-\s+)?uses\s*:\s*(.*)$`)
 
 // pinnedActionRe matches a third-party action reference pinned to a
-// full-length, lowercase 40-hex commit SHA: `<owner>/<repo>@<sha>`.
-var pinnedActionRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$`)
+// full-length, lowercase 40-hex commit SHA. GitHub's `uses` syntax is
+// `<owner>/<repo>[/<path>...]@<ref>`, so the repo part may be followed by one
+// or more sub-path segments (for example
+// `anchore/sbom-action/download-syft@<sha>`). Every segment must still end in a
+// 40-hex SHA for the reference to be immutable.
+var pinnedActionRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+@[0-9a-f]{40}$`)
 
 // TestWorkflowActionsPinnedToSHA is a regression guard for issue #43
 // (SCB-045): every third-party GitHub Action referenced from a workflow must
@@ -98,11 +102,35 @@ func usesValue(line string) (value string, ok bool) {
 }
 
 // actionPinned reports whether value is an acceptable action reference: a local
-// path, a `docker://` image (out of scope), or an `<owner>/<repo>@<40-hex-sha>`
-// pin.
+// path, a `docker://` image (out of scope), or an
+// `<owner>/<repo>[/<path>...]@<40-hex-sha>` pin.
 func actionPinned(value string) bool {
 	if strings.HasPrefix(value, "docker://") || strings.HasPrefix(value, "./") {
 		return true
 	}
 	return pinnedActionRe.MatchString(value)
+}
+
+// TestActionPinned pins the mutation guard itself: widening the regex to accept
+// sub-path actions must not start accepting mutable refs.
+func TestActionPinned(t *testing.T) {
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	cases := []struct {
+		value string
+		want  bool
+	}{
+		{"actions/checkout@" + sha, true},
+		{"anchore/sbom-action/download-syft@" + sha, true},
+		{"actions/checkout@v7", false},
+		{"actions/checkout@main", false},
+		{"anchore/sbom-action/download-syft@main", false},
+		{"anchore/sbom-action/download-syft@" + strings.ToUpper(sha), false},
+		{"./local/action", true},
+		{"docker://alpine:3.20", true},
+	}
+	for _, tc := range cases {
+		if got := actionPinned(tc.value); got != tc.want {
+			t.Errorf("actionPinned(%q) = %v; want %v", tc.value, got, tc.want)
+		}
+	}
 }
