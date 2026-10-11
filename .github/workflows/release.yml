@@ -55,6 +55,12 @@ jobs:
         run: |
           # Manual re-release of an existing tag.
           if [ -n "$TAG" ]; then
+            # Reject anything that is not a valid tag name. This also blocks
+            # newline injection into $GITHUB_OUTPUT.
+            if ! git check-ref-format "refs/tags/$TAG" >/dev/null 2>&1; then
+              echo "::error::Invalid tag input: $TAG"
+              exit 1
+            fi
             echo "version=$TAG" >> "$GITHUB_OUTPUT"
             echo "Manual release for tag $TAG"
             exit 0

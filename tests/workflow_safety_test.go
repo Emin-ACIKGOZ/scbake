@@ -13,10 +13,17 @@ import (
 	"testing"
 )
 
-// runKeyRe matches a `run:` key, optionally as a YAML list item, capturing the
-// value that follows the colon (which may be empty, a block-scalar indicator
-// such as `|` / `>`, or an inline shell command).
-var runKeyRe = regexp.MustCompile(`^\s*(?:-\s+)?run:(\s*(.*))?$`)
+// runKeyRe matches a `run:` key, optionally as a YAML list item and tolerating
+// whitespace before the colon, capturing the value that follows the colon
+// (which may be empty, a block-scalar indicator such as `|` / `>`, or an
+// inline shell command).
+var runKeyRe = regexp.MustCompile(`^\s*(?:-\s+)?run\s*:(\s*(.*))?$`)
+
+// injectionRe matches an interpolation of an untrusted workflow input inside a
+// run: script. It covers both the full `github.event.inputs.*` context and the
+// `inputs.*` shorthand available in workflow_dispatch, and tolerates optional
+// whitespace inside the expression (GitHub expressions allow it).
+var injectionRe = regexp.MustCompile(`\$\{\{\s*(?:github\.event\.inputs|inputs)\.`)
 
 // blockScalarRe matches block-scalar indicators like `|`, `>-`, `|+`, `|2`.
 var blockScalarRe = regexp.MustCompile(`^[|>][+-]?\d*$`)
@@ -75,8 +82,8 @@ func TestReleaseWorkflowNoInputInjection(t *testing.T) {
 
 		blocks++
 		block := strings.Join(body, "\n")
-		if strings.Contains(block, "${{ github.event.inputs") {
-			t.Errorf("%s: run: script must not interpolate github.event.inputs directly:\n%s", path, block)
+		if m := injectionRe.FindString(block); m != "" {
+			t.Errorf("%s: run: script must not interpolate an untrusted input directly (%q):\n%s", path, m, block)
 		}
 	}
 
