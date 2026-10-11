@@ -5,7 +5,7 @@ go 1.22.2
 toolchain go1.22.11
 
 require (
-	github.com/BurntSushi/toml v1.3.2
+	github.com/BurntSushi/toml v1.6.0
 	github.com/mitchellh/go-spdx v0.1.0
 	github.com/spf13/cobra v1.10.1
 )
