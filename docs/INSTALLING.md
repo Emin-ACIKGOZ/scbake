@@ -72,7 +72,7 @@ The installer will:
 
 ## Alternative: Go Install
 
-If you have Go 1.21+ installed:
+If you have Go 1.26+ installed:
 
 ```bash
 go install github.com/Emin-ACIKGOZ/scbake/cmd/scbake@latest

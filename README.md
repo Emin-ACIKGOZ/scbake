@@ -105,7 +105,7 @@ against it, aborting if the checksums file is missing or the hash does not match
 
 ### Build from Source
 
-To compile the binary yourself, ensure you have **Go 1.21+** installed:
+To compile the binary yourself, ensure you have **Go 1.26+** installed:
 
 #### 1. Clone the repository:
 ```bash

@@ -35,7 +35,7 @@ understood by you. See [AI_USAGE_POLICY.md](AI_USAGE_POLICY.md).
 
 ## Development setup
 
-Requires **Go 1.22+** (see `go.mod`).
+Requires **Go 1.26+** (see `go.mod`).
 
 ```sh
 git clone https://github.com/Emin-ACIKGOZ/scbake.git
