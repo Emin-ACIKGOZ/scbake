@@ -11,6 +11,9 @@ import (
 	"scbake/pkg/tasks"
 )
 
+// npmCmd is the Node package manager executable invoked for setup tasks.
+const npmCmd = "npm"
+
 // Handler implements the lang.Handler interface for Svelte projects.
 type Handler struct{}
 
@@ -52,7 +55,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			return nil, err
 		}
 		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd: "npm",
+			Cmd: npmCmd,
 			Args: []string{
 				"create",
 				"vite@latest",
@@ -72,7 +75,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			return nil, err
 		}
 		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd:         "npm",
+			Cmd:         npmCmd,
 			Args:        []string{"install"},
 			Desc:        "Run npm install",
 			TaskPrio:    int(p), // Now 101
@@ -87,7 +90,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			return nil, err
 		}
 		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd: "npm",
+			Cmd: npmCmd,
 			Args: []string{
 				"pkg",
 				"set",

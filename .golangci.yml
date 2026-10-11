@@ -43,6 +43,11 @@ linters:
   settings:
     misspell:
       locale: US
+    goconst:
+      # goconst's "extended detection" (>= 1.10.0) flags repeated literals in
+      # test fixtures. Keep tests out of this check, matching goconst's own
+      # default, so the linter upgrade does not force churn in test data.
+      ignore-tests: true
 
 issues:
   max-issues-per-linter: 0
