@@ -18,7 +18,7 @@ type Handler struct{}
 // GetTasks returns the plan to initialize a Git repository.
 // It performs `git init`, `git add .`, and `git commit` for a fresh target.
 //
-// Security (SCB-037): a pre-existing `.git` directory is untrusted input. Even
+// Security (SCB-037): a pre-existing `.git` entry is untrusted input. Even
 // with hooks disabled via `-c core.hooksPath=<devnull>`, invoking Git inside an
 // attacker-controlled repository still executes attacker code through
 // `filter.*.clean` (run by `git add`) and `core.fsmonitor` (run by `git add`
@@ -26,15 +26,24 @@ type Handler struct{}
 // is therefore only a partial mitigation.
 //
 // To stay fail-closed we schedule NO Git tasks at all when the target already
-// contains a `.git` directory: we never run `git init`, `git add`, or
+// contains a `.git` entry: we never run `git init`, `git add`, or
 // `git commit` inside a repository we did not create. A fresh target (no `.git`)
 // is initialized and committed with hooks disabled, and we keep the transaction
 // tracking that predicts creation of `.git`.
 func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task, error) {
 	// Determine whether the target is already a Git repository. If so, treat the
 	// repository as hostile and refuse to run any Git command inside it.
+	//
+	// We use os.Lstat, not os.Stat: Stat follows symlinks, so a `.git` that is a
+	// dangling symlink (or a symlink whose chain dangles) would look absent and
+	// let us schedule `git init`. Git would then follow that symlink and create
+	// the repository outside the target, or a swapped symlink could point at an
+	// attacker-controlled repo whose `filter.*.clean`/`core.fsmonitor` execute.
+	// Lstat observes the link itself, so any `.git` entry (dangling symlink,
+	// symlink to anywhere, regular file, or directory) is treated as a
+	// pre-existing repository and no Git tasks are scheduled (fail closed).
 	if targetPath != "" {
-		if _, statErr := os.Stat(filepath.Join(targetPath, fileutil.GitDir)); statErr == nil {
+		if _, statErr := os.Lstat(filepath.Join(targetPath, fileutil.GitDir)); statErr == nil {
 			return nil, nil
 		}
 	}

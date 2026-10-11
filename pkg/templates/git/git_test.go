@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
@@ -75,6 +76,95 @@ func TestGitHandler_ExistingRepo_Structure(t *testing.T) {
 		if execTask, ok := task.(*tasks.ExecCommandTask); ok && execTask.Cmd == "git" {
 			t.Errorf("Task %d: must not schedule any git command on an existing repo: %v", i, execTask.Args)
 		}
+	}
+}
+
+// TestGitHandler_SymlinkGit_NoTasks is the regression test for a `.git` entry
+// that exists only as a symlink. os.Stat follows symlinks, so a dangling `.git`
+// symlink looks absent and the handler would schedule `git init`; git would
+// then follow the link and create the repository outside the target. The guard
+// must use os.Lstat so any `.git` entry — dangling symlink, symlink to an
+// outside directory, or symlink to a file — is treated as a pre-existing repo
+// and no git tasks are scheduled (fail closed).
+func TestGitHandler_SymlinkGit_NoTasks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on Windows")
+	}
+
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, target string)
+	}{
+		{
+			name: "dangling symlink",
+			setup: func(t *testing.T, target string) {
+				t.Helper()
+				if err := os.Symlink(filepath.Join(target, "does-not-exist"), filepath.Join(target, fileutil.GitDir)); err != nil {
+					t.Fatalf("failed to create dangling .git symlink: %v", err)
+				}
+			},
+		},
+		{
+			name: "symlink to outside directory",
+			setup: func(t *testing.T, target string) {
+				t.Helper()
+				outside := t.TempDir()
+				if err := os.Symlink(outside, filepath.Join(target, fileutil.GitDir)); err != nil {
+					t.Fatalf("failed to create .git symlink: %v", err)
+				}
+			},
+		},
+		{
+			name: "symlink to regular file",
+			setup: func(t *testing.T, target string) {
+				t.Helper()
+				outside := filepath.Join(t.TempDir(), "gitfile")
+				if err := os.WriteFile(outside, []byte("gitdir: elsewhere\n"), 0600); err != nil {
+					t.Fatalf("failed to create symlink target file: %v", err)
+				}
+				if err := os.Symlink(outside, filepath.Join(target, fileutil.GitDir)); err != nil {
+					t.Fatalf("failed to create .git symlink: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			tc.setup(t, tmpDir)
+
+			h := &Handler{}
+			plan, err := h.GetTasks(tmpDir, "", "")
+			if err != nil {
+				t.Fatalf("GetTasks failed: %v", err)
+			}
+			if len(plan) != 0 {
+				t.Fatalf("Expected no git tasks for a symlinked .git, got %d: %v", len(plan), plan)
+			}
+
+			// Executing the returned plan must not create a repository anywhere
+			// outside the target (nor turn the symlink target into a repo).
+			tc2 := types.TaskContext{
+				Ctx:        context.Background(),
+				TargetPath: tmpDir,
+			}
+			for _, task := range plan {
+				if err := task.Execute(tc2); err != nil {
+					t.Fatalf("plan execution failed at task '%s': %v", task.Description(), err)
+				}
+			}
+
+			// The `.git` entry must still be the symlink we planted, not a
+			// directory git init would have created by following it.
+			info, err := os.Lstat(filepath.Join(tmpDir, fileutil.GitDir))
+			if err != nil {
+				t.Fatalf("planted .git entry disappeared: %v", err)
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("SECURITY: .git symlink was replaced by a real %v entry", info.Mode())
+			}
+		})
 	}
 }
 
