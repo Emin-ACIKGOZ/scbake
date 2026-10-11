@@ -29,15 +29,21 @@ func ValidateSetKeys(with []string, langName string, setVars map[string]string) 
 	}
 
 	declared := make(map[string]struct{})
+	if err := collectDeclaredVariables(with, langName, declared); err != nil {
+		return err
+	}
+	return rejectUnknownKeys(setVars, declared)
+}
 
-	// Collect declared variables from the selected tooling templates.
+// collectDeclaredVariables adds every variable declared by the selected tooling
+// templates and language pack to declared. Handlers that do not implement
+// SchemaProvider (nil schema) declare nothing and are skipped.
+func collectDeclaredVariables(with []string, langName string, declared map[string]struct{}) error {
 	for _, name := range with {
 		efs, path, err := templates.GetSchema(name)
 		if err != nil {
 			return fmt.Errorf("schema lookup for %q: %w", name, err)
 		}
-		// A handler that does not implement SchemaProvider returns nil schema:
-		// it declares no variables, so skip it.
 		if efs == nil {
 			continue
 		}
@@ -46,19 +52,25 @@ func ValidateSetKeys(with []string, langName string, setVars map[string]string) 
 		}
 	}
 
-	// Collect declared variables from the selected language pack.
-	if langName != "" {
-		efs, path, err := lang.GetSchema(langName)
-		if err != nil {
-			return fmt.Errorf("schema lookup for %q: %w", langName, err)
-		}
-		if efs != nil {
-			if err := collectSchemaVars(*efs, path, declared); err != nil {
-				return fmt.Errorf("failed to read schema for %q: %w", langName, err)
-			}
-		}
+	if langName == "" {
+		return nil
 	}
+	efs, path, err := lang.GetSchema(langName)
+	if err != nil {
+		return fmt.Errorf("schema lookup for %q: %w", langName, err)
+	}
+	if efs == nil {
+		return nil
+	}
+	if err := collectSchemaVars(*efs, path, declared); err != nil {
+		return fmt.Errorf("failed to read schema for %q: %w", langName, err)
+	}
+	return nil
+}
 
+// rejectUnknownKeys returns an aggregated error naming every setVars key that
+// declared does not contain, or nil when every key is declared.
+func rejectUnknownKeys(setVars map[string]string, declared map[string]struct{}) error {
 	unknown := make([]string, 0, len(setVars))
 	for key := range setVars {
 		if _, ok := declared[key]; !ok {
