@@ -18,6 +18,7 @@ import (
 const (
 	testTplContent = "package main"
 	testHandler    = "func handler() {}"
+	testTrusted    = "trusted content"
 )
 
 func TestExtractTarGz_Basic(t *testing.T) {
@@ -354,6 +355,250 @@ func TestPullFromURL_CachedSkipRedownload(t *testing.T) {
 
 	if callCount != 1 {
 		t.Errorf("expected 1 server call (cached), got %d", callCount)
+	}
+}
+
+// TestPullFromURL_RepullsPoisonedCacheWithoutManifest is a regression test for
+// SCB-025: a pre-existing cache directory with no manifest is not trusted, so
+// the pull re-downloads the template and records a manifest.
+func TestPullFromURL_RepullsPoisonedCacheWithoutManifest(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": testTrusted}))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	// Plant attacker content with no manifest, as if the cache were poisoned.
+	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
+	if err := os.MkdirAll(destDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(destDir, "main.go.tpl"), []byte("attacker"), 0640); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err != nil {
+		t.Fatalf("PullFromURL failed: %v", err)
+	}
+
+	if callCount != 1 {
+		t.Fatalf("expected poisoned cache to trigger a re-download, got %d server calls", callCount)
+	}
+	//nolint:gosec // test temp directory
+	content, err := os.ReadFile(filepath.Join(destDir, "main.go.tpl"))
+	if err != nil {
+		t.Fatalf("reading re-downloaded template failed: %v", err)
+	}
+	if string(content) != testTrusted {
+		t.Errorf("expected re-downloaded content %q, got %q", testTrusted, string(content))
+	}
+	if _, err := os.Stat(TemplateManifestPath(m.cacheDir, "acme", "go-api")); err != nil {
+		t.Errorf("expected a cache manifest to be written: %v", err)
+	}
+}
+
+// TestPullFromURL_RepullsTamperedCache verifies that editing a cached file
+// after a successful pull invalidates the cache and triggers a re-download.
+func TestPullFromURL_RepullsTamperedCache(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": testTrusted}))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err != nil {
+		t.Fatalf("first PullFromURL failed: %v", err)
+	}
+
+	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(destDir, "main.go.tpl"), []byte("attacker"), 0640); err != nil {
+		t.Fatalf("tampering failed: %v", err)
+	}
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err != nil {
+		t.Fatalf("second PullFromURL failed: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Fatalf("expected tampered cache to trigger a re-download, got %d server calls", callCount)
+	}
+	//nolint:gosec // test temp directory
+	content, err := os.ReadFile(filepath.Join(destDir, "main.go.tpl"))
+	if err != nil {
+		t.Fatalf("reading restored template failed: %v", err)
+	}
+	if string(content) != testTrusted {
+		t.Errorf("expected restored content %q, got %q", testTrusted, string(content))
+	}
+}
+
+// TestCacheIsValid_RejectsEmptyTree is a regression test for the empty-tree
+// cache hit: an empty template directory whose manifest records the empty-tree
+// hash must not be treated as valid, which would suppress a re-pull and let an
+// empty tree masquerade as a cache hit.
+func TestCacheIsValid_RejectsEmptyTree(t *testing.T) {
+	dir := t.TempDir()
+	destDir := filepath.Join(dir, "acme", "go-api")
+	if err := os.MkdirAll(destDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	hash, err := hashTree(destDir)
+	if err != nil {
+		t.Fatalf("hashTree failed: %v", err)
+	}
+	manifestPath := TemplateManifestPath(dir, "acme", "go-api")
+	if err := writeCacheManifest(manifestPath, "go-api", hash); err != nil {
+		t.Fatalf("writeCacheManifest failed: %v", err)
+	}
+
+	if cacheIsValid(destDir, manifestPath) {
+		t.Error("expected empty template tree to be rejected as an invalid cache")
+	}
+}
+
+// TestPullFromURL_RepullsEmptyTreeCache verifies end to end that a cache
+// directory with no regular files is re-pulled even when its manifest records
+// the empty-tree hash, so an empty tree cannot suppress a download.
+func TestPullFromURL_RepullsEmptyTreeCache(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": testTrusted}))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
+	if err := os.MkdirAll(destDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	hash, err := hashTree(destDir)
+	if err != nil {
+		t.Fatalf("hashTree failed: %v", err)
+	}
+	if err := writeCacheManifest(TemplateManifestPath(m.cacheDir, "acme", "go-api"), "go-api", hash); err != nil {
+		t.Fatalf("writeCacheManifest failed: %v", err)
+	}
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err != nil {
+		t.Fatalf("PullFromURL failed: %v", err)
+	}
+
+	if callCount != 1 {
+		t.Fatalf("expected empty-tree cache to trigger a re-download, got %d server calls", callCount)
+	}
+	//nolint:gosec // test temp directory
+	content, err := os.ReadFile(filepath.Join(destDir, "main.go.tpl"))
+	if err != nil {
+		t.Fatalf("reading re-downloaded template failed: %v", err)
+	}
+	if string(content) != testTrusted {
+		t.Errorf("expected re-downloaded content %q, got %q", testTrusted, string(content))
+	}
+}
+
+// TestPullFromURL_FailedRepullKeepsExistingCache is a regression test for F6:
+// a failed re-pull (the server returns 5xx) must not destroy an existing cache
+// directory. Before the fix pullFromURL removed the cache and manifest up front,
+// so a transient failure left the user with no cached template.
+func TestPullFromURL_FailedRepullKeepsExistingCache(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	// Plant an existing (unmanifested, so invalid) cache that the pull will try
+	// to refresh.
+	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
+	if err := os.MkdirAll(destDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	oldContent := []byte("previously cached content")
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(destDir, "main.go.tpl"), oldContent, 0640); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err == nil {
+		t.Fatal("expected PullFromURL to fail against a 5xx server")
+	}
+
+	//nolint:gosec // test temp directory
+	content, err := os.ReadFile(filepath.Join(destDir, "main.go.tpl"))
+	if err != nil {
+		t.Fatalf("failed re-pull destroyed the existing cache: %v", err)
+	}
+	if !bytes.Equal(content, oldContent) {
+		t.Errorf("expected existing cache content %q, got %q", oldContent, content)
+	}
+}
+
+// TestHashTree_FailsOnSymlink is a regression test for F7: hashTree must fail
+// closed when it encounters a non-regular entry such as a symlink. SafeReadFile
+// follows symlinks, so silently skipping one would let an attacker add a symlink
+// after the manifest was written without changing the verified hash.
+func TestHashTree_FailsOnSymlink(t *testing.T) {
+	dir := t.TempDir()
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(dir, "real.tpl"), []byte("data"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	if err := os.Symlink("real.tpl", filepath.Join(dir, "link.tpl")); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+
+	if _, err := hashTree(dir); err == nil {
+		t.Fatal("expected hashTree to fail on a symlink entry, got nil")
+	}
+}
+
+// TestHashTree_LengthFraming is a regression test for F8: without length
+// framing, distinct trees can collide ({x:"X", y:"Y"} and {x:"Xy\x00Y"} both
+// encode to "x\x00Xy\x00Y"). Length-prefixing each component makes the encoding
+// unambiguous, so the two hashes must now differ.
+func TestHashTree_LengthFraming(t *testing.T) {
+	dirA := t.TempDir()
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(dirA, "x"), []byte("X"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(dirA, "y"), []byte("Y"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	dirB := t.TempDir()
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(filepath.Join(dirB, "x"), []byte("Xy\x00Y"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	hashA, err := hashTree(dirA)
+	if err != nil {
+		t.Fatalf("hashTree(dirA) failed: %v", err)
+	}
+	hashB, err := hashTree(dirB)
+	if err != nil {
+		t.Fatalf("hashTree(dirB) failed: %v", err)
+	}
+
+	if hashA == hashB {
+		t.Fatalf("ambiguous trees hashed identically (%s); length framing is missing", hashA)
 	}
 }
 
