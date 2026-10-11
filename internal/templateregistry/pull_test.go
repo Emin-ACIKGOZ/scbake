@@ -674,3 +674,127 @@ func TestExtractTarGz_DecompressionBombLimiter(t *testing.T) {
 		t.Errorf("decompression limiter failed: extracted size %d exceeds maxArchiveBytes %d", info.Size(), maxArchiveBytes)
 	}
 }
+
+// TestPull_RejectsTraversalTemplateName is a regression test for SCB-010: a
+// template name containing ".." must be rejected before any download, and must
+// never cause os.RemoveAll(destDir+".tmp") to delete a directory outside the
+// cache.
+func TestPull_RejectsTraversalTemplateName(t *testing.T) {
+	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
+	if err := m.Add("acme", srv.URL, "", "", ""); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	// cacheDir/acme/../../evil resolves to <dir>/evil, so destDir+".tmp" is
+	// <dir>/evil.tmp. Plant it to prove it is not recursively deleted.
+	sentinel := filepath.Join(dir, "evil.tmp")
+	if err := os.MkdirAll(sentinel, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	marker := filepath.Join(sentinel, "keep")
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := m.Pull("acme", "../../evil"); err == nil {
+		t.Fatal("expected Pull to reject a traversal template name")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("traversal pull deleted a directory outside the cache: %v", err)
+	}
+}
+
+// TestPull_RejectsTraversalRegistryName is a regression test for SCB-010: a
+// registry name containing a path separator or ".." must be rejected both when
+// added and when used to pull.
+func TestPull_RejectsTraversalRegistryName(t *testing.T) {
+	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
+
+	if err := m.Add("../evil", srv.URL, "", "", ""); err == nil {
+		t.Error("expected Add to reject a traversal registry name")
+	}
+	if err := m.PullFromURL("../evil", "go-api", srv.URL, ""); err == nil {
+		t.Error("expected PullFromURL to reject a traversal registry name")
+	}
+}
+
+// TestPull_RejectsTraversalSubdirectory is a regression test for SCB-011: a
+// subdirectory of ".." must not make promoteSubdirectory return a directory
+// outside the extraction temp dir. The config is seeded directly so the
+// malicious value bypasses the Add-time check, modelling a hand-edited config.
+func TestPull_RejectsTraversalSubdirectory(t *testing.T) {
+	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
+	m.config.Registries = []Registry{{Name: "acme", URL: srv.URL, Subdirectory: "../.."}}
+
+	if err := os.MkdirAll(cacheDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	marker := filepath.Join(cacheDir, "marker")
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	if err := m.Pull("acme", "go-api"); err == nil {
+		t.Fatal("expected Pull to reject a traversal subdirectory")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("traversal subdirectory pull damaged the cache root: %v", err)
+	}
+}
+
+// TestPromoteSubdirectory_RejectsTraversal verifies promoteSubdirectory never
+// returns a path outside the temp dir, regardless of the subdirectory value.
+func TestPromoteSubdirectory_RejectsTraversal(t *testing.T) {
+	tmpDir := filepath.Join(t.TempDir(), "stage")
+	if err := os.MkdirAll(tmpDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+
+	for _, sub := range []string{"..", "../..", "nested/../../..", `..\..`} {
+		got := promoteSubdirectory(tmpDir, sub)
+		rel, err := filepath.Rel(tmpDir, got)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			t.Errorf("promoteSubdirectory(%q, %q) = %q escapes the temp dir", tmpDir, sub, got)
+		}
+	}
+}
+
+// TestExtractToCache_RejectsTraversalDestDir verifies the staging path is
+// contained in the cache before any destructive operation.
+func TestExtractToCache_RejectsTraversalDestDir(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	archive := testutil.CreateTarGz(map[string]string{"main.go.tpl": testTplContent})
+
+	// destDir escapes the cache root.
+	outside := filepath.Join(dir, "outside")
+	if err := extractToCache(bytes.NewReader(archive), cacheDir, outside, ""); err == nil {
+		t.Fatal("expected extractToCache to reject a destDir outside the cache")
+	}
+}

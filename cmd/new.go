@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"scbake/internal/core"
+	"scbake/internal/templateregistry"
 	"scbake/internal/types"
 	"scbake/internal/ui"
 	"scbake/internal/util/fileutil"
@@ -56,6 +57,12 @@ var newCmd = &cobra.Command{
 
 // runNew coordinates the project directory setup and delegates template application to the core engine.
 func runNew(projectName string, dirCreated *bool) error {
+	// Reject traversal or absolute project names before touching the filesystem
+	// so 'new' can never create a directory outside the current working dir.
+	if err := templateregistry.ValidateName(projectName); err != nil {
+		return fmt.Errorf("invalid project name: %w", err)
+	}
+
 	reporter := ui.NewReporter(newCmdTotalSteps, dryRun)
 
 	restoreWD, err := bootstrapProjectDir(projectName, dryRun, reporter, dirCreated)

@@ -89,6 +89,64 @@ const (
 	configFilePerm os.FileMode = 0600
 )
 
+// ValidateName reports whether name is safe to use as a single path segment for
+// a registry, a template, or a project directory. It rejects empty names, the
+// special entries "." and "..", anything containing a path separator or volume
+// syntax, and control characters. Rejecting these is required so that
+// filepath.Join(cacheDir, registryName, templateName) can never escape the
+// template cache.
+func ValidateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name must not be empty")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("name %q is a reserved path segment", name)
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("name %q must not contain a path separator", name)
+	}
+	// A colon is not a separator on Unix, but it introduces Windows drive
+	// syntax and alternate data streams, so reject it on every platform.
+	if strings.ContainsRune(name, ':') {
+		return fmt.Errorf("name %q must not contain ':'", name)
+	}
+	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		return fmt.Errorf("name %q must not be absolute", name)
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("name %q must not contain control characters", name)
+		}
+	}
+	return nil
+}
+
+// validateSubdirectory rejects a registry subdirectory that is absolute or that
+// contains a ".." segment. Such a value would make promoteSubdirectory return a
+// directory outside the extraction temp dir, which the pull path would then
+// rename into the cache.
+func validateSubdirectory(subdirectory string) error {
+	if subdirectory == "" {
+		return nil
+	}
+	if filepath.IsAbs(subdirectory) || filepath.VolumeName(subdirectory) != "" {
+		return fmt.Errorf("subdirectory %q must be relative", subdirectory)
+	}
+	for _, r := range subdirectory {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("subdirectory %q must not contain control characters", subdirectory)
+		}
+	}
+	for _, seg := range strings.FieldsFunc(subdirectory, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if seg == ".." {
+			return fmt.Errorf("subdirectory %q must not contain %q", subdirectory, "..")
+		}
+	}
+	return nil
+}
+
 // Registry represents a remote template source.
 type Registry struct {
 	Name         string `json:"name"`
@@ -168,13 +226,105 @@ func (m *Manager) save() error {
 	if err := os.WriteFile(m.configPath, data, configFilePerm); err != nil {
 		return fmt.Errorf("writing registry config: %w", err)
 	}
+	// Best effort: record the registry insertion order next to the cache so the
+	// resolver can apply an explicit, deterministic precedence. If this cannot
+	// be written, resolution falls back to a sorted order rather than failing
+	// the config change.
+	_ = m.writeRegistryOrder()
 	return nil
+}
+
+// registryOrderFileName is the file, stored at the root of the template cache,
+// that records the order in which registries were added. The resolver reads it
+// to give the first-added registry precedence when several cached registries
+// provide the same template.
+const registryOrderFileName = ".registry-order.json"
+
+// registryOrder is the on-disk representation of the registry precedence order.
+type registryOrder struct {
+	Registries []string `json:"registries"`
+}
+
+// writeRegistryOrder persists the current registry insertion order next to the
+// cache. It is best effort; callers ignore the error so a cache-side write
+// failure never blocks a config change.
+func (m *Manager) writeRegistryOrder() error {
+	if m.cacheDir == "" {
+		return nil
+	}
+	names := make([]string, 0, len(m.config.Registries))
+	for _, r := range m.config.Registries {
+		names = append(names, r.Name)
+	}
+	data, err := json.MarshalIndent(registryOrder{Registries: names}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(m.cacheDir, cacheDirPerm); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(m.cacheDir, registryOrderFileName), data, cacheFilePerm)
+}
+
+// readRegistryOrder loads the recorded registry precedence order, or nil when it
+// is absent or unreadable.
+func readRegistryOrder(cacheDir string) []string {
+	data, err := os.ReadFile(filepath.Join(cacheDir, registryOrderFileName))
+	if err != nil {
+		return nil
+	}
+	var o registryOrder
+	if err := json.Unmarshal(data, &o); err != nil {
+		return nil
+	}
+	return o.Registries
+}
+
+// orderRegistries returns registry directory names in precedence order: the
+// order the registries were added, as recorded in the cache's order file.
+// Directories absent from the order file are appended in lexical order so the
+// result is always deterministic. When no order file exists it falls back to
+// lexical order.
+func orderRegistries(cacheDir string, dirs []string) []string {
+	order := readRegistryOrder(cacheDir)
+	if len(order) == 0 {
+		sort.Strings(dirs)
+		return dirs
+	}
+	rank := make(map[string]int, len(order))
+	for i, name := range order {
+		if _, seen := rank[name]; !seen {
+			rank[name] = i
+		}
+	}
+	sort.SliceStable(dirs, func(i, j int) bool {
+		ri, iKnown := rank[dirs[i]]
+		rj, jKnown := rank[dirs[j]]
+		switch {
+		case iKnown && jKnown:
+			return ri < rj
+		case iKnown:
+			return true
+		case jKnown:
+			return false
+		default:
+			return dirs[i] < dirs[j]
+		}
+	})
+	return dirs
 }
 
 // Add registers a new registry with optional token, version, and subdirectory.
 func (m *Manager) Add(name, url, token, version, subdirectory string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if err := ValidateName(name); err != nil {
+		return fmt.Errorf("invalid registry name: %w", err)
+	}
+	if err := validateSubdirectory(subdirectory); err != nil {
+		return err
+	}
 
 	for _, r := range m.config.Registries {
 		if r.Name == name {
@@ -245,16 +395,15 @@ func (m *Manager) Remove(name string) error {
 	return m.save()
 }
 
-// List returns a sorted copy of all registries.
+// List returns a copy of all registries in the order they were added. That
+// insertion order is the resolution precedence: when more than one cached
+// registry provides the same template, the earliest-added one wins.
 func (m *Manager) List() []Registry {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	out := make([]Registry, len(m.config.Registries))
 	copy(out, m.config.Registries)
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Name < out[j].Name
-	})
 	return out
 }
 
@@ -265,7 +414,13 @@ func (m *Manager) CacheDir() string {
 
 // TemplateCachePath returns the directory where a specific template from
 // a registry would be cached: <cacheDir>/<registry>/<template>/
+//
+// It returns the empty string when either name is not a safe single path
+// segment, so a traversal name can never produce a path outside cacheDir.
 func TemplateCachePath(cacheDir, registryName, templateName string) string {
+	if ValidateName(registryName) != nil || ValidateName(templateName) != nil {
+		return ""
+	}
 	return filepath.Join(cacheDir, registryName, templateName)
 }
 
@@ -277,6 +432,13 @@ const manifestSuffix = ".manifest.json"
 // a cached template. The manifest is a sibling of the template directory
 // (never inside it) so its own bytes are excluded from the tree hash:
 // <cacheDir>/<registry>/<template>.manifest.json
+//
+// It returns the empty string when either name is not a safe single path
+// segment (see TemplateCachePath).
 func TemplateManifestPath(cacheDir, registryName, templateName string) string {
-	return TemplateCachePath(cacheDir, registryName, templateName) + manifestSuffix
+	base := TemplateCachePath(cacheDir, registryName, templateName)
+	if base == "" {
+		return ""
+	}
+	return base + manifestSuffix
 }

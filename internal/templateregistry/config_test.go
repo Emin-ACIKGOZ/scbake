@@ -294,3 +294,104 @@ func TestTemplateCachePath(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, result)
 	}
 }
+
+// TestValidateName covers the single-path-segment validator used for registry,
+// template, and project names.
+func TestValidateName(t *testing.T) {
+	valid := []string{"acme", "go-api", "a", "A1._-", "my project"}
+	for _, name := range valid {
+		if err := ValidateName(name); err != nil {
+			t.Errorf("ValidateName(%q) = %v, want nil", name, err)
+		}
+	}
+
+	invalid := []string{
+		"",
+		".",
+		"..",
+		"a/b",
+		`a\b`,
+		"/abs",
+		`C:\abs`,
+		"../evil",
+		"bad\x00name",
+		"bad\nname",
+		"colon:name",
+	}
+	for _, name := range invalid {
+		if err := ValidateName(name); err == nil {
+			t.Errorf("ValidateName(%q) = nil, want error", name)
+		}
+	}
+}
+
+// TestAddRejectsTraversalRegistryName is a regression test for SCB-010: a
+// traversal registry name must be rejected before it is stored, so it can never
+// be joined into a cache path that escapes the cache root.
+func TestAddRejectsTraversalRegistryName(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	for _, name := range []string{"../evil", "..", "a/b", "/abs"} {
+		if err := m.Add(name, "https://example.com/v1", "", "", ""); err == nil {
+			t.Errorf("Add(%q) = nil, want error for traversal registry name", name)
+		}
+	}
+}
+
+// TestAddRejectsTraversalSubdirectory is a regression test for SCB-011: a
+// --subdirectory value that is absolute or contains ".." must be rejected.
+func TestAddRejectsTraversalSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	for _, sub := range []string{"../..", "..", "nested/../../etc", "/abs", `..\..`} {
+		if err := m.Add("acme", "https://example.com/v1", "", "", sub); err == nil {
+			t.Errorf("Add with subdirectory %q = nil, want error", sub)
+		}
+	}
+
+	// A legitimate relative (possibly multi-segment) subdirectory is accepted.
+	if err := m.Add("acme", "https://example.com/v1", "", "", "template/nested"); err != nil {
+		t.Errorf("Add with valid subdirectory failed: %v", err)
+	}
+}
+
+// TestListPreservesInsertionOrder is a regression test for SCB-021: the
+// registry list (and therefore the resolution precedence) must preserve the
+// order registries were added rather than sorting by name.
+func TestListPreservesInsertionOrder(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	if err := m.Add("zeta", "https://zeta.example/v1", "", "", ""); err != nil {
+		t.Fatalf("Add zeta failed: %v", err)
+	}
+	if err := m.Add("alpha", "https://alpha.example/v1", "", "", ""); err != nil {
+		t.Fatalf("Add alpha failed: %v", err)
+	}
+
+	list := m.List()
+	if len(list) != 2 {
+		t.Fatalf("expected 2 registries, got %d", len(list))
+	}
+	if list[0].Name != "zeta" || list[1].Name != "alpha" {
+		t.Fatalf("expected insertion order [zeta alpha], got [%s %s]", list[0].Name, list[1].Name)
+	}
+}
+
+// TestTemplateCachePathRejectsTraversal is a regression test for SCB-010:
+// TemplateCachePath must never build a path outside the cache root from a
+// traversal registry or template name.
+func TestTemplateCachePathRejectsTraversal(t *testing.T) {
+	for _, tc := range []struct{ registry, template string }{
+		{"../evil", "go-api"},
+		{"acme", "../../evil"},
+		{"..", ".."},
+		{"a/b", "c"},
+	} {
+		if got := TemplateCachePath("/cache", tc.registry, tc.template); got != "" {
+			t.Errorf("TemplateCachePath(/cache, %q, %q) = %q, want empty", tc.registry, tc.template, got)
+		}
+	}
+}

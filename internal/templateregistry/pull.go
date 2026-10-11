@@ -31,9 +31,19 @@ const (
 // Pull downloads a template from a registry and caches it locally.
 // Uses the registry's stored token (overridable via SCBAKE_REGISTRY_TOKEN_<NAME> env var).
 func (m *Manager) Pull(registryName, templateName string) error {
+	if err := ValidateName(registryName); err != nil {
+		return fmt.Errorf("invalid registry name: %w", err)
+	}
+	if err := ValidateName(templateName); err != nil {
+		return fmt.Errorf("invalid template name: %w", err)
+	}
+
 	registry := m.Get(registryName)
 	if registry == nil {
 		return fmt.Errorf("registry %q not found", registryName)
+	}
+	if err := validateSubdirectory(registry.Subdirectory); err != nil {
+		return err
 	}
 
 	token := registry.Token
@@ -64,6 +74,13 @@ func (m *Manager) Pull(registryName, templateName string) error {
 // PullFromURL downloads a template archive from an arbitrary URL and caches it.
 // Accepts an optional token for authentication.
 func (m *Manager) PullFromURL(registryName, templateName, downloadURL, token string) error {
+	if err := ValidateName(registryName); err != nil {
+		return fmt.Errorf("invalid registry name: %w", err)
+	}
+	if err := ValidateName(templateName); err != nil {
+		return fmt.Errorf("invalid template name: %w", err)
+	}
+
 	destDir := TemplateCachePath(m.cacheDir, registryName, templateName)
 	pullCtx := pullRequest{
 		downloadURL:  downloadURL,
@@ -85,7 +102,27 @@ type pullRequest struct {
 }
 
 func (m *Manager) pullFromURL(pr pullRequest) error {
+	if m.cacheDir == "" {
+		return errors.New("template cache directory is not configured")
+	}
+	if err := ValidateName(pr.registryName); err != nil {
+		return fmt.Errorf("invalid registry name: %w", err)
+	}
+	if err := ValidateName(pr.templateName); err != nil {
+		return fmt.Errorf("invalid template name: %w", err)
+	}
+	if err := validateSubdirectory(pr.subdirectory); err != nil {
+		return err
+	}
+	// Containment is enforced again here, immediately before any destructive
+	// filesystem operation, so a bad name can never reach outside the cache.
+	if err := ensureStrictlyWithin(m.cacheDir, pr.destDir); err != nil {
+		return err
+	}
 	manifestPath := TemplateManifestPath(m.cacheDir, pr.registryName, pr.templateName)
+	if err := ensureStrictlyWithin(m.cacheDir, manifestPath); err != nil {
+		return err
+	}
 
 	// A cache hit is only trusted when the directory exists and its contents
 	// still match the recorded manifest. Anything else (missing directory,
@@ -108,7 +145,7 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 		_ = resp.Body.Close()
 	}()
 
-	if err := extractToCache(resp.Body, pr.destDir, pr.subdirectory); err != nil {
+	if err := extractToCache(resp.Body, m.cacheDir, pr.destDir, pr.subdirectory); err != nil {
 		return err
 	}
 
@@ -322,8 +359,19 @@ func redactURLError(err error) {
 	}
 }
 
-func extractToCache(body io.Reader, destDir, subdirectory string) error {
+func extractToCache(body io.Reader, cacheDir, destDir, subdirectory string) error {
+	if err := validateSubdirectory(subdirectory); err != nil {
+		return err
+	}
+	// Fail closed before any RemoveAll/Rename: destDir and its staging sibling
+	// must be strictly inside the cache root.
+	if err := ensureStrictlyWithin(cacheDir, destDir); err != nil {
+		return err
+	}
 	tmpDir := destDir + ".tmp"
+	if err := ensureStrictlyWithin(cacheDir, tmpDir); err != nil {
+		return err
+	}
 	if err := os.RemoveAll(tmpDir); err != nil {
 		return fmt.Errorf("cleaning temp dir: %w", err)
 	}
@@ -338,6 +386,13 @@ func extractToCache(body io.Reader, destDir, subdirectory string) error {
 	}
 
 	sourceDir := promoteSubdirectory(tmpDir, subdirectory)
+
+	// The promoted source must stay within the temp dir; a value that escaped
+	// (for example via "..") would otherwise be renamed into the cache.
+	if err := ensureWithin(tmpDir, sourceDir); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return err
+	}
 
 	// Validate the staged tree before touching the existing cache so an empty
 	// or malformed archive cannot destroy a previously valid cache.
@@ -375,10 +430,45 @@ func promoteSubdirectory(tmpDir, subdirectory string) string {
 		return tmpDir
 	}
 	subDir := filepath.Join(tmpDir, subdirectory)
+	// Never promote a directory that escaped the temp dir; fall back to the
+	// whole archive instead.
+	if ensureWithin(tmpDir, subDir) != nil {
+		return tmpDir
+	}
 	if info, err := os.Stat(subDir); err == nil && info.IsDir() {
 		return subDir
 	}
 	return tmpDir
+}
+
+// ensureStrictlyWithin returns an error unless target is strictly inside base.
+// It is used before destructive operations so that a bad name can never reach
+// outside the template cache.
+func ensureStrictlyWithin(base, target string) error {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return fmt.Errorf("resolving %q relative to %q: %w", target, base, err)
+	}
+	if rel == "." || rel == ".." || filepath.IsAbs(rel) ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("refusing to use path %q outside %q", target, base)
+	}
+	return nil
+}
+
+// ensureWithin returns an error unless target is base itself or strictly inside
+// base. It is used to confirm a promoted subdirectory did not escape its temp
+// dir (the whole-archive case returns base unchanged).
+func ensureWithin(base, target string) error {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return fmt.Errorf("resolving %q relative to %q: %w", target, base, err)
+	}
+	if rel == ".." || filepath.IsAbs(rel) ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("refusing to use path %q outside %q", target, base)
+	}
+	return nil
 }
 
 // validateTemplateCache checks that a cached template directory contains at
