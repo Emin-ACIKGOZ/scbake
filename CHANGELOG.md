@@ -4,6 +4,12 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.5.19] - 2026-10-11
+
+### Bug Fixes
+
+- **core:** Validate manifest project fields before rendering
+
 ## [0.5.18] - 2026-10-11
 
 ### Bug Fixes
