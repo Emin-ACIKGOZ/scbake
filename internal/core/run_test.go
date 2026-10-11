@@ -290,3 +290,219 @@ func TestExecuteAndFinalize_Success(t *testing.T) {
 	}
 	// Note: We don't fail on IsNotExist, as that is a valid clean state.
 }
+
+// TestValidateProjectPath is a regression guard for SCB-006/SCB-007/SCB-008:
+// project paths are interpolated verbatim into generated shell scripts,
+// Makefile recipes, and YAML, so anything that could escape those scalar
+// contexts must be rejected at plan time.
+func TestValidateProjectPath(t *testing.T) {
+	valid := []string{
+		"backend",
+		"services/api",
+		"services/web-app",
+		".",
+		"./services/api",
+		"a_b-c.d/e",
+	}
+	for _, p := range valid {
+		if err := validateProjectPath(p); err != nil {
+			t.Errorf("validateProjectPath(%q) = %v, want nil", p, err)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"/etc/passwd",
+		"/",
+		"../outside",
+		"services/../../etc",
+		"a/../b",
+		`services\api`,
+		"services/x; touch pwned",
+		"services/$(touch pwned)",
+		"services/x`touch pwned`",
+		"services/x && touch pwned",
+		"services/x|touch pwned",
+		"services/x\ntouch pwned",
+		"services/x\ttouch pwned",
+		"services/my project",
+		"C:/windows",
+		"services/x\"y",
+		"services/x'y",
+	}
+	for _, p := range invalid {
+		if err := validateProjectPath(p); err == nil {
+			t.Errorf("validateProjectPath(%q) = nil, want error", p)
+		}
+	}
+}
+
+// TestValidateProjectName is a regression guard for SCB-006: the project name
+// is echoed into shell `run:` blocks and Makefile recipes.
+func TestValidateProjectName(t *testing.T) {
+	valid := []string{"backend", "web-app", "my_app.v2", "NewProj", "a1"}
+	for _, n := range valid {
+		if err := validateProjectName(n); err != nil {
+			t.Errorf("validateProjectName(%q) = %v, want nil", n, err)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"evil; touch pwned",
+		"evil && touch pwned",
+		"evil$(touch pwned)",
+		"evil`touch pwned`",
+		"evil\ntouch pwned",
+		"evil\ttouch pwned",
+		"evil name",
+		`evil": {a: b}`,
+		"evil/path",
+		"evil\\path",
+	}
+	for _, n := range invalid {
+		if err := validateProjectName(n); err == nil {
+			t.Errorf("validateProjectName(%q) = nil, want error", n)
+		}
+	}
+}
+
+// TestValidateProjectLanguage guards the language field, which is embedded in
+// Makefile variable names (MAKE_BUILD_COMMAND_<lang>).
+func TestValidateProjectLanguage(t *testing.T) {
+	for _, l := range []string{"", "go", "svelte", "spring", "rust"} {
+		if err := validateProjectLanguage(l); err != nil {
+			t.Errorf("validateProjectLanguage(%q) = %v, want nil", l, err)
+		}
+	}
+	for _, l := range []string{"go; touch pwned", "go) ; x", "go\nx", "go x", "go/x"} {
+		if err := validateProjectLanguage(l); err == nil {
+			t.Errorf("validateProjectLanguage(%q) = nil, want error", l)
+		}
+	}
+}
+
+// TestValidateTestCommand is a regression guard for SCB-007: test_command is
+// intentionally executed by the Makefile, but control characters could break
+// out of the recipe.
+func TestValidateTestCommand(t *testing.T) {
+	valid := []string{"go test ./...", "npm test", "make test && echo done", "pytest -q"}
+	for _, c := range valid {
+		if err := validateTestCommand(c); err != nil {
+			t.Errorf("validateTestCommand(%q) = %v, want nil", c, err)
+		}
+	}
+	invalid := []string{"go test ./...\nrm -rf /", "go\ttest", "go test\r\n", "go test\x00"}
+	for _, c := range invalid {
+		if err := validateTestCommand(c); err == nil {
+			t.Errorf("validateTestCommand(%q) = nil, want error", c)
+		}
+	}
+}
+
+// TestBuildTaskContextRejectsUnsafeProjects verifies that a crafted manifest
+// (or a crafted --lang target) aborts the plan before any template renders.
+func TestBuildTaskContextRejectsUnsafeProjects(t *testing.T) {
+	tests := []struct {
+		name    string
+		project types.Project
+	}{
+		{"command in path", types.Project{Name: "evil", Path: "services/x; touch pwned", Language: "go"}},
+		{"substitution in path", types.Project{Name: "evil", Path: "services/$(touch pwned)", Language: "go"}},
+		{"newline in path", types.Project{Name: "evil", Path: "services/x\ntouch pwned", Language: "go"}},
+		{"traversal in path", types.Project{Name: "evil", Path: "../outside", Language: "go"}},
+		{"absolute path", types.Project{Name: "evil", Path: "/etc/passwd", Language: "go"}},
+		{"backslash in path", types.Project{Name: "evil", Path: `services\api`, Language: "go"}},
+		{"command in name", types.Project{Name: "evil; touch pwned", Path: "services/api", Language: "go"}},
+		{"newline in name", types.Project{Name: "evil\ntouch pwned", Path: "services/api", Language: "go"}},
+		{"yaml in name", types.Project{Name: `evil": {a: b}`, Path: "services/api", Language: "go"}},
+		{"command in language", types.Project{Name: "evil", Path: "services/api", Language: "go); touch pwned; echo ($(x"}},
+	}
+
+	for _, tt := range tests {
+		t.Run("existing/"+tt.name, func(t *testing.T) {
+			m := &types.Manifest{Projects: []types.Project{tt.project}}
+			_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, m, &manifestChanges{}, nil)
+			if cancel != nil {
+				cancel()
+			}
+			if err == nil {
+				t.Fatal("expected unsafe project to be rejected, got nil error")
+			}
+		})
+
+		t.Run("added/"+tt.name, func(t *testing.T) {
+			changes := &manifestChanges{Projects: []types.Project{tt.project}}
+			_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, &types.Manifest{}, changes, nil)
+			if cancel != nil {
+				cancel()
+			}
+			if err == nil {
+				t.Fatal("expected unsafe added project to be rejected, got nil error")
+			}
+		})
+	}
+}
+
+// TestBuildTaskContextRejectsUnsafeTestCommand verifies the free-form
+// test_command metadata cannot carry a newline into the Makefile recipe.
+func TestBuildTaskContextRejectsUnsafeTestCommand(t *testing.T) {
+	m := &types.Manifest{
+		Metadata: map[string]string{"test_command": "go test ./...\nrm -rf /"},
+	}
+	_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, m, &manifestChanges{}, nil)
+	if cancel != nil {
+		cancel()
+	}
+	if err == nil {
+		t.Fatal("expected unsafe test_command to be rejected, got nil error")
+	}
+}
+
+// TestBuildTaskContextAcceptsBenignProjects ensures the new guard does not
+// reject ordinary manifests.
+func TestBuildTaskContextAcceptsBenignProjects(t *testing.T) {
+	m := &types.Manifest{
+		Projects: []types.Project{
+			{Name: "backend", Path: "backend", Language: "go"},
+			{Name: "web-app", Path: "services/web-app", Language: "svelte"},
+			{Name: "root", Path: ".", Language: "go"},
+		},
+		Metadata: map[string]string{"test_command": "go test ./..."},
+	}
+	_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, m, &manifestChanges{}, nil)
+	if err != nil {
+		t.Fatalf("benign manifest rejected: %v", err)
+	}
+	cancel()
+}
+
+// TestRepoRelativeProjectPath verifies that absolute targets are normalized to
+// repo-relative paths so the manifest stays portable and the validator can
+// require a repo-relative value.
+func TestRepoRelativeProjectPath(t *testing.T) {
+	tests := []struct {
+		root, arg, want string
+	}{
+		{"/repo", "/repo/backend", "backend"},
+		{"/repo", "/repo/services/api", "services/api"},
+		{"/repo", "/repo", "."},
+		{"/repo", "backend", "backend"},
+		{"/repo", "./services/api", "services/api"},
+		{"/repo", ".", "."},
+		{"/repo", "/other/x", "../other/x"},
+	}
+	for _, tt := range tests {
+		got, err := repoRelativeProjectPath(tt.root, tt.arg)
+		if err != nil {
+			t.Errorf("repoRelativeProjectPath(%q, %q) error: %v", tt.root, tt.arg, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("repoRelativeProjectPath(%q, %q) = %q, want %q", tt.root, tt.arg, got, tt.want)
+		}
+	}
+	if _, err := repoRelativeProjectPath("/repo", ""); err == nil {
+		t.Error("repoRelativeProjectPath with empty arg = nil error, want error")
+	}
+}

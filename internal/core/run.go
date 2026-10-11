@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/manifest"
@@ -72,7 +73,7 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 
 	// 3. Execution Plan Construction
 	rc.WithFlag = deduplicateTemplates(rc.WithFlag)
-	plan, _, changes, err := buildPlan(rc)
+	plan, _, changes, err := buildPlan(rc, rootPath)
 	if err != nil {
 		return err
 	}
@@ -145,6 +146,14 @@ func buildTaskContext(
 	futureManifest.Projects = append(futureManifest.Projects, changes.Projects...)
 	futureManifest.Templates = append(futureManifest.Templates, changes.Templates...)
 
+	// Reject untrusted manifest fields before any template renders them. Project
+	// paths/names are interpolated into generated shell scripts, Makefile
+	// recipes, and YAML, so an unsafe value must fail the plan rather than reach
+	// the templates (SCB-006/SCB-007/SCB-008).
+	if err := validateManifestFields(futureManifest); err != nil {
+		return types.TaskContext{}, nil, err
+	}
+
 	// Validate all selected templates against their schemas before executing
 	if err := validateSelectedTemplates(rc, futureManifest.Metadata); err != nil {
 		return types.TaskContext{}, nil, err
@@ -204,7 +213,9 @@ func persistManifestState(
 	rootPath string,
 	tx *transaction.Manager,
 ) error {
-	updateManifest(m, changes)
+	if err := updateManifest(m, changes); err != nil {
+		return err
+	}
 
 	// Persist metadata
 	if tc.Manifest.Metadata != nil {
@@ -240,8 +251,17 @@ func persistManifestState(
 	return nil
 }
 
-// updateManifest merges new projects and templates into the existing manifest structure.
-func updateManifest(m *types.Manifest, changes *manifestChanges) {
+// updateManifest merges new projects and templates into the existing manifest
+// structure. New projects are validated again here as a final guard so an
+// unsafe field can never be persisted even if it slipped past the plan-time
+// check.
+func updateManifest(m *types.Manifest, changes *manifestChanges) error {
+	for _, newProj := range changes.Projects {
+		if err := validateProject(newProj); err != nil {
+			return err
+		}
+	}
+
 	// Update Projects (ensure no duplicates by path)
 	existingProjects := make(map[string]bool)
 	for _, proj := range m.Projects {
@@ -264,6 +284,162 @@ func updateManifest(m *types.Manifest, changes *manifestChanges) {
 			m.Templates = append(m.Templates, newTmpl)
 		}
 	}
+
+	return nil
+}
+
+// validateManifestFields rejects untrusted manifest fields that the generated
+// templates interpolate into interpreted contexts (shell scripts, Makefile
+// recipes, and YAML). It is called at plan time, before any template renders,
+// and fails closed: a project whose path/name/language is not a plain,
+// repo-relative identifier aborts the whole run. See SCB-006, SCB-007, SCB-008.
+func validateManifestFields(m *types.Manifest) error {
+	if m == nil {
+		return nil
+	}
+	for i := range m.Projects {
+		if err := validateProject(m.Projects[i]); err != nil {
+			return err
+		}
+	}
+	if cmd, ok := m.Metadata["test_command"]; ok {
+		if err := validateTestCommand(cmd); err != nil {
+			return fmt.Errorf("metadata test_command is invalid: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateProject checks every untrusted field of a single project. The error
+// names the offending project so the user can locate it in scbake.toml.
+func validateProject(p types.Project) error {
+	if err := validateProjectPath(p.Path); err != nil {
+		return fmt.Errorf("project %q has an invalid path %q: %w", p.Name, p.Path, err)
+	}
+	if err := validateProjectName(p.Name); err != nil {
+		return fmt.Errorf("project %q has an invalid name: %w", p.Name, err)
+	}
+	if err := validateProjectLanguage(p.Language); err != nil {
+		return fmt.Errorf("project %q has an invalid language %q: %w", p.Name, p.Language, err)
+	}
+	return nil
+}
+
+// validateProjectPath enforces a clean, repo-relative project path. The path is
+// copied verbatim into generated `cd <path>` shell commands and YAML
+// `directory:` values, so it must not contain anything that could escape those
+// scalar contexts: absolute paths, `..` traversal, backslashes, whitespace,
+// shell/YAML metacharacters, or control characters/newlines.
+func validateProjectPath(p string) error {
+	switch {
+	case p == "":
+		return errors.New("path must not be empty")
+	case strings.ContainsRune(p, '\\'):
+		return errors.New("path must not contain backslashes")
+	case path.IsAbs(p), strings.HasPrefix(p, "/"):
+		return errors.New("path must be relative to the repository root")
+	}
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f {
+			return errors.New("path must not contain control characters or newlines")
+		}
+		if !isSafePathRune(r) {
+			return fmt.Errorf("path contains an unsafe character %q", r)
+		}
+	}
+	for _, comp := range strings.Split(p, "/") {
+		if comp == ".." {
+			return errors.New("path must not contain '..' components")
+		}
+	}
+	return nil
+}
+
+// validateProjectName enforces a safe identifier for the project name, which is
+// interpolated into shell `echo` lines and YAML/comment text. Shell/YAML
+// metacharacters and newlines are rejected.
+func validateProjectName(n string) error {
+	if n == "" {
+		return errors.New("name must not be empty")
+	}
+	return validateIdentifier(n, "name")
+}
+
+// validateProjectLanguage enforces a safe identifier for the language field,
+// which is embedded in Makefile variable names (MAKE_BUILD_COMMAND_<lang>) and
+// shell/YAML text. An empty language is allowed (it yields no build command).
+func validateProjectLanguage(l string) error {
+	if l == "" {
+		return nil
+	}
+	return validateIdentifier(l, "language")
+}
+
+// validateIdentifier rejects shell/YAML metacharacters and control characters
+// in a value that must be a plain ASCII identifier.
+func validateIdentifier(value, field string) error {
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("%s must not contain control characters or newlines", field)
+		}
+		if !isSafeIdentifierRune(r) {
+			return fmt.Errorf("%s contains an unsafe character %q", field, r)
+		}
+	}
+	return nil
+}
+
+// isSafePathRune reports whether r is allowed in a repo-relative path: ASCII
+// letters, digits, and the separators `.`, `_`, `-`, `/`.
+func isSafePathRune(r rune) bool {
+	return isSafeIdentifierRune(r) || r == '/'
+}
+
+// isSafeIdentifierRune reports whether r is allowed in a project name or
+// language identifier: ASCII letters, digits, and `.`, `_`, `-`.
+func isSafeIdentifierRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	case r == '.', r == '_', r == '-':
+		return true
+	default:
+		return false
+	}
+}
+
+// validateTestCommand rejects control characters (notably newlines and tabs) in
+// the free-form test_command metadata value. The value is intentionally
+// executed as-is by the generated Makefile `test` recipe, but a newline or tab
+// would let a committed manifest break out of that recipe and inject extra
+// commands.
+func validateTestCommand(cmd string) error {
+	for _, r := range cmd {
+		if r < 0x20 || r == 0x7f {
+			return errors.New("test_command must not contain control characters or newlines")
+		}
+	}
+	return nil
+}
+
+// repoRelativeProjectPath converts a user-supplied project path into a clean,
+// slash-separated path relative to the manifest root. Relative inputs are
+// cleaned in place; absolute inputs are made relative to rootPath so the
+// manifest stays portable and the path validator can require a repo-relative
+// value.
+func repoRelativeProjectPath(rootPath, pathArg string) (string, error) {
+	if pathArg == "" {
+		return "", errors.New("project path must not be empty")
+	}
+	rel := pathArg
+	if filepath.IsAbs(pathArg) {
+		r, err := filepath.Rel(rootPath, pathArg)
+		if err != nil {
+			return "", fmt.Errorf("cannot make path %q relative to %q: %w", pathArg, rootPath, err)
+		}
+		rel = r
+	}
+	return filepath.ToSlash(filepath.Clean(rel)), nil
 }
 
 // validateSelectedTemplates checks every requested template and language
@@ -355,7 +531,7 @@ func deduplicateTemplates(requested []string) []string {
 }
 
 // buildPlan constructs the list of tasks based on CLI flags.
-func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
+func buildPlan(rc RunContext, rootPath string) (*types.Plan, string, *manifestChanges, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
 	changes := &manifestChanges{}
 	commitMessage := "scbake: Apply templates"
@@ -363,7 +539,7 @@ func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
 
 	if rc.LangFlag != "" {
 		didSomething = true
-		msg, err := handleLangFlag(rc, plan, changes)
+		msg, err := handleLangFlag(rc, rootPath, plan, changes)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -403,7 +579,7 @@ func checkLangPrerequisites(langFlag string) error {
 }
 
 // handleLangFlag processes the --lang flag, adding language tasks and project info.
-func handleLangFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) (string, error) {
+func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *manifestChanges) (string, error) {
 	if err := checkLangPrerequisites(rc.LangFlag); err != nil {
 		return "", err
 	}
@@ -430,11 +606,22 @@ func handleLangFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) (
 		return "", fmt.Errorf("could not determine project name: %w", err)
 	}
 
-	changes.Projects = append(changes.Projects, types.Project{
+	// Store a repo-relative path (the manifest is documented as portable) and
+	// validate it before it can reach any template.
+	projectPath, err := repoRelativeProjectPath(rootPath, rc.ManifestPathArg)
+	if err != nil {
+		return "", fmt.Errorf("could not determine project path: %w", err)
+	}
+
+	project := types.Project{
 		Name:     projectName,
-		Path:     rc.ManifestPathArg,
+		Path:     projectPath,
 		Language: rc.LangFlag,
-	})
+	}
+	if err := validateProject(project); err != nil {
+		return "", err
+	}
+	changes.Projects = append(changes.Projects, project)
 
 	return fmt.Sprintf("scbake: Apply '%s' to %s", rc.LangFlag, rc.ManifestPathArg), nil
 }
