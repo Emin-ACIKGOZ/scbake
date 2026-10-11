@@ -30,6 +30,10 @@ const (
 	defaultTimeout = 30 * time.Minute
 )
 
+// ErrNoSelection is returned when neither a language pack nor any tooling
+// template was requested, so there is nothing to apply.
+var ErrNoSelection = errors.New("no language or templates specified")
+
 // RunContext holds the flags and arguments for a single execution run.
 type RunContext struct {
 	LangFlag         string
@@ -559,7 +563,7 @@ func buildPlan(rc RunContext, rootPath string) (*types.Plan, string, *manifestCh
 
 	// Only fail if neither a language nor tooling was specified.
 	if !didSomething {
-		return nil, "", nil, errors.New("no language or templates specified")
+		return nil, "", nil, ErrNoSelection
 	}
 
 	return plan, commitMessage, changes, nil

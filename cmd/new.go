@@ -63,6 +63,22 @@ func runNew(projectName string, dirCreated *bool) error {
 		return fmt.Errorf("invalid project name: %w", err)
 	}
 
+	// Validate every flag before mutating the filesystem (SCB-012): a malformed
+	// --set pair, an unknown --set key, or a missing --lang/--with must fail
+	// before the project directory or its manifest is created, so a failed 'new'
+	// leaves no residue behind. This mirrors the ordering already used by
+	// 'apply' (see cmd/apply.go).
+	setVars, err := parseSetFlags(newSetFlag)
+	if err != nil {
+		return err
+	}
+	if err := core.ValidateSetKeys(newWithFlag, newLangFlag, setVars); err != nil {
+		return err
+	}
+	if newLangFlag == "" && len(newWithFlag) == 0 {
+		return core.ErrNoSelection
+	}
+
 	reporter := ui.NewReporter(newCmdTotalSteps, dryRun)
 
 	restoreWD, err := bootstrapProjectDir(projectName, dryRun, reporter, dirCreated)
@@ -70,17 +86,6 @@ func runNew(projectName string, dirCreated *bool) error {
 		return err
 	}
 	defer restoreWD()
-
-	// Parse --set key=value pairs
-	setVars, err := parseSetFlags(newSetFlag)
-	if err != nil {
-		return err
-	}
-
-	// Reject --set keys not declared by any selected schema before running.
-	if err := core.ValidateSetKeys(newWithFlag, newLangFlag, setVars); err != nil {
-		return err
-	}
 
 	// Delegate template and language pack application to the core executor
 	reporter.Step("🚀", "Applying templates...")
