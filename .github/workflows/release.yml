@@ -58,7 +58,10 @@ jobs:
             # Reject anything that is not a valid tag name. This also blocks
             # newline injection into $GITHUB_OUTPUT.
             if ! git check-ref-format "refs/tags/$TAG" >/dev/null 2>&1; then
-              echo "::error::Invalid tag input: $TAG"
+              # Do not echo the raw value on stdout: it may contain newlines
+              # that would be parsed as workflow commands.
+              printf 'Invalid tag input: %s\n' "$TAG" >&2
+              echo "::error::Invalid tag input; expected a valid git tag name"
               exit 1
             fi
             echo "version=$TAG" >> "$GITHUB_OUTPUT"

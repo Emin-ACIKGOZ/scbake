@@ -19,11 +19,13 @@ import (
 // inline shell command).
 var runKeyRe = regexp.MustCompile(`^\s*(?:-\s+)?run\s*:(\s*(.*))?$`)
 
-// injectionRe matches an interpolation of an untrusted workflow input inside a
-// run: script. It covers both the full `github.event.inputs.*` context and the
-// `inputs.*` shorthand available in workflow_dispatch, and tolerates optional
-// whitespace inside the expression (GitHub expressions allow it).
-var injectionRe = regexp.MustCompile(`\$\{\{\s*(?:github\.event\.inputs|inputs)\.`)
+// injectionRe matches an interpolation of an untrusted workflow input anywhere
+// inside a `${{ ... }}` expression in a run: script. It covers both the full
+// `github.event.inputs.*` context and the `inputs.*` shorthand available in
+// workflow_dispatch, tolerates whitespace around the dots (GitHub expressions
+// allow it), and matches when the context is wrapped in a function call or
+// followed by bracket indexing.
+var injectionRe = regexp.MustCompile(`\$\{\{[^}]*\b(?:github\s*\.\s*event\s*\.\s*inputs|inputs)\b`)
 
 // blockScalarRe matches block-scalar indicators like `|`, `>-`, `|+`, `|2`.
 var blockScalarRe = regexp.MustCompile(`^[|>][+-]?\d*$`)
