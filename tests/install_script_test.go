@@ -24,11 +24,15 @@ import (
 //     installer treated any non-empty file as a successful download.
 //   - BUG #44 / SCB-046: get_latest_version() silently downgraded to a
 //     hard-coded v0.3.0 on an "API rate limit exceeded" response.
+//   - SCB-042 / GHSA-fj8r-qx6c-m797: checksum verification was a no-op that
+//     returned success on mismatch and skipped a missing SHA256SUMS, so a
+//     tampered or wrong binary was installed anyway.
 
 // stubCurlScript is a deterministic stand-in for curl. Behavior is selected
 // by the STUB_MODE environment variable: success, rate_limit, api_error,
-// binary_error, macho_thin or pe. Invocations are appended to the file named
-// by STUB_CURL_LOG when that variable is set.
+// binary_error, macho_thin, pe, checksum_mismatch or missing_checksums.
+// Invocations are appended to the file named by STUB_CURL_LOG when that
+// variable is set.
 const stubCurlScript = `#!/usr/bin/env bash
 # Deterministic stand-in for curl used by install.sh integration tests.
 # It emulates the HTTP semantics install.sh relies on and never touches the
@@ -55,6 +59,37 @@ if [ -n "${STUB_CURL_LOG:-}" ]; then
     printf '%s\n' "$*" >> "$STUB_CURL_LOG"
 fi
 
+# sha256 of a file, using whichever tool the host provides (mirrors install.sh).
+sha256_of_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+# The release asset name install.sh requests for this platform.
+asset_name() {
+    local os arch
+    case "$(uname -s)" in
+        Linux*)   os=linux ;;
+        Darwin*)  os=darwin ;;
+        MINGW*|MSYS*|CYGWIN*) os=windows ;;
+        *)        os=linux ;;
+    esac
+    case "$(uname -m)" in
+        x86_64|amd64)  arch=amd64 ;;
+        aarch64|arm64) arch=arm64 ;;
+        armv7*)        arch=arm ;;
+        *)             arch=amd64 ;;
+    esac
+    local name="scbake-${os}-${arch}"
+    if [ "$os" = "windows" ]; then
+        name="${name}.exe"
+    fi
+    printf '%s' "$name"
+}
+
 mode="${STUB_MODE:-success}"
 
 case "$url" in
@@ -71,7 +106,31 @@ case "$url" in
         printf '%s' "$body"
         ;;
     *releases/download*SHA256SUMS*)
-        exit 22
+        # missing_checksums emulates a release with no SHA256SUMS asset (HTTP
+        # 404): curl -f must fail, and the installer must abort.
+        if [ "$mode" = "missing_checksums" ]; then
+            exit 22
+        fi
+        # Write the same magic bytes the binary branch serves, hash them, and
+        # emit a correctly formatted checksum line for the requested asset.
+        tmp=$(mktemp)
+        case "$mode" in
+            macho_thin) printf '\xcf\xfa\xed\xfe\x02\x01\x01\x00' > "$tmp" ;;
+            pe)         printf '\x4d\x5a\x90\x00\x03\x00\x00\x00' > "$tmp" ;;
+            *)          printf '\x7fELF\x02\x01\x01\x00' > "$tmp" ;;
+        esac
+        hash=$(sha256_of_file "$tmp")
+        rm -f "$tmp"
+        if [ "$mode" = "checksum_mismatch" ]; then
+            # A hash that can never match the downloaded binary.
+            hash="0000000000000000000000000000000000000000000000000000000000000000"
+        fi
+        line="$hash  $(asset_name)"
+        if [ -n "$output" ]; then
+            printf '%s\n' "$line" > "$output"
+        else
+            printf '%s\n' "$line"
+        fi
         ;;
     *releases/download*scbake-*)
         if [ "$mode" = "binary_error" ]; then
@@ -286,6 +345,43 @@ func TestInstallScriptRejectsErrorBodyDownload(t *testing.T) {
 	assertCurlUsedFail(t, curlLog, "scbake-")
 }
 
+// TestInstallScriptRejectsChecksumMismatch is the primary regression for
+// SCB-042: when SHA256SUMS lists a hash that does not match the downloaded
+// binary, the installer must abort and must not install anything. Before the
+// fix, verify_checksum() returned 0 on mismatch and the binary was installed.
+func TestInstallScriptRejectsChecksumMismatch(t *testing.T) {
+	stubDir := setupStubBinaries(t)
+	installDir := filepath.Join(t.TempDir(), "bin")
+
+	out, curlLog, err := runInstallerWithCurlLog(t, stubDir, "checksum_mismatch", installDir)
+	if err == nil {
+		t.Fatalf("expected a non-zero exit on a checksum mismatch, got success\noutput:\n%s", out)
+	}
+	assertNotInstalled(t, installDir)
+	assertCurlUsedFail(t, curlLog, "SHA256SUMS")
+	if !strings.Contains(out, "Checksum mismatch") {
+		t.Errorf("expected a checksum mismatch error, got:\n%s", out)
+	}
+}
+
+// TestInstallScriptRejectsMissingChecksums covers the other half of SCB-042:
+// when the release has no SHA256SUMS (the download fails), the installer must
+// abort rather than silently skip verification and install the binary.
+func TestInstallScriptRejectsMissingChecksums(t *testing.T) {
+	stubDir := setupStubBinaries(t)
+	installDir := filepath.Join(t.TempDir(), "bin")
+
+	out, curlLog, err := runInstallerWithCurlLog(t, stubDir, "missing_checksums", installDir)
+	if err == nil {
+		t.Fatalf("expected a non-zero exit when SHA256SUMS is unavailable, got success\noutput:\n%s", out)
+	}
+	assertNotInstalled(t, installDir)
+	assertCurlUsedFail(t, curlLog, "SHA256SUMS")
+	if !strings.Contains(out, "Failed to download checksums") {
+		t.Errorf("expected a fatal checksum-download error, got:\n%s", out)
+	}
+}
+
 // TestInstallScriptAcceptsThinMachO guards against the regression where the
 // signature check only accepted fat Mach-O (cafebabe) and ELF/PE, causing every
 // macOS install to abort: GoReleaser emits thin Mach-O binaries whose magic is
@@ -334,10 +430,14 @@ func TestInstallScriptSucceeds(t *testing.T) {
 	stubDir := setupStubBinaries(t)
 	installDir := filepath.Join(t.TempDir(), "bin")
 
-	out, err := runInstaller(t, stubDir, "success", installDir)
+	out, curlLog, err := runInstallerWithCurlLog(t, stubDir, "success", installDir)
 	if err != nil {
 		t.Fatalf("expected a successful install, got %v\noutput:\n%s", err, out)
 	}
+	if !strings.Contains(out, "Checksum verified") {
+		t.Errorf("expected the installer to report a verified checksum, got:\n%s", out)
+	}
+	assertCurlUsedFail(t, curlLog, "SHA256SUMS")
 
 	data, readErr := os.ReadFile(installedBinaryPath(installDir))
 	if readErr != nil {
@@ -371,6 +471,41 @@ func TestInstallScriptHardeningStatic(t *testing.T) {
 		}
 		if !strings.Contains(line, "-f") {
 			t.Errorf("install.sh:%d: curl invocation is missing -f: %s", i+1, strings.TrimSpace(raw))
+		}
+	}
+}
+
+// TestInstallScriptChecksumVerificationStatic is a fast, network-free guard that
+// fails if checksum verification regresses to a best-effort no-op: a missing
+// SHA256SUMS or a mismatch must abort the install, not warn and continue.
+func TestInstallScriptChecksumVerificationStatic(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "install.sh"))
+	if err != nil {
+		t.Fatalf("read install.sh: %v", err)
+	}
+	content := string(data)
+
+	// The old no-op tolerated a missing/mismatched checksum; none of these may
+	// reappear.
+	for _, forbidden := range []string{
+		"--ignore-missing",
+		"Checksum validation skipped",
+		"Checksums unavailable",
+		"Don't die",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("install.sh still tolerates a checksum failure (%q present)", forbidden)
+		}
+	}
+
+	// The fatal paths must exist.
+	for _, want := range []string{
+		"Checksum mismatch for",
+		"No checksum entry for",
+		"Failed to download checksums",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("install.sh is missing fatal checksum handling (%q absent)", want)
 		}
 	}
 }
