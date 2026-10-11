@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"scbake/internal/types"
+	"scbake/pkg/tasks"
+	"strings"
 	"testing"
 )
 
@@ -241,5 +243,74 @@ func TestLicenseTask_Metadata(t *testing.T) {
 	}
 	if task.Priority() != 150 {
 		t.Errorf("Priority() mismatch")
+	}
+}
+
+// renderDependabot renders the embedded dependabot.yml template for the given
+// manifest and returns its contents.
+func renderDependabot(t *testing.T, m *types.Manifest) string {
+	t.Helper()
+
+	h := &Handler{}
+	plan, err := h.GetTasks(".", "", "")
+	if err != nil {
+		t.Fatalf("GetTasks failed: %v", err)
+	}
+
+	var task *tasks.CreateTemplateTask
+	for _, tk := range plan {
+		ct, ok := tk.(*tasks.CreateTemplateTask)
+		if ok && ct.OutputPath == ".github/dependabot.yml" {
+			task = ct
+			break
+		}
+	}
+	if task == nil {
+		t.Fatal("dependabot task not found in plan")
+	}
+
+	dir := t.TempDir()
+	tc := types.TaskContext{Ctx: context.Background(), TargetPath: dir, Manifest: m}
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	out, err := os.ReadFile(filepath.Join(dir, ".github", "dependabot.yml"))
+	if err != nil {
+		t.Fatalf("read generated dependabot.yml: %v", err)
+	}
+	return string(out)
+}
+
+// TestDependabot_BenignProjectRendersUnchanged pins the benign rendering.
+func TestDependabot_BenignProjectRendersUnchanged(t *testing.T) {
+	m := &types.Manifest{
+		Projects: []types.Project{{Name: "api", Path: "services/api", Language: "go"}},
+	}
+	out := renderDependabot(t, m)
+
+	if !strings.Contains(out, `directory: "services/api"`) {
+		t.Errorf("generated dependabot.yml missing quoted directory:\n%s", out)
+	}
+}
+
+// TestDependabot_ProjectPathCannotInject is a regression guard for SCB-008: a
+// project path containing a quote or newline must not break out of the YAML
+// scalar.
+func TestDependabot_ProjectPathCannotInject(t *testing.T) {
+	m := &types.Manifest{
+		Projects: []types.Project{{
+			Name:     "evil",
+			Path:     "services/x\"\ntouch /tmp/pwned",
+			Language: "go",
+		}},
+	}
+	out := renderDependabot(t, m)
+
+	if strings.Contains(out, "\ntouch /tmp/pwned") {
+		t.Errorf("project path injected a new YAML line:\n%s", out)
+	}
+	if strings.Contains(out, `directory: "services/x"`) {
+		t.Errorf("project path broke out of the YAML scalar:\n%s", out)
 	}
 }

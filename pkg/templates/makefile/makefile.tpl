@@ -20,7 +20,7 @@ help:
 # --- Main Build Target ---
 build:
 {{- range .Projects }}
-	@echo "Building {{.Name}} ({{.Language}})..."
+	@echo {{ printf "Building %s (%s)..." .Name .Language | quote }}
 	(cd {{.Path}} && $(MAKE_BUILD_COMMAND_{{.Language}}))
 {{- end }}
 
@@ -37,7 +37,7 @@ test:
 clean:
 	@echo "Cleaning projects..."
 {{- range .Projects }}
-	@echo "Cleaning {{.Name}}..."
+	@echo {{ printf "Cleaning %s..." .Name | quote }}
 	(cd {{.Path}} && $(MAKE_CLEAN_COMMAND_{{.Language}}))
 {{- end }}
 
@@ -46,14 +46,14 @@ clean:
 lint:
 	@echo "Running lint checks..."
 {{- range .Projects }}
-	@echo "Linting {{.Name}}..."
+	@echo {{ printf "Linting %s..." .Name | quote }}
 	(cd {{.Path}} && $(MAKE_LINT_COMMAND_{{.Language}}))
 {{- end }}
 
 lint-fix:
 	@echo "Running lint fixes..."
 {{- range .Projects }}
-	@echo "Fixing {{.Name}}..."
+	@echo {{ printf "Fixing %s..." .Name | quote }}
 	(cd {{.Path}} && $(MAKE_LINT_FIX_COMMAND_{{.Language}}))
 {{- end }}
 

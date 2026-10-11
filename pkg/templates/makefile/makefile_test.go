@@ -4,8 +4,12 @@
 package makefile
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +63,71 @@ func TestMakefile_TemplateExists(t *testing.T) {
 	_, err := templates.ReadFile(task.TemplatePath)
 	if err != nil {
 		t.Errorf("Embedded template '%s' is missing from binary: %v", task.TemplatePath, err)
+	}
+}
+
+// renderMakefile renders the embedded Makefile template for the given manifest
+// and returns its contents.
+func renderMakefile(t *testing.T, m *types.Manifest) string {
+	t.Helper()
+
+	handler := &Handler{}
+	plan, err := handler.GetTasks("", "", "")
+	if err != nil {
+		t.Fatalf("GetTasks failed: %v", err)
+	}
+	task := plan[0].(*tasks.CreateTemplateTask)
+
+	dir := t.TempDir()
+	tc := types.TaskContext{Ctx: context.Background(), TargetPath: dir, Manifest: m}
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	out, err := os.ReadFile(filepath.Join(dir, "Makefile"))
+	if err != nil {
+		t.Fatalf("read generated Makefile: %v", err)
+	}
+	return string(out)
+}
+
+// TestMakefile_BenignProjectRendersUnchanged pins the benign rendering so the
+// injection hardening does not silently change ordinary output.
+func TestMakefile_BenignProjectRendersUnchanged(t *testing.T) {
+	m := &types.Manifest{
+		Projects: []types.Project{{Name: "backend", Path: "services/backend", Language: "go"}},
+		Metadata: map[string]string{"test_command": "go test ./..."},
+	}
+	out := renderMakefile(t, m)
+
+	for _, want := range []string{
+		`@echo "Building backend (go)..."`,
+		"(cd services/backend && $(MAKE_BUILD_COMMAND_go))",
+		"go test ./...",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("generated Makefile missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestMakefile_ProjectNameCannotInject is a regression guard for SCB-007: a
+// project name containing a newline must not break out of an `echo` recipe and
+// inject extra make lines.
+func TestMakefile_ProjectNameCannotInject(t *testing.T) {
+	m := &types.Manifest{
+		Projects: []types.Project{{
+			Name:     "evil\ntouch /tmp/pwned",
+			Path:     "backend",
+			Language: "go",
+		}},
+	}
+	out := renderMakefile(t, m)
+
+	if strings.Contains(out, "\ntouch /tmp/pwned") {
+		t.Errorf("project name injected a new make recipe line:\n%s", out)
+	}
+	if !strings.Contains(out, `evil\ntouch /tmp/pwned`) {
+		t.Errorf("expected the name to be rendered as an escaped scalar:\n%s", out)
 	}
 }
