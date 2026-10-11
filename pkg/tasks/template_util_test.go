@@ -14,7 +14,7 @@ var testEmbedFS embed.FS
 func TestReadTemplate_FromEmbedded(t *testing.T) {
 	t.Parallel()
 
-	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "", "")
+	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "", "", "")
 	if err != nil {
 		t.Fatalf("ReadTemplate failed: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestReadTemplate_OverrideTakesPrecedence(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir, "")
+	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir, "", "")
 	if err != nil {
 		t.Fatalf("ReadTemplate failed: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestReadTemplate_OverrideTakesPrecedence(t *testing.T) {
 func TestReadTemplate_OverrideDirEmpty(t *testing.T) {
 	t.Parallel()
 
-	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "", "")
+	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "", "", "")
 	if err != nil {
 		t.Fatalf("ReadTemplate failed: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestReadTemplate_OverrideDirEmpty(t *testing.T) {
 func TestReadTemplate_OverrideDirNonExistent(t *testing.T) {
 	t.Parallel()
 
-	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "/nonexistent/path", "")
+	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "/nonexistent/path", "", "")
 	if err != nil {
 		t.Fatalf("ReadTemplate failed: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestReadTemplate_OverrideDirNonExistent(t *testing.T) {
 func TestReadTemplate_EmbeddedFileNotFound(t *testing.T) {
 	t.Parallel()
 
-	_, err := ReadTemplate(testEmbedFS, "nonexistent.tpl", "", "")
+	_, err := ReadTemplate(testEmbedFS, "nonexistent.tpl", "", "", "")
 	if err == nil {
 		t.Fatal("expected error for nonexistent embedded file")
 	}
@@ -97,7 +97,7 @@ func TestReadTemplate_OverrideWithPermissionError(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	_, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir, "")
+	_, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir, "", "")
 	if err == nil {
 		t.Fatal("expected error for permission denied on override file")
 	}
@@ -109,7 +109,7 @@ func TestReadTemplate_OverridePathTraversal(t *testing.T) {
 	tmpDir := t.TempDir()
 	maliciousPath := "../../etc/passwd"
 
-	_, err := ReadTemplate(testEmbedFS, maliciousPath, tmpDir, "")
+	_, err := ReadTemplate(testEmbedFS, maliciousPath, tmpDir, "", "")
 	if err == nil {
 		t.Fatal("expected error for path traversal to nonexistent file")
 	}
@@ -131,7 +131,7 @@ func TestReadTemplate_OverrideDirWithTrailingSlash(t *testing.T) {
 	}
 
 	// Trailing slash should be cleaned/normalized
-	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir+"/", "")
+	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir+"/", "", "")
 	if err != nil {
 		t.Fatalf("ReadTemplate with trailing slash failed: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestReadTemplate_OverrideSubdirectoryStructure(t *testing.T) {
 	}
 
 	// Verify the override file is read from the subdirectory structure
-	content, err := ReadTemplate(testEmbedFS, "nested/deep/template.tpl", tmpDir, "")
+	content, err := ReadTemplate(testEmbedFS, "nested/deep/template.tpl", tmpDir, "", "")
 	if err != nil {
 		t.Fatalf("ReadTemplate should read override from subdirectories: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestReadTemplate_EmptyEmbeddedFSWithOverride(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	content, err := ReadTemplate(emptyFS, "custom.tpl", tmpDir, "")
+	content, err := ReadTemplate(emptyFS, "custom.tpl", tmpDir, "", "")
 	if err != nil {
 		t.Fatalf("ReadTemplate with empty FS and override file should succeed: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestReadTemplate_OverrideOnlyInDirNotFound(t *testing.T) {
 	var emptyFS embed.FS
 	tmpDir := t.TempDir()
 
-	_, err := ReadTemplate(emptyFS, "nonexistent.tpl", tmpDir, "")
+	_, err := ReadTemplate(emptyFS, "nonexistent.tpl", tmpDir, "", "")
 	if err == nil {
 		t.Fatal("expected error when file not in override dir or embedded FS")
 	}
@@ -222,7 +222,7 @@ func TestReadTemplate_RegistryCacheFallback(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "", registryCacheDir)
+	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "", registryCacheDir, "")
 	if err != nil {
 		t.Fatalf("ReadTemplate failed: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestReadTemplate_OverrideBeatsRegistryCache(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir, registryCacheDir)
+	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", tmpDir, registryCacheDir, "")
 	if err != nil {
 		t.Fatalf("ReadTemplate failed: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestReadTemplate_EmbeddedFallbackWhenRegistryCacheEmpty(t *testing.T) {
 
 	emptyCacheDir := t.TempDir()
 
-	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "", emptyCacheDir)
+	content, err := ReadTemplate(testEmbedFS, "testdata/simple.tpl", "", emptyCacheDir, "")
 	if err != nil {
 		t.Fatalf("ReadTemplate failed: %v", err)
 	}

@@ -12,6 +12,10 @@ import (
 //go:embed checkstyle.xml.tpl pom_snippet.xml.tpl
 var templates embed.FS
 
+// templateName is the registry template name this handler is registered under.
+// It constrains registry cache lookups to this template's subdirectory.
+const templateName = "maven_linter"
+
 // Handler implements the templates.Handler interface for Maven linting.
 type Handler struct{}
 
@@ -29,8 +33,10 @@ func (h *Handler) GetTasks(_ string, templateDir string, registryCacheDir string
 		return nil, err
 	}
 
-	// Task 2: Inject the Checkstyle plugin into the existing pom.xml
-	pluginSnippet, err := tasks.ReadTemplate(templates, "pom_snippet.xml.tpl", templateDir, registryCacheDir)
+	// Task 2: Inject the Checkstyle plugin into the existing pom.xml.
+	// The handler is registered under "maven_linter", which is the registry
+	// template name its cache lookup must be constrained to.
+	pluginSnippet, err := tasks.ReadTemplate(templates, "pom_snippet.xml.tpl", templateDir, registryCacheDir, templateName)
 	if err != nil {
 		return nil, err
 	}

@@ -5,8 +5,12 @@ package mavenlinter
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"scbake/internal/templateregistry"
+	"scbake/internal/testutil"
 	"scbake/internal/util/fileutil"
 	"strings"
 	"testing"
@@ -212,6 +216,44 @@ func TestHandler_FullExecution_NoOrphanedFile(t *testing.T) {
 	orphanedPath := filepath.Join(h.projectDir, "maven-checkstyle-plugin.xml")
 	if _, err := os.Stat(orphanedPath); err == nil {
 		t.Error("Orphaned maven-checkstyle-plugin.xml file should not exist")
+	}
+}
+
+// TestHandler_GetTasks_UsesPerTemplateRegistryCache is a regression test for
+// F9: the handler must read pom_snippet.xml.tpl from its own per-template
+// registry cache directory. Before the fix ReadTemplate was called without a
+// template name, so only the flat/legacy layout resolved and a correctly cached
+// per-template file was ignored in favour of the embedded template.
+func TestHandler_GetTasks_UsesPerTemplateRegistryCache(t *testing.T) {
+	const cachedSnippet = "<plugin>from-per-template-cache</plugin>"
+
+	archive := testutil.CreateTarGz(map[string]string{
+		"pom_snippet.xml.tpl": cachedSnippet,
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	m := templateregistry.NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
+	if err := m.PullFromURL("acme", templateName, srv.URL, ""); err != nil {
+		t.Fatalf("seeding registry cache failed: %v", err)
+	}
+
+	handler := &Handler{}
+	taskList, err := handler.GetTasks(".", "", cacheDir)
+	if err != nil {
+		t.Fatalf("GetTasks failed: %v", err)
+	}
+
+	insertTask, ok := taskList[1].(*tasks.InsertXMLTask)
+	if !ok {
+		t.Fatalf("Task 2 should be InsertXMLTask, got %T", taskList[1])
+	}
+	if insertTask.XMLContent != cachedSnippet {
+		t.Errorf("expected per-template registry content %q, got %q", cachedSnippet, insertTask.XMLContent)
 	}
 }
 
