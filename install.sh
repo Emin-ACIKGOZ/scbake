@@ -372,7 +372,7 @@ main() {
         log_warn "Could not verify binary signature (xxd/od unavailable)"
     else
         case "$magic" in
-            7f454c46*|fecf*|cafebabe*|4d5a*) log_success "Binary signature verified" ;;
+            7f454c46*|cffaedfe*|cefaedfe*|feedface*|feedfacf*|cafebabe*|cafebabf*|4d5a*) log_success "Binary signature verified" ;;
             *) die "Downloaded file is not a valid scbake binary (unexpected magic number: $magic)" ;;
         esac
     fi

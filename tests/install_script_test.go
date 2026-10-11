@@ -25,8 +25,9 @@ import (
 //     hard-coded v0.3.0 on an "API rate limit exceeded" response.
 
 // stubCurlScript is a deterministic stand-in for curl. Behaviour is selected
-// by the STUB_MODE environment variable: success, rate_limit, api_error or
-// binary_error.
+// by the STUB_MODE environment variable: success, rate_limit, api_error,
+// binary_error, macho_thin or pe. Invocations are appended to the file named
+// by STUB_CURL_LOG when that variable is set.
 const stubCurlScript = `#!/usr/bin/env bash
 # Deterministic stand-in for curl used by install.sh integration tests.
 # It emulates the HTTP semantics install.sh relies on and never touches the
@@ -47,6 +48,11 @@ for arg in "$@"; do
         *) url="$arg" ;;
     esac
 done
+
+# Record every invocation so tests can assert which flags were actually used.
+if [ -n "${STUB_CURL_LOG:-}" ]; then
+    printf '%s\n' "$*" >> "$STUB_CURL_LOG"
+fi
 
 mode="${STUB_MODE:-success}"
 
@@ -80,10 +86,17 @@ case "$url" in
             fi
             exit 0
         fi
+        # Select a plausible binary magic for the requested platform. The
+        # installer's signature check must accept all of these.
+        case "$mode" in
+            macho_thin) magic='\xcf\xfa\xed\xfe\x02\x01\x01\x00' ;;  # thin Mach-O (little-endian)
+            pe)         magic='\x4d\x5a\x90\x00\x03\x00\x00\x00' ;;  # PE/COFF (Windows)
+            *)          magic='\x7fELF\x02\x01\x01\x00' ;;           # ELF (Linux)
+        esac
         if [ -n "$output" ]; then
-            printf '\x7fELF\x02\x01\x01\x00' > "$output"
+            printf "$magic" > "$output"
         else
-            printf '\x7fELF\x02\x01\x01\x00'
+            printf "$magic"
         fi
         ;;
     *)
@@ -142,16 +155,27 @@ func setupStubBinaries(t *testing.T) string {
 // output plus the error (non-nil means a non-zero exit status).
 func runInstaller(t *testing.T, stubDir, mode, installDir string) (string, error) {
 	t.Helper()
+	out, err, _ := runInstallerWithCurlLog(t, stubDir, mode, installDir)
+	return out, err
+}
+
+// runInstallerWithCurlLog is like runInstaller but additionally returns the
+// contents of the stub curl invocation log (one line per invocation). This lets
+// a test prove which flags the installer actually passed to curl, rather than
+// only observing the downstream behaviour.
+func runInstallerWithCurlLog(t *testing.T, stubDir, mode, installDir string) (string, error, string) {
+	t.Helper()
 	bash := requireBash(t)
 	script := installScriptPath(t)
+	curlLogPath := filepath.Join(t.TempDir(), "curl.log")
 
 	// NOTE: --quiet is intentionally not used. It currently trips a separate,
 	// pre-existing set -e issue in the logging helpers (a quiet log_info
 	// returns non-zero and aborts the script) that is out of scope here.
 	cmd := exec.Command(bash, script, "latest", installDir) //nolint:gosec // test invocation
-	env := make([]string, 0, len(os.Environ())+2)
+	env := make([]string, 0, len(os.Environ())+3)
 	for _, e := range os.Environ() {
-		if strings.HasPrefix(e, "PATH=") || strings.HasPrefix(e, "STUB_MODE=") || strings.HasPrefix(e, "QUIET=") {
+		if strings.HasPrefix(e, "PATH=") || strings.HasPrefix(e, "STUB_MODE=") || strings.HasPrefix(e, "QUIET=") || strings.HasPrefix(e, "STUB_CURL_LOG=") {
 			continue
 		}
 		env = append(env, e)
@@ -159,6 +183,7 @@ func runInstaller(t *testing.T, stubDir, mode, installDir string) (string, error
 	env = append(env,
 		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"STUB_MODE="+mode,
+		"STUB_CURL_LOG="+curlLogPath,
 	)
 	cmd.Env = env
 
@@ -167,7 +192,33 @@ func runInstaller(t *testing.T, stubDir, mode, installDir string) (string, error
 	cmd.Stderr = &out
 
 	err := cmd.Run()
-	return out.String(), err
+
+	logData, readErr := os.ReadFile(curlLogPath) //nolint:gosec // test artifact
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read stub curl log: %v", readErr)
+	}
+	return out.String(), err, string(logData)
+}
+
+// assertCurlUsedFail verifies that the stub curl recorded at least one
+// invocation targeting a URL containing urlSubstr, and that the invocation
+// included -f/--fail. It fails loudly when no such invocation was recorded so a
+// stub or installer change cannot silently make the assertion vacuous.
+func assertCurlUsedFail(t *testing.T, curlLog, urlSubstr string) {
+	t.Helper()
+	var invocation string
+	for _, line := range strings.Split(curlLog, "\n") {
+		if strings.Contains(line, urlSubstr) {
+			invocation = line
+			break
+		}
+	}
+	if invocation == "" {
+		t.Fatalf("stub curl recorded no invocation for URL containing %q; log:\n%s", urlSubstr, curlLog)
+	}
+	if !strings.Contains(invocation, "-f") && !strings.Contains(invocation, "--fail") {
+		t.Errorf("curl invocation for %q is missing -f/--fail: %s", urlSubstr, invocation)
+	}
 }
 
 func installedBinaryPath(installDir string) string {
@@ -217,15 +268,64 @@ func TestInstallScriptRejectsAPIError(t *testing.T) {
 // TestInstallScriptRejectsErrorBodyDownload is the primary regression for
 // BUG #45: when the binary download returns an HTTP error body, curl -f must
 // make the download fail instead of installing the error page.
+//
+// It asserts both the observable outcome (no binary installed) and that the
+// download invocation actually carried -f. The latter matters because the
+// signature check would also reject the HTML body, so without inspecting the
+// invocation the test would pass even if -f were removed.
 func TestInstallScriptRejectsErrorBodyDownload(t *testing.T) {
 	stubDir := setupStubBinaries(t)
 	installDir := filepath.Join(t.TempDir(), "bin")
 
-	out, err := runInstaller(t, stubDir, "binary_error", installDir)
+	out, err, curlLog := runInstallerWithCurlLog(t, stubDir, "binary_error", installDir)
 	if err == nil {
 		t.Fatalf("expected a non-zero exit when the binary download returns an error body, got success\noutput:\n%s", out)
 	}
 	assertNotInstalled(t, installDir)
+	assertCurlUsedFail(t, curlLog, "scbake-")
+}
+
+// TestInstallScriptAcceptsThinMachO guards against the regression where the
+// signature check only accepted fat Mach-O (cafebabe) and ELF/PE, causing every
+// macOS install to abort: GoReleaser emits thin Mach-O binaries whose magic is
+// cffaedfe (little-endian) / feedface (big-endian). The installer must accept
+// those. The stub serves cffaedfe as the first four bytes.
+func TestInstallScriptAcceptsThinMachO(t *testing.T) {
+	stubDir := setupStubBinaries(t)
+	installDir := filepath.Join(t.TempDir(), "bin")
+
+	out, err := runInstaller(t, stubDir, "macho_thin", installDir)
+	if err != nil {
+		t.Fatalf("expected a thin Mach-O binary to be accepted, got %v\noutput:\n%s", err, out)
+	}
+
+	data, readErr := os.ReadFile(installedBinaryPath(installDir)) //nolint:gosec // test artifact
+	if readErr != nil {
+		t.Fatalf("installed binary missing: %v", readErr)
+	}
+	if !bytes.HasPrefix(data, []byte{0xcf, 0xfa, 0xed, 0xfe}) {
+		t.Errorf("installed binary has an unexpected magic number: % x", data)
+	}
+}
+
+// TestInstallScriptAcceptsPE covers the Windows magic (4d5a) so the accepted
+// set cannot be narrowed without a test failure.
+func TestInstallScriptAcceptsPE(t *testing.T) {
+	stubDir := setupStubBinaries(t)
+	installDir := filepath.Join(t.TempDir(), "bin")
+
+	out, err := runInstaller(t, stubDir, "pe", installDir)
+	if err != nil {
+		t.Fatalf("expected a PE binary to be accepted, got %v\noutput:\n%s", err, out)
+	}
+
+	data, readErr := os.ReadFile(installedBinaryPath(installDir)) //nolint:gosec // test artifact
+	if readErr != nil {
+		t.Fatalf("installed binary missing: %v", readErr)
+	}
+	if !bytes.HasPrefix(data, []byte{0x4d, 0x5a}) {
+		t.Errorf("installed binary has an unexpected magic number: % x", data)
+	}
 }
 
 // TestInstallScriptSucceeds confirms the happy path still works end to end.
