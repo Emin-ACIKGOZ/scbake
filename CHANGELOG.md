@@ -4,6 +4,28 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.5.22] - 2026-10-11
+
+### Bug Fixes
+
+- **ci:** Let the release job auto-download the svu toolchain (#89)
+
+### Build
+
+- **deps:** Add Dependabot and bump Go module dependencies
+
+### Continuous Integration
+
+- **deps:** Bump goreleaser/goreleaser-action from 6 to 7
+- **deps:** Bump amannn/action-semantic-pull-request from 5 to 6
+- **deps:** Bump actions/upload-artifact from 4 to 7
+- **deps:** Bump golangci/golangci-lint-action from 7 to 9
+- **deps:** Bump actions/setup-go from 5 to 7
+
+### Testing
+
+- Make repo-relative and registry tests portable on macOS and Windows
+
 ## [0.5.21] - 2026-10-11
 
 ### Bug Fixes
