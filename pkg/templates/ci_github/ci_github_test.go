@@ -76,7 +76,7 @@ func renderWorkflow(t *testing.T, m *types.Manifest) string {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
-	out, err := os.ReadFile(filepath.Join(dir, ".github", "workflows", "main.yml"))
+	out, err := os.ReadFile(filepath.Join(dir, ".github", "workflows", "main.yml")) //nolint:gosec // test temp path
 	if err != nil {
 		t.Fatalf("read generated workflow: %v", err)
 	}

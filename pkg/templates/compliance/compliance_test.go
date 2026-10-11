@@ -275,7 +275,7 @@ func renderDependabot(t *testing.T, m *types.Manifest) string {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
-	out, err := os.ReadFile(filepath.Join(dir, ".github", "dependabot.yml"))
+	out, err := os.ReadFile(filepath.Join(dir, ".github", "dependabot.yml")) //nolint:gosec // test temp path
 	if err != nil {
 		t.Fatalf("read generated dependabot.yml: %v", err)
 	}

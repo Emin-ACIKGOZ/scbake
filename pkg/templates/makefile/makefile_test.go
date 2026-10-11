@@ -84,7 +84,7 @@ func renderMakefile(t *testing.T, m *types.Manifest) string {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
-	out, err := os.ReadFile(filepath.Join(dir, "Makefile"))
+	out, err := os.ReadFile(filepath.Join(dir, "Makefile")) //nolint:gosec // test temp path
 	if err != nil {
 		t.Fatalf("read generated Makefile: %v", err)
 	}
