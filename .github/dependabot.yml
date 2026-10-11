@@ -5,8 +5,11 @@
 # so every change stays atomic and reviewable. Security updates are enabled
 # separately in the repository settings and reuse the same schedule/limits.
 #
-# The commit-message prefixes keep Dependabot's commits compatible with the
-# repository's Conventional-Commit gates (commitlint and the PR-title check).
+# The commit-message prefixes give Dependabot's commits a conventional
+# type/scope. Its generated subject ("Bump <dep> from <old> to <new>") is
+# sentence-case, which the repository's Conventional-Commit gates reject, so
+# the commitlint and PR-title workflows skip dependabot[bot] (see
+# .github/workflows/commitlint.yml and pr-title.yml).
 #
 # Reference:
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
