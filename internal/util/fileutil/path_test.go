@@ -194,6 +194,49 @@ func TestSafePath_DanglingSymlinkEscapeRejected(t *testing.T) {
 	}
 }
 
+// TestSafePath_SymlinkDotDotEscapeRejected is a regression test for a
+// deterministic bypass of the lexical pre-cleaning: a symlink whose target ends
+// in ".." must be resolved by the kernel component-by-component, where ".." is
+// applied after following the preceding symlink. Hand-rolling the resolution
+// with os.Readlink + filepath.Join lexically collapses "<symlink>/.." before the
+// symlink is followed, so "evil -> up/.." (with "up -> <sibling outside dir>")
+// was accepted even though the kernel resolves it to the sandbox parent, one
+// level above root.
+func TestSafePath_SymlinkDotDotEscapeRejected(t *testing.T) {
+	skipIfNoSymlinks(t)
+
+	sandbox := t.TempDir()
+	root := filepath.Join(sandbox, "root")
+	outside := filepath.Join(sandbox, "outside")
+	if err := os.MkdirAll(root, DirPerms); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	if err := os.MkdirAll(outside, DirPerms); err != nil {
+		t.Fatalf("mkdir outside: %v", err)
+	}
+	// up -> outside (escaping); evil -> up/.. ; the kernel follows up first and
+	// then applies "..", landing on sandbox, the parent of root.
+	if err := os.Symlink(outside, filepath.Join(root, "up")); err != nil {
+		t.Fatalf("symlink up: %v", err)
+	}
+	// The link target is the literal "up/..": it must NOT be built with
+	// filepath.Join, which would lexically collapse it to "." and mask the bug.
+	if err := os.Symlink("up/..", filepath.Join(root, "evil")); err != nil {
+		t.Fatalf("symlink evil: %v", err)
+	}
+
+	if got, err := SafePath(root, filepath.Join("evil", "pwn.txt")); err == nil {
+		t.Errorf("SafePath accepted symlink/.. escape: %q", got)
+	}
+
+	if err := SafeWriteFile(root, filepath.Join("evil", "pwn.txt"), []byte("pwned"), FilePerms); err == nil {
+		t.Error("SafeWriteFile wrote through a symlink/.. escape")
+	}
+	if _, err := os.Stat(filepath.Join(sandbox, "pwn.txt")); !os.IsNotExist(err) {
+		t.Error("SafeWriteFile created a file outside the root")
+	}
+}
+
 // TestSafePath_InRootSymlinkAllowed verifies that a symlink resolving back
 // inside the root is transparent and accepted.
 func TestSafePath_InRootSymlinkAllowed(t *testing.T) {

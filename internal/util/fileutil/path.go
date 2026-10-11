@@ -104,9 +104,19 @@ func verifyResolvedContainment(baseAbs, absPath string) error {
 // canonicalize returns the absolute, symlink-resolved form of p. Unlike
 // filepath.EvalSymlinks it tolerates a trailing path that does not exist yet
 // (common for files about to be created): the deepest existing ancestor is
-// resolved and the remaining components are appended lexically. A dangling
-// symlink is still resolved through os.Readlink, so an escaping link is never
-// mistaken for a non-existent path and silently accepted.
+// resolved with filepath.EvalSymlinks and the remaining components are appended
+// to that fully resolved prefix.
+//
+// Resolution must go through filepath.EvalSymlinks rather than a hand-rolled
+// os.Readlink + filepath.Join loop: the kernel follows each symlink and only
+// then applies a subsequent "..", whereas filepath.Join collapses "<symlink>/.."
+// lexically before the symlink is followed. That difference lets a target such
+// as "evil -> up/.." (with "up" pointing at a sibling outside the root) resolve
+// to the root's parent while the lexical form still appears contained.
+//
+// A dangling symlink is an error, not a non-existent path: filepath.EvalSymlinks
+// reports ENOENT for it, and canonicalize fails closed rather than falling back
+// to a lexical join that could silently accept an escaping link.
 func canonicalize(p string, depth int) (string, error) {
 	if depth > maxSymlinkDepth {
 		return "", errors.New("too many levels of symbolic links")
@@ -131,32 +141,18 @@ func canonicalize(p string, depth int) (string, error) {
 		existing = parent
 	}
 
-	info, err := os.Lstat(existing)
-	if err != nil {
-		return "", err
-	}
-
-	// A symlink as the deepest existing component must be resolved manually:
-	// EvalSymlinks would fail on a dangling link, and falling back to the
-	// lexical path would let the link escape undetected.
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(existing)
-		if err != nil {
-			return "", err
-		}
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(filepath.Dir(existing), target)
-		}
-		for i := len(tail) - 1; i >= 0; i-- {
-			target = filepath.Join(target, tail[i])
-		}
-		return canonicalize(target, depth+1)
-	}
-
+	// Resolve the existing prefix component-by-component (following symlinks
+	// and applying ".." in kernel order). EvalSymlinks also enforces ELOOP
+	// protection; the depth guard above remains as a defensive bound. Any
+	// failure, including a dangling symlink, fails closed.
 	resolved, err := filepath.EvalSymlinks(existing)
 	if err != nil {
 		return "", err
 	}
+
+	// The tail components come from filepath.Base of a cleaned absolute prefix,
+	// so they contain no ".." and no unresolved symlinks; appending them to the
+	// fully resolved prefix is safe.
 	for i := len(tail) - 1; i >= 0; i-- {
 		resolved = filepath.Join(resolved, tail[i])
 	}
