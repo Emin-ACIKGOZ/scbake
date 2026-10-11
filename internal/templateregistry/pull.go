@@ -153,14 +153,16 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 	if err != nil {
 		// destDir now holds the freshly downloaded tree, not the old cache, so
 		// removing it is safe; drop the manifest too so nothing points at a
-		// half-written cache.
-		_ = os.RemoveAll(pr.destDir)
-		_ = os.Remove(manifestPath)
+		// half-written cache. The removals re-check containment immediately
+		// before acting (see removeAllContained) in case destDir was swapped for
+		// an escaping symlink while the body was read.
+		_ = removeAllContained(m.cacheDir, pr.destDir)
+		_ = removeContained(m.cacheDir, manifestPath)
 		return fmt.Errorf("hashing extracted template: %w", err)
 	}
 	if err := writeCacheManifest(manifestPath, pr.templateName, hash); err != nil {
-		_ = os.RemoveAll(pr.destDir)
-		_ = os.Remove(manifestPath)
+		_ = removeAllContained(m.cacheDir, pr.destDir)
+		_ = removeContained(m.cacheDir, manifestPath)
 		return err
 	}
 
@@ -372,7 +374,7 @@ func extractToCache(body io.Reader, cacheDir, destDir, subdirectory string) erro
 	if err := ensureStrictlyWithin(cacheDir, tmpDir); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(tmpDir); err != nil {
+	if err := removeAllContained(cacheDir, tmpDir); err != nil {
 		return fmt.Errorf("cleaning temp dir: %w", err)
 	}
 	if err := os.MkdirAll(tmpDir, cacheDirPerm); err != nil {
@@ -381,7 +383,7 @@ func extractToCache(body io.Reader, cacheDir, destDir, subdirectory string) erro
 
 	limited := io.LimitReader(body, maxArchiveBytes)
 	if err := extractTarGz(limited, tmpDir); err != nil {
-		_ = os.RemoveAll(tmpDir)
+		_ = removeAllContained(cacheDir, tmpDir)
 		return fmt.Errorf("extracting archive: %w", err)
 	}
 
@@ -390,39 +392,77 @@ func extractToCache(body io.Reader, cacheDir, destDir, subdirectory string) erro
 	// The promoted source must stay within the temp dir; a value that escaped
 	// (for example via "..") would otherwise be renamed into the cache.
 	if err := ensureWithin(tmpDir, sourceDir); err != nil {
-		_ = os.RemoveAll(tmpDir)
+		_ = removeAllContained(cacheDir, tmpDir)
 		return err
 	}
 
 	// Validate the staged tree before touching the existing cache so an empty
 	// or malformed archive cannot destroy a previously valid cache.
 	if err := validateTemplateCache(sourceDir); err != nil {
-		_ = os.RemoveAll(tmpDir)
+		_ = removeAllContained(cacheDir, tmpDir)
 		return err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(destDir), cacheDirPerm); err != nil {
-		_ = os.RemoveAll(tmpDir)
+		_ = removeAllContained(cacheDir, tmpDir)
 		return fmt.Errorf("creating parent dir: %w", err)
 	}
 
 	// Replace the existing cache only now that extraction and validation have
 	// fully succeeded. A failure before this point leaves any previous cache
 	// (and its manifest) untouched.
-	if err := os.RemoveAll(destDir); err != nil {
-		_ = os.RemoveAll(tmpDir)
+	//
+	// The body read above can block for as long as the download takes, so the
+	// containment checks performed at the top of this function can be stale by
+	// the time the cache is swapped. In particular, a concurrent attacker can
+	// replace <cache>/<registry> with a symlink pointing outside the cache after
+	// those checks pass; the destructive operations below would then follow it.
+	// Re-check containment immediately before each one so a path that now
+	// escapes is refused (fail closed) rather than acted on. This narrows the
+	// race to the instant between the check and the syscall.
+	if err := removeAllContained(cacheDir, destDir); err != nil {
+		_ = removeAllContained(cacheDir, tmpDir)
 		return fmt.Errorf("removing stale cache: %w", err)
 	}
+	if err := ensureWithin(tmpDir, sourceDir); err != nil {
+		_ = removeAllContained(cacheDir, tmpDir)
+		return err
+	}
+	if err := ensureStrictlyWithin(cacheDir, destDir); err != nil {
+		_ = removeAllContained(cacheDir, tmpDir)
+		return err
+	}
 	if err := os.Rename(sourceDir, destDir); err != nil {
-		_ = os.RemoveAll(tmpDir)
+		_ = removeAllContained(cacheDir, tmpDir)
 		return fmt.Errorf("moving to cache: %w", err)
 	}
 
 	if sourceDir != tmpDir {
-		_ = os.RemoveAll(tmpDir)
+		_ = removeAllContained(cacheDir, tmpDir)
 	}
 
 	return nil
+}
+
+// removeAllContained re-checks that target is strictly inside base, then removes
+// it. The containment check is performed immediately before the removal so a
+// directory that a concurrent actor swapped for an escaping symlink after an
+// earlier check is refused (fail closed) instead of being followed and deleted
+// outside base. The remaining window is the instant between the check and the
+// syscall.
+func removeAllContained(base, target string) error {
+	if err := ensureStrictlyWithin(base, target); err != nil {
+		return err
+	}
+	return os.RemoveAll(target)
+}
+
+// removeContained is removeAllContained for a single file.
+func removeContained(base, target string) error {
+	if err := ensureStrictlyWithin(base, target); err != nil {
+		return err
+	}
+	return os.Remove(target)
 }
 
 func promoteSubdirectory(tmpDir, subdirectory string) string {
