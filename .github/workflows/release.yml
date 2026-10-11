@@ -50,11 +50,13 @@ jobs:
 
       - name: Determine version
         id: version
+        env:
+          TAG: ${{ github.event.inputs.tag }}
         run: |
           # Manual re-release of an existing tag.
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "version=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
-            echo "Manual release for tag ${{ github.event.inputs.tag }}"
+          if [ -n "$TAG" ]; then
+            echo "version=$TAG" >> "$GITHUB_OUTPUT"
+            echo "Manual release for tag $TAG"
             exit 0
           fi
           # `svu next` returns the current version when there is no bump, so
@@ -93,8 +95,10 @@ jobs:
 
       - name: Prepare GoReleaser config
         if: steps.version.outputs.version != ''
+        env:
+          TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
+          if [ -n "$TAG" ]; then
             # An older tag's tree may predate .goreleaser.yaml; use the current
             # config from the default branch. Write it outside the repo so the
             # git state stays clean (GoReleaser refuses to run when dirty).
