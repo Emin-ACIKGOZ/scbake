@@ -118,7 +118,7 @@ jobs:
 
       - name: Run GoReleaser
         if: steps.version.outputs.version != ''
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean --config ${{ runner.temp }}/goreleaser.yaml
