@@ -171,6 +171,39 @@ scbake apply --with maven_linter
 ```
 
 
+### `update`: Update a Generated Project
+
+Re-applies the language pack and tooling templates recorded in `scbake.toml`,
+bringing a generated project up to date **without clobbering local edits**.
+
+```bash
+scbake update [--template-dir <dir>] [--conflict-strategy <strategy>] [<path>]
+```
+
+| Argument | Description      | Default |
+| :------- | :--------------- | :------ |
+| `<path>` | Target directory | `.`     |
+
+Unlike `apply`, `update` reads *what was applied* from the manifest and runs no
+side-effecting commands (no `go mod init`, `npm install`, …), so it is safe to
+run repeatedly:
+
+- **Idempotent.** With no template change it makes no writes.
+- **Three-way merge.** A pristine copy of each managed file is kept under
+  `.scbake/base/`; when both the template and your file changed, `update` merges
+  non-overlapping edits. Overlapping edits are written to a `<file>.scbake-new`
+  artifact instead of being applied.
+- **Policy.** `--conflict-strategy` accepts `merge` (default), `fail`,
+  `overwrite`, `artifact`, and `keep-local`.
+
+**Example:**
+
+```bash
+cd my-backend
+scbake update
+```
+
+
 ### `template registry`: Manage Remote Registries
 
 Define and manage remote template registries for sharing templates across teams.

@@ -316,6 +316,24 @@ func Save(m *types.Manifest, rootPath string) error {
 
 **Why**: Detects TOCTOU (Time-Of-Check-Time-Of-Use) bugs. If two scbake processes run simultaneously, one detects the conflict and fails.
 
+### 5. Updating Generated Projects
+
+`scbake update` replays the selection recorded in the manifest instead of CLI
+flags. Two properties make it safe:
+
+- **Provenance.** `[[templates]]` records the real `{name, path}` of every
+  tooling template, and `[[projects]]` records each project's `language`, so
+  `update` can reconstruct exactly what `apply` ran (D2).
+- **Pristine base shadow.** Every managed write stores its rendered bytes under
+  `.scbake/base/<path>`. When both the template and the working file changed,
+  `update` runs a conservative line-oriented three-way merge
+  (`internal/merge`) against that base. Non-overlapping edits merge; overlaps
+  fall back to an artifact. Only `CreateTemplateTask` writes are replayed, so
+  environment commands never re-run.
+
+`managed_files` continues to hold the hash of the pristine render, so a merged
+file is still recognized as locally modified on the next `apply` (SCB-056).
+
 ---
 
 ## File Structure
