@@ -46,6 +46,12 @@ jobs:
           cache: true
 
       - name: Install svu
+        # actions/setup-go v6+ exports GOTOOLCHAIN=local, which prevents Go from
+        # auto-downloading the newer toolchain that svu requires (go >= 1.25.3,
+        # while go.mod pins 1.22). Restore the previous auto behaviour for this
+        # step so `go install` can fetch the required toolchain.
+        env:
+          GOTOOLCHAIN: auto
         run: go install github.com/caarlos0/svu/v3@v3.4.1
 
       - name: Determine version
