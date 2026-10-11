@@ -8,9 +8,20 @@ import (
 	"os"
 	"path/filepath"
 	"scbake/internal/util/fileutil"
+	"strings"
 	"sync"
 	"time"
 )
+
+// staleTransactionThreshold is the minimum age a transaction backup directory
+// must reach before a startup sweep reclaims it. A live apply touches its
+// transaction directory on every backup and the apply timeout is 30 minutes,
+// so a directory idle for a full hour can only be the residue of a crash
+// (panic/SIGKILL/power loss) that skipped both Commit and Rollback.
+const staleTransactionThreshold = time.Hour
+
+// txDirPrefix identifies transaction backup directories created by ensureTempDir.
+const txDirPrefix = "tx-"
 
 // backupEntry holds the metadata required to restore a file.
 type backupEntry struct {
@@ -50,11 +61,46 @@ func New(rootPath string) (*Manager, error) {
 		return nil, fmt.Errorf("failed to resolve absolute root path: %w", err)
 	}
 
+	// Best-effort reclamation of transaction dirs orphaned by a crashed apply.
+	// A failure here must never prevent a new transaction from starting.
+	sweepStaleTransactions(absRoot)
+
 	return &Manager{
 		rootPath: absRoot,
 		backups:  make(map[string]backupEntry),
 		created:  make([]string, 0),
 	}, nil
+}
+
+// sweepStaleTransactions removes transaction backup directories under
+// <root>/.scbake/tmp that are older than staleTransactionThreshold. Such
+// directories are left behind when a crash skips both Commit and Rollback.
+// It is a best-effort, no-op operation: a missing directory or any filesystem
+// error is ignored.
+func sweepStaleTransactions(rootPath string) {
+	tmpDir := filepath.Join(rootPath, fileutil.InternalDir, fileutil.TmpDir)
+
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		return
+	}
+
+	cutoff := time.Now().Add(-staleTransactionThreshold)
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), txDirPrefix) {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue
+		}
+
+		_ = os.RemoveAll(filepath.Join(tmpDir, entry.Name()))
+	}
 }
 
 // Root returns the absolute project root the transaction is scoped to. Callers
@@ -101,7 +147,7 @@ func (m *Manager) ensureTempDir() error {
 
 	// Create a unique temp dir inside .scbake/tmp
 	timestamp := time.Now().UnixNano()
-	dirName := fmt.Sprintf("tx-%d", timestamp)
+	dirName := fmt.Sprintf("%s%d", txDirPrefix, timestamp)
 
 	// We place tmp inside the project root to ensure we are on the same filesystem/partition,
 	// which makes file moves atomic and avoids cross-device link errors.

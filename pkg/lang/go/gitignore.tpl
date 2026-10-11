@@ -16,3 +16,6 @@ go.work
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+# scbake internal state (transaction backups)
+.scbake/
