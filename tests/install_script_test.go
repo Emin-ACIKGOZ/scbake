@@ -5,6 +5,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,14 +25,14 @@ import (
 //   - BUG #44 / SCB-046: get_latest_version() silently downgraded to a
 //     hard-coded v0.3.0 on an "API rate limit exceeded" response.
 
-// stubCurlScript is a deterministic stand-in for curl. Behaviour is selected
+// stubCurlScript is a deterministic stand-in for curl. Behavior is selected
 // by the STUB_MODE environment variable: success, rate_limit, api_error,
 // binary_error, macho_thin or pe. Invocations are appended to the file named
 // by STUB_CURL_LOG when that variable is set.
 const stubCurlScript = `#!/usr/bin/env bash
 # Deterministic stand-in for curl used by install.sh integration tests.
 # It emulates the HTTP semantics install.sh relies on and never touches the
-# network. Behaviour is selected by the STUB_MODE environment variable.
+# network. Behavior is selected by the STUB_MODE environment variable.
 output=""
 url=""
 fail=0
@@ -155,15 +156,15 @@ func setupStubBinaries(t *testing.T) string {
 // output plus the error (non-nil means a non-zero exit status).
 func runInstaller(t *testing.T, stubDir, mode, installDir string) (string, error) {
 	t.Helper()
-	out, err, _ := runInstallerWithCurlLog(t, stubDir, mode, installDir)
+	out, _, err := runInstallerWithCurlLog(t, stubDir, mode, installDir)
 	return out, err
 }
 
 // runInstallerWithCurlLog is like runInstaller but additionally returns the
 // contents of the stub curl invocation log (one line per invocation). This lets
 // a test prove which flags the installer actually passed to curl, rather than
-// only observing the downstream behaviour.
-func runInstallerWithCurlLog(t *testing.T, stubDir, mode, installDir string) (string, error, string) {
+// only observing the downstream behavior.
+func runInstallerWithCurlLog(t *testing.T, stubDir, mode, installDir string) (string, string, error) {
 	t.Helper()
 	bash := requireBash(t)
 	script := installScriptPath(t)
@@ -172,7 +173,7 @@ func runInstallerWithCurlLog(t *testing.T, stubDir, mode, installDir string) (st
 	// NOTE: --quiet is intentionally not used. It currently trips a separate,
 	// pre-existing set -e issue in the logging helpers (a quiet log_info
 	// returns non-zero and aborts the script) that is out of scope here.
-	cmd := exec.Command(bash, script, "latest", installDir) //nolint:gosec // test invocation
+	cmd := exec.CommandContext(context.Background(), bash, script, "latest", installDir) //nolint:gosec // test invocation
 	env := make([]string, 0, len(os.Environ())+3)
 	for _, e := range os.Environ() {
 		if strings.HasPrefix(e, "PATH=") || strings.HasPrefix(e, "STUB_MODE=") || strings.HasPrefix(e, "QUIET=") || strings.HasPrefix(e, "STUB_CURL_LOG=") {
@@ -197,7 +198,7 @@ func runInstallerWithCurlLog(t *testing.T, stubDir, mode, installDir string) (st
 	if readErr != nil && !os.IsNotExist(readErr) {
 		t.Fatalf("read stub curl log: %v", readErr)
 	}
-	return out.String(), err, string(logData)
+	return out.String(), string(logData), err
 }
 
 // assertCurlUsedFail verifies that the stub curl recorded at least one
@@ -277,7 +278,7 @@ func TestInstallScriptRejectsErrorBodyDownload(t *testing.T) {
 	stubDir := setupStubBinaries(t)
 	installDir := filepath.Join(t.TempDir(), "bin")
 
-	out, err, curlLog := runInstallerWithCurlLog(t, stubDir, "binary_error", installDir)
+	out, curlLog, err := runInstallerWithCurlLog(t, stubDir, "binary_error", installDir)
 	if err == nil {
 		t.Fatalf("expected a non-zero exit when the binary download returns an error body, got success\noutput:\n%s", out)
 	}
@@ -299,7 +300,7 @@ func TestInstallScriptAcceptsThinMachO(t *testing.T) {
 		t.Fatalf("expected a thin Mach-O binary to be accepted, got %v\noutput:\n%s", err, out)
 	}
 
-	data, readErr := os.ReadFile(installedBinaryPath(installDir)) //nolint:gosec // test artifact
+	data, readErr := os.ReadFile(installedBinaryPath(installDir))
 	if readErr != nil {
 		t.Fatalf("installed binary missing: %v", readErr)
 	}
@@ -319,7 +320,7 @@ func TestInstallScriptAcceptsPE(t *testing.T) {
 		t.Fatalf("expected a PE binary to be accepted, got %v\noutput:\n%s", err, out)
 	}
 
-	data, readErr := os.ReadFile(installedBinaryPath(installDir)) //nolint:gosec // test artifact
+	data, readErr := os.ReadFile(installedBinaryPath(installDir))
 	if readErr != nil {
 		t.Fatalf("installed binary missing: %v", readErr)
 	}
@@ -338,7 +339,7 @@ func TestInstallScriptSucceeds(t *testing.T) {
 		t.Fatalf("expected a successful install, got %v\noutput:\n%s", err, out)
 	}
 
-	data, readErr := os.ReadFile(installedBinaryPath(installDir)) //nolint:gosec // test artifact
+	data, readErr := os.ReadFile(installedBinaryPath(installDir))
 	if readErr != nil {
 		t.Fatalf("installed binary missing: %v", readErr)
 	}
