@@ -1,0 +1,33 @@
+# Dependabot version updates for scbake.
+#
+# Keeps the Go module dependencies and the GitHub Actions used by the workflows
+# up to date. Each dependency is updated in its own pull request (no grouping)
+# so every change stays atomic and reviewable. Security updates are enabled
+# separately in the repository settings and reuse the same schedule/limits.
+#
+# The commit-message prefixes keep Dependabot's commits compatible with the
+# repository's Conventional-Commit gates (commitlint and the PR-title check).
+#
+# Reference:
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+updates:
+  # Go module dependencies declared in go.mod.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "build"
+      include: "scope"
+
+  # GitHub Actions used by the workflows in .github/workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "ci"
+      include: "scope"
