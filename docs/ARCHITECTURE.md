@@ -334,6 +334,22 @@ flags. Two properties make it safe:
 `managed_files` continues to hold the hash of the pristine render, so a merged
 file is still recognized as locally modified on the next `apply` (SCB-056).
 
+### 6. Drift Detection
+
+`scbake drift` is the read-only projection of the same `managed_files` ledger
+that `update` writes. For every recorded key it hashes the working-tree file and
+classifies it `modified` (bytes differ), `missing` (absent), or clean. It opens
+no transaction, renders no template, and never touches the network, so it is
+safe as a CI gate; it exits non-zero when any finding remains. `--repair`
+delegates to `core.RunUpdate`, so detection and repair share one reconciliation
+implementation (`internal/drift`).
+
+Detection is deliberately conservative: a locally edited file is drift even
+when `update`'s default `merge` strategy is a no-op that preserves the edit.
+A `merge`-style repair therefore leaves the file reported as drift (use
+`overwrite` to force restoration), which is why `drift` after `--repair` may
+still exit non-zero by design.
+
 ---
 
 ## File Structure

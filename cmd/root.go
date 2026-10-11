@@ -68,5 +68,6 @@ func init() {
 	rootCmd.AddCommand(newCmd)
 	rootCmd.AddCommand(applyCmd)
 	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(driftCmd)
 	rootCmd.AddCommand(listCmd)
 }
