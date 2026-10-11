@@ -4,6 +4,26 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.6.0] - 2026-10-11
+
+### Build
+
+- **deps:** Upgrade the Go toolchain off EOL 1.22
+
+### Continuous Integration
+
+- **deps:** Bump actions/checkout from 4 to 7 (#88)
+- Add a govulncheck vulnerability gate
+- Pin GitHub Actions to full commit SHAs
+
+### Features
+
+- **release:** Sign releases and publish SBOM and provenance
+
+### Performance
+
+- **transaction:** Make tracked-path membership O(1)
+
 ## [0.5.22] - 2026-10-11
 
 ### Bug Fixes
