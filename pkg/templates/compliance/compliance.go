@@ -18,11 +18,17 @@ import (
 	"github.com/mitchellh/go-spdx"
 )
 
-//go:embed templates/*.tpl
+//go:embed templates/*.tpl schema.json
 var templates embed.FS
 
 // Handler implements the templates.Handler interface for compliance.
 type Handler struct{}
+
+// SchemaFS returns the embedded filesystem containing schema.json.
+func (h *Handler) SchemaFS() embed.FS { return templates }
+
+// SchemaPath returns the path to the embedded schema definition.
+func (h *Handler) SchemaPath() string { return "schema.json" }
 
 // GetTasks returns the plan to create compliance files.
 func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
