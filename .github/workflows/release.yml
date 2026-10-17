@@ -57,7 +57,7 @@ jobs:
 
       - name: Install syft
         # GoReleaser's `sboms` pipe shells out to syft to build the SPDX SBOMs.
-        uses: anchore/sbom-action/download-syft@da167eac915b4e86f08b264dbdbc867b61be6f0c # v0.20.5
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
 
       - name: Install svu
         # actions/setup-go v6+ exports GOTOOLCHAIN=local, which prevents Go from
