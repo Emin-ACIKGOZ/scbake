@@ -12,7 +12,7 @@ import (
 //go:embed devcontainer.json.tpl Dockerfile.tpl
 var templates embed.FS
 
-// Handler implements the templates.Handler interface for Dev Containers.
+// Handler implements templates.Handler.
 type Handler struct{}
 
 // GetTasks returns the plan to create the Dev Container configuration.

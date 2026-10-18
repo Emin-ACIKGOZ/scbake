@@ -12,7 +12,7 @@ import (
 //go:embed .golangci.yml.tpl
 var templates embed.FS
 
-// Handler implements the templates.Handler interface for Go linting.
+// Handler implements templates.Handler.
 type Handler struct{}
 
 // GetTasks returns the plan to create the Go linter configuration file.

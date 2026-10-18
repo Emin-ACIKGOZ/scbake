@@ -13,7 +13,7 @@ import (
 //go:embed templates/*.tpl
 var templates embed.FS
 
-// Handler implements the templates.Handler interface for community governance.
+// Handler implements templates.Handler.
 type Handler struct{}
 
 // GetTasks returns the plan to create community governance files.

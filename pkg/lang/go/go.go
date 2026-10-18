@@ -20,7 +20,7 @@ var templates embed.FS
 // goModSubcommand is the `go mod` subcommand used for module management.
 const goModSubcommand = "mod"
 
-// Handler implements the lang.Handler interface for Go projects.
+// Handler implements lang.Handler.
 type Handler struct{}
 
 // SchemaFS implements lang.SchemaProvider.

@@ -16,7 +16,7 @@ var templates embed.FS
 // It constrains registry cache lookups to this template's subdirectory.
 const templateName = "maven_linter"
 
-// Handler implements the templates.Handler interface for Maven linting.
+// Handler implements templates.Handler.
 type Handler struct{}
 
 // GetTasks returns the plan to create Checkstyle config and inject the plugin into pom.xml.

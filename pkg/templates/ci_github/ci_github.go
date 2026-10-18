@@ -12,7 +12,7 @@ import (
 //go:embed main.yml.tpl schema.json
 var templates embed.FS
 
-// Handler implements the templates.Handler interface for GitHub CI.
+// Handler implements templates.Handler.
 type Handler struct{}
 
 // SchemaFS implements templates.SchemaProvider.

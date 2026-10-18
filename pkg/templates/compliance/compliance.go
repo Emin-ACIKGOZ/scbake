@@ -21,7 +21,7 @@ import (
 //go:embed templates/*.tpl schema.json
 var templates embed.FS
 
-// Handler implements the templates.Handler interface for compliance.
+// Handler implements templates.Handler.
 type Handler struct{}
 
 // SchemaFS implements templates.SchemaProvider.
