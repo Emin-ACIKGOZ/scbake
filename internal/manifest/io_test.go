@@ -209,9 +209,13 @@ func TestLoadAndSave(t *testing.T) {
 		t.Error("Manifest file was not created")
 	}
 
-	// Verify temp file is gone
-	if _, err := os.Stat(mfPath + ".tmp"); !os.IsNotExist(err) {
-		t.Error("Temp manifest file was not cleaned up")
+	// Verify no temp file is left behind.
+	leftovers, err := filepath.Glob(filepath.Join(tmpDir, fileutil.ManifestFileName+".*.tmp"))
+	if err != nil {
+		t.Fatalf("glob temp manifest files failed: %v", err)
+	}
+	if len(leftovers) != 0 {
+		t.Errorf("temp manifest file was not cleaned up: %v", leftovers)
 	}
 
 	// 4. Reload
@@ -221,5 +225,37 @@ func TestLoadAndSave(t *testing.T) {
 	}
 	if len(m2.Projects) != 1 {
 		t.Error("Persistence failed")
+	}
+}
+
+// TestSave_DoesNotReuseExistingTempPath verifies Save writes through a random
+// temp name and leaves a file at the old fixed "scbake.toml.tmp" path untouched.
+func TestSave_DoesNotReuseExistingTempPath(t *testing.T) {
+	rootDir := t.TempDir()
+
+	// Create a file at the old fixed temp path; Save must leave it untouched.
+	existingFile := filepath.Join(rootDir, fileutil.ManifestFileName+".tmp")
+	if err := os.WriteFile(existingFile, []byte("existing"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("failed to create existing file: %v", err)
+	}
+
+	m := &types.Manifest{SbakeVersion: DefaultSbakeVersion}
+	if err := Save(m, rootDir); err != nil {
+		t.Fatalf("Save() failed with an existing temp path: %v", err)
+	}
+
+	got, err := os.ReadFile(existingFile) //nolint:gosec // test-controlled temp path
+	if err != nil {
+		t.Fatalf("Save() removed the existing file: %v", err)
+	}
+	if string(got) != "existing" {
+		t.Errorf("Save() overwrote the existing file: got %q", got)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(rootDir, fileutil.ManifestFileName+".*.tmp"))
+	if err != nil {
+		t.Fatalf("glob temp manifest files failed: %v", err)
+	}
+	if len(leftovers) != 0 {
+		t.Errorf("Save() left temp files behind: %v", leftovers)
 	}
 }

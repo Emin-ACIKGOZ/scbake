@@ -173,18 +173,19 @@ func Save(m *types.Manifest, rootPath string) (err error) {
 	if err != nil {
 		return fmt.Errorf("invalid manifest path: %w", err)
 	}
-	tempPath := finalPath + ".tmp"
-
 	// Conflict detection: Check if file has been modified by another process
 	if err := checkManifestConflict(finalPath); err != nil {
 		return err
 	}
 
-	// Create temp file using PrivateFilePerms (0600)
-	f, err := fileutil.SafeOpenFile(rootPath, fileutil.ManifestFileName+".tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileutil.PrivateFilePerms)
+	// Create the temp file under a random name reserved exclusively (O_EXCL) so
+	// an existing file is never reused; os.CreateTemp uses 0600, matching
+	// fileutil.PrivateFilePerms.
+	f, err := os.CreateTemp(filepath.Dir(finalPath), fileutil.ManifestFileName+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("failed to create temp manifest: %w", err)
 	}
+	tempPath := f.Name()
 
 	// Ensure cleanup of temp file if something goes wrong before rename.
 	// We only act if there is an error, preventing double-close on success paths.
