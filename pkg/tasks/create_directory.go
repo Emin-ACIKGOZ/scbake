@@ -36,8 +36,7 @@ func (t *CreateDirTask) Execute(tc types.TaskContext) error {
 		}
 	}
 
-	// Register any intermediate directories that MkdirAll is about to create
-	// implicitly so that rollback removes them as well.
+	// Register implicit parents for rollback (see trackMissingAncestors).
 	if err := trackMissingAncestors(tc, absPath); err != nil {
 		return err
 	}

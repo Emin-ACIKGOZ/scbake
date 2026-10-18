@@ -209,8 +209,7 @@ func checkFilePreconditions(tc types.TaskContext, output, target string) (string
 		return "", err
 	}
 
-	// Register the parent directories MkdirAll is about to create implicitly so
-	// that a rollback removes them along with the file itself.
+	// Register implicit parents for rollback (see trackMissingAncestors).
 	if err := trackMissingAncestors(tc, absPath); err != nil {
 		return "", err
 	}
