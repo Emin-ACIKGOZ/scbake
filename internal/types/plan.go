@@ -52,13 +52,13 @@ type TaskContext struct {
 
 // Task is the interface for all atomic operations (e.g., create file, exec command).
 type Task interface {
-	// Description provides a human-readable summary for logging.
+	// Description returns a short, user-facing summary shown in CLI progress output.
 	Description() string
 
-	// Priority determines the execution order. Lower numbers run first.
+	// Priority returns the execution order; lower values run first within a band.
 	Priority() int
 
-	// Execute performs the actual work.
+	// Execute performs the task under the supplied context and transaction.
 	Execute(tc TaskContext) error
 }
 

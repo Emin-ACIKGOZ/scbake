@@ -33,7 +33,9 @@ type Handler interface {
 // against the schema before executing any tasks.
 type SchemaProvider interface {
 	Handler
+	// SchemaFS returns the embedded filesystem that contains the schema.
 	SchemaFS() embed.FS
+	// SchemaPath returns the path of schema.json within SchemaFS.
 	SchemaPath() string
 }
 
