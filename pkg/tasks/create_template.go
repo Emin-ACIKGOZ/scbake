@@ -68,10 +68,8 @@ type CreateTemplateTask struct {
 	// OutputPath is the destination path relative to the TargetPath (e.g., "go.mod")
 	OutputPath string
 
-	// Human-readable description
 	Desc string
 
-	// Execution priority
 	TaskPrio int
 
 	// Optional: Custom data to pass to the template instead of the full manifest
