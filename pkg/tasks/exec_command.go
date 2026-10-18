@@ -20,10 +20,8 @@ type ExecCommandTask struct {
 	// The arguments (e.g., "mod", "tidy")
 	Args []string
 
-	// The human-readable description
 	Desc string
 
-	// The execution priority
 	TaskPrio int
 
 	// If true, run in TaskContext.TargetPath, else run in "."

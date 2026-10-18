@@ -39,12 +39,6 @@ func (m *Manager) Track(path string) error {
 		return fmt.Errorf("failed to stat %s: %w", absPath, err)
 	}
 
-	// A symlink as the tracked leaf is never followed blindly. SafePath has
-	// already confirmed the link resolves inside the root. A symlink to a
-	// directory is transparent: MkdirAll merges into the directory, so treat it
-	// like any other directory (no backup). A symlink to a file is refused: the
-	// write helpers open with O_NOFOLLOW and would reject it anyway, and backing
-	// up through the link could touch a shared inode.
 	if info.Mode()&os.ModeSymlink != 0 {
 		return checkTrackedSymlink(absPath)
 	}

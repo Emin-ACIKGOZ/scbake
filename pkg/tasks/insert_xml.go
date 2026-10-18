@@ -27,10 +27,8 @@ type InsertXMLTask struct {
 	// XMLContent is the XML fragment to insert (must be valid XML)
 	XMLContent string
 
-	// Desc is a human-readable description of the task
 	Desc string
 
-	// TaskPrio is the priority/order for execution
 	TaskPrio int
 }
 
