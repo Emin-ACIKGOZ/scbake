@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"scbake/internal/util/fileutil"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,6 +101,35 @@ func TestNew_SweepNoTempDir(t *testing.T) {
 
 	if _, err := New(rootDir); err != nil {
 		t.Fatalf("New() failed when .scbake/tmp is absent: %v", err)
+	}
+}
+
+// TestEnsureTempDir_NotClockPredictable checks the transaction temp dir is not
+// named from the clock, which another local principal could predict.
+func TestEnsureTempDir_NotClockPredictable(t *testing.T) {
+	rootDir := t.TempDir()
+	tx, err := New(rootDir)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	file := filepath.Join(rootDir, "config.yaml")
+	createFile(t, file, "data", fileutil.FilePerms)
+
+	// Wide bounds avoid a false failure if the clock steps between samples.
+	lower := time.Now().Add(-time.Minute).UnixNano()
+	if err := tx.Track(file); err != nil {
+		t.Fatalf("Track failed: %v", err)
+	}
+	upper := time.Now().Add(time.Minute).UnixNano()
+
+	name := filepath.Base(tx.tempDir)
+	if !strings.HasPrefix(name, txDirPrefix) {
+		t.Fatalf("temp dir %q does not use the %q prefix", name, txDirPrefix)
+	}
+	nanos, parseErr := strconv.ParseInt(strings.TrimPrefix(name, txDirPrefix), 10, 64)
+	if parseErr == nil && nanos >= lower && nanos <= upper {
+		t.Errorf("temp dir %q is a wall-clock timestamp; it must be unpredictable", name)
 	}
 }
 
