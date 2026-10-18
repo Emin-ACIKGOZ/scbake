@@ -174,22 +174,26 @@ func (m *Manager) ensureTempDir() error {
 		return nil
 	}
 
-	// Create a unique temp dir inside .scbake/tmp
-	timestamp := time.Now().UnixNano()
-	dirName := fmt.Sprintf("%s%d", txDirPrefix, timestamp)
+	tmpParent := filepath.Join(m.rootPath, fileutil.InternalDir, fileutil.TmpDir)
 
-	// We place tmp inside the project root to ensure we are on the same filesystem/partition,
-	// which makes file moves atomic and avoids cross-device link errors.
-	path := filepath.Join(m.rootPath, fileutil.InternalDir, fileutil.TmpDir, dirName)
-
-	// Refuse to create the transaction directory through a symlink that
-	// escapes the root (for example a symlinked .scbake or .scbake/tmp).
-	if _, err := fileutil.SafePath(m.rootPath, path); err != nil {
+	// Refuse to create the transaction directory through a symlink that escapes
+	// the root (e.g. a symlinked .scbake/tmp), before anything is written.
+	if _, err := fileutil.SafePath(m.rootPath, tmpParent); err != nil {
 		return fmt.Errorf("refusing to create transaction temp dir: %w", err)
 	}
 
-	if err := os.MkdirAll(path, fileutil.DirPerms); err != nil {
-		return fmt.Errorf("failed to create temp dir %s: %w", path, err)
+	// We place tmp inside the project root to ensure we are on the same filesystem/partition,
+	// which makes file moves atomic and avoids cross-device link errors.
+	if err := os.MkdirAll(tmpParent, fileutil.DirPerms); err != nil {
+		return fmt.Errorf("failed to create temp parent dir %s: %w", tmpParent, err)
+	}
+
+	// Create the temp dir under a random name so an existing path is never
+	// reused. Keep MkdirTemp's 0700 mode: backups are private to the process,
+	// and chmod would only widen the window for a swapped symlink.
+	path, err := os.MkdirTemp(tmpParent, txDirPrefix+"*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
 
 	m.tempDir = path
