@@ -13,7 +13,7 @@ import (
 //go:embed eslint.config.js.tpl
 var templates embed.FS
 
-// Handler implements the templates.Handler interface for Svelte linting.
+// Handler implements templates.Handler.
 type Handler struct{}
 
 // GetTasks returns the plan to add ESLint configuration and dependencies for Svelte.

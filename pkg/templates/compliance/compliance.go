@@ -21,13 +21,13 @@ import (
 //go:embed templates/*.tpl schema.json
 var templates embed.FS
 
-// Handler implements the templates.Handler interface for compliance.
+// Handler implements templates.Handler.
 type Handler struct{}
 
-// SchemaFS returns the embedded filesystem containing schema.json.
+// SchemaFS implements templates.SchemaProvider.
 func (h *Handler) SchemaFS() embed.FS { return templates }
 
-// SchemaPath returns the path to the embedded schema definition.
+// SchemaPath implements templates.SchemaProvider.
 func (h *Handler) SchemaPath() string { return "schema.json" }
 
 // GetTasks returns the plan to create compliance files.
@@ -84,10 +84,10 @@ type LicenseTask struct {
 	TaskPrio int
 }
 
-// Description returns a human-readable summary of the task.
+// Description implements types.Task.
 func (t *LicenseTask) Description() string { return "Generate LICENSE file" }
 
-// Priority returns the execution priority level.
+// Priority implements types.Task.
 func (t *LicenseTask) Priority() int { return t.TaskPrio }
 
 // Execute performs the license generation task.

@@ -12,7 +12,7 @@ import (
 	"scbake/pkg/tasks"
 )
 
-// Handler implements the templates.Handler interface for Git.
+// Handler implements templates.Handler.
 type Handler struct{}
 
 // gitCmd is the Git executable invoked for repository setup tasks.

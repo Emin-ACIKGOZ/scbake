@@ -34,12 +34,12 @@ type InsertXMLTask struct {
 	TaskPrio int
 }
 
-// Description returns a human-readable summary of the task.
+// Description implements types.Task.
 func (t *InsertXMLTask) Description() string {
 	return t.Desc
 }
 
-// Priority returns the execution order (lower numbers first).
+// Priority implements types.Task.
 func (t *InsertXMLTask) Priority() int {
 	return t.TaskPrio
 }

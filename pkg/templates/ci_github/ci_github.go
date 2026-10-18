@@ -12,13 +12,13 @@ import (
 //go:embed main.yml.tpl schema.json
 var templates embed.FS
 
-// Handler implements the templates.Handler interface for GitHub CI.
+// Handler implements templates.Handler.
 type Handler struct{}
 
-// SchemaFS returns the embedded filesystem containing schema.json.
+// SchemaFS implements templates.SchemaProvider.
 func (h *Handler) SchemaFS() embed.FS { return templates }
 
-// SchemaPath returns the path to the embedded schema definition.
+// SchemaPath implements templates.SchemaProvider.
 func (h *Handler) SchemaPath() string { return "schema.json" }
 
 // GetTasks returns the plan to create the GitHub Actions workflow file.

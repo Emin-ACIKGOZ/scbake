@@ -12,7 +12,7 @@ import (
 //go:embed .editorconfig.tpl
 var templates embed.FS
 
-// Handler implements the templates.Handler interface for EditorConfig.
+// Handler implements templates.Handler.
 type Handler struct{}
 
 // GetTasks returns the plan to create the standard .editorconfig file.

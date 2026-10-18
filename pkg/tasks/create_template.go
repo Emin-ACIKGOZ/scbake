@@ -83,12 +83,12 @@ type CreateTemplateTask struct {
 	TemplateName string
 }
 
-// Description returns a human-readable summary of the task.
+// Description implements types.Task.
 func (t *CreateTemplateTask) Description() string {
 	return t.Desc
 }
 
-// Priority returns the execution priority level.
+// Priority implements types.Task.
 func (t *CreateTemplateTask) Priority() int {
 	return t.TaskPrio
 }

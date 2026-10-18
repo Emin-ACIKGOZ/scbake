@@ -14,7 +14,7 @@ import (
 	"scbake/pkg/tasks"
 )
 
-// Handler implements the lang.Handler interface for Spring Boot projects.
+// Handler implements lang.Handler.
 type Handler struct{}
 
 // GetTasks returns the execution plan for initializing a Spring Boot project at targetPath.

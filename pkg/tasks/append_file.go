@@ -141,8 +141,8 @@ func appendFileContent(targetPath, relPath string, existing []byte, newContent s
 	return nil
 }
 
-// Description returns a human-readable summary of the task.
+// Description implements types.Task.
 func (t *AppendFileTask) Description() string { return t.Desc }
 
-// Priority returns the execution priority level.
+// Priority implements types.Task.
 func (t *AppendFileTask) Priority() int { return t.TaskPrio }

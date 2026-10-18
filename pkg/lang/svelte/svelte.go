@@ -14,7 +14,7 @@ import (
 // npmCmd is the Node package manager executable invoked for setup tasks.
 const npmCmd = "npm"
 
-// Handler implements the lang.Handler interface for Svelte projects.
+// Handler implements lang.Handler.
 type Handler struct{}
 
 // GetTasks returns the list of tasks required to set up a Svelte project.
