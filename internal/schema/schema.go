@@ -13,16 +13,14 @@ import (
 	"io"
 )
 
-// VariableType enumerates the supported input types.
+// VariableType identifies the type of a template input variable.
 type VariableType string
 
+// Supported types.
 const (
-	// TypeString indicates a string-typed variable.
 	TypeString VariableType = "string"
-	// TypeNumber indicates a numeric-typed variable.
 	TypeNumber VariableType = "number"
-	// TypeBool indicates a boolean-typed variable.
-	TypeBool VariableType = "boolean"
+	TypeBool   VariableType = "boolean"
 )
 
 // VariableDef describes a single template input variable.
