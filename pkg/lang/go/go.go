@@ -23,10 +23,10 @@ const goModSubcommand = "mod"
 // Handler implements the lang.Handler interface for Go projects.
 type Handler struct{}
 
-// SchemaFS returns the embedded filesystem containing schema.json.
+// SchemaFS implements lang.SchemaProvider.
 func (h *Handler) SchemaFS() embed.FS { return templates }
 
-// SchemaPath returns the path to the embedded schema definition.
+// SchemaPath implements lang.SchemaProvider.
 func (h *Handler) SchemaPath() string { return "schema.json" }
 
 // GetTasks uses the sanitize utility to sanitize the module name and returns the execution plan.
