@@ -26,6 +26,9 @@ const (
 
 	cacheDirPerm  os.FileMode = 0750
 	cacheFilePerm os.FileMode = 0640
+
+	// stagingDirPrefix names the per-pull staging directories.
+	stagingDirPrefix = ".scbake-stage-"
 )
 
 // Pull downloads a template from a registry and caches it locally.
@@ -376,16 +379,17 @@ func extractToCache(body io.Reader, cacheDir, destDir, subdirectory string) erro
 	if err := validateSubdirectory(subdirectory); err != nil {
 		return err
 	}
-	// Fail closed before any RemoveAll/Rename: destDir and its staging sibling
-	// must be strictly inside the cache root.
+	// Fail closed before any RemoveAll/Rename: destDir must be strictly inside
+	// the cache root.
 	if err := ensureStrictlyWithin(cacheDir, destDir); err != nil {
 		return err
 	}
-	tmpDir := destDir + ".tmp"
-	if err := ensureStrictlyWithin(cacheDir, tmpDir); err != nil {
+	// Stage in an unpredictably named sibling so an existing path is never
+	// reused.
+	tmpDir, err := createStagingDir(cacheDir, destDir)
+	if err != nil {
 		return err
 	}
-
 	sourceDir, err := stageArchive(body, cacheDir, tmpDir, subdirectory)
 	if err != nil {
 		return err
@@ -393,18 +397,33 @@ func extractToCache(body io.Reader, cacheDir, destDir, subdirectory string) erro
 	return swapIntoCache(cacheDir, destDir, tmpDir, sourceDir)
 }
 
-// stageArchive extracts the archive into a fresh temp directory and validates
-// the staged tree, returning the directory to promote. The existing cache is
-// not touched, so an empty or malformed archive cannot destroy a previously
-// valid cache.
-func stageArchive(body io.Reader, cacheDir, tmpDir, subdirectory string) (string, error) {
-	if err := removeAllContained(cacheDir, tmpDir); err != nil {
-		return "", fmt.Errorf("cleaning temp dir: %w", err)
+// createStagingDir creates an unpredictably named staging directory as a sibling
+// of destDir. The old fixed "<destDir>.tmp" name was predictable, so another
+// process could occupy it first; os.MkdirTemp creates a fresh directory under a
+// random name. Its 0700 mode is kept (the cache is per-user, and chmod would
+// widen the window for a swapped symlink), and containment is re-checked before
+// anything is staged.
+func createStagingDir(cacheDir, destDir string) (string, error) {
+	parent := filepath.Dir(destDir)
+	if err := os.MkdirAll(parent, cacheDirPerm); err != nil {
+		return "", fmt.Errorf("creating staging parent: %w", err)
 	}
-	if err := os.MkdirAll(tmpDir, cacheDirPerm); err != nil {
-		return "", fmt.Errorf("creating temp dir: %w", err)
+	// Re-check after creating the parent: a symlinked <cache>/<registry> must
+	// not let the staging directory escape the cache root.
+	if err := ensureStrictlyWithin(cacheDir, destDir); err != nil {
+		return "", err
 	}
+	tmpDir, err := os.MkdirTemp(parent, stagingDirPrefix+"*")
+	if err != nil {
+		return "", fmt.Errorf("creating staging dir: %w", err)
+	}
+	return tmpDir, nil
+}
 
+// stageArchive extracts the archive into the staging directory and validates the
+// staged tree, returning the directory to promote. The existing cache is not
+// touched, so a malformed archive cannot destroy a previously valid cache.
+func stageArchive(body io.Reader, cacheDir, tmpDir, subdirectory string) (string, error) {
 	limited := io.LimitReader(body, maxArchiveBytes)
 	if err := extractTarGz(limited, tmpDir); err != nil {
 		_ = removeAllContained(cacheDir, tmpDir)
