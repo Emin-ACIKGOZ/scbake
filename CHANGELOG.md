@@ -4,6 +4,22 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.8.1] - 2026-10-18
+
+### Bug Fixes
+
+- Create temp and staging paths with unpredictable names (#107)
+
+### Continuous Integration
+
+- **deps:** Bump anchore/sbom-action/download-syft from 0.20.5 to 0.24.3 (#103)
+- **deps:** Bump sigstore/cosign-installer from 4.1.0 to 4.1.2 (#104)
+
+### Documentation
+
+- **tasks:** Remove duplicate package comment (#105)
+- Deduplicate interface method comments (#106)
+
 ## [0.8.0] - 2026-10-11
 
 ### Features
