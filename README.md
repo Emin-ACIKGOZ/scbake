@@ -139,7 +139,7 @@ scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spd
 | :------------------- | :----------------------------------------------- | :-------------------------- |
 | `--lang`             | Primary language pack (`go`, `svelte`, `spring`) | `--lang go`                 |
 | `--with`             | Comma-separated tooling templates                | `--with makefile,ci_github` |
-| `--license`          | SPDX License ID (required for `compliance`)      | `--license MIT`             |
+| `--license`          | SPDX License ID (required for `compliance`; embedded, works offline) | `--license MIT`             |
 | `--copyright-holder` | Copyright holder name (required for `compliance`) | `--copyright-holder "Acme Corp"` |
 | `--template-dir`     | Directory with custom template overrides         | `--template-dir ./my-tpls`  |
 | `--set`              | Set template variable (`key=value`, can be repeated) | `--set service_id=srv-abc` |
@@ -302,13 +302,18 @@ scbake list [langs|templates|projects]
 | `community`     | Universal Config (1000) | Scaffolds `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, and `GOVERNANCE.md` |
 | `editorconfig`  | Universal Config (1000) | Standard file formatting across the project                       |
 | `ci_github`     | CI (1100)               | Conditional CI setup based on detected languages          |
-| `compliance`    | Linter (1200)           | Adds `SECURITY.md`, `dependabot.yml`, `CODEOWNERS`, and dynamic `LICENSE` |
+| `compliance`    | Linter (1200)           | Adds `SECURITY.md`, `dependabot.yml`, `CODEOWNERS`, and a `LICENSE` built from embedded SPDX data |
 | `go_linter`     | Linter (1200)           | Standard `golangci-lint` configuration                     |
 | `maven_linter`  | Linter (1200)           | Checkstyle config + automatic pom.xml plugin integration                       |
 | `svelte_linter` | Linter (1200)           | ESLint 9 integration for Svelte projects          |
 | `makefile`      | Build System (1400)     | Universal build/lint scripts for all projects  |
 | `devcontainer`  | Dev Env (1500)          | Containerized DX with auto-detected toolchains |
 | `git`  | Version Control (2000)          | Initializes repo, stages all files, and creates initial commit |
+
+The `compliance` template resolves `--license` from an SPDX License List
+snapshot embedded in the binary, so license generation works offline. See
+[`pkg/templates/compliance/internal/spdx/README.md`](pkg/templates/compliance/internal/spdx/README.md)
+for the pinned version and maintainer refresh instructions.
 
 ## Extending `scbake`
 

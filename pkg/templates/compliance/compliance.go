@@ -11,11 +11,10 @@ import (
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
+	"scbake/pkg/templates/compliance/internal/spdx"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/mitchellh/go-spdx"
 )
 
 //go:embed templates/*.tpl schema.json
@@ -103,13 +102,12 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 		return errors.New("explicit license and copyright_holder are required for the compliance template")
 	}
 
-	// 1. Fetch license text dynamically from SPDX.org
-	lic, err := spdx.License(licenseID)
+	// 1. Look up the license text in the embedded SPDX snapshot.
+	text, err := spdx.Text(licenseID)
 	if err != nil {
-		return fmt.Errorf("failed to fetch license '%s': %w", licenseID, err)
+		return fmt.Errorf("failed to load license %q: %w", licenseID, err)
 	}
 
-	text := lic.Text
 	year := strconv.Itoa(time.Now().Year())
 
 	// 2. Replace common SPDX placeholders
@@ -118,11 +116,13 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 		"<year>", year,
 		"[year]", year,
 		"[yyyy]", year,
+		"<copyright holder>", holders,
 		"<copyright holders>", holders,
+		"[name of copyright holder]", holders,
+		"[name of copyright owner]", holders,
 		"[fullname]", holders,
 		"<name of author>", holders,
 		"<owner>", holders,
-		"[name of copyright owner]", holders,
 	)
 	text = replacer.Replace(text)
 
