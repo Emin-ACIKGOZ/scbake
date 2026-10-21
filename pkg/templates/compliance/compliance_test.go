@@ -83,6 +83,64 @@ func TestLicenseTask_Execute(t *testing.T) {
 	}
 }
 
+func TestLicenseTask_Placeholders(t *testing.T) {
+	tmpDir := t.TempDir()
+	m := &types.Manifest{
+		Metadata: map[string]string{"license": "Apache-2.0", "copyright_holder": "Acme Corp"},
+	}
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: tmpDir,
+		Manifest:   m,
+	}
+	task := &LicenseTask{TaskPrio: 100}
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() failed: %v", err)
+	}
+
+	//nolint:gosec // Test temp directory
+	content, err := os.ReadFile(filepath.Join(tmpDir, "LICENSE"))
+	if err != nil {
+		t.Fatalf("read LICENSE: %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "Acme Corp") {
+		t.Errorf("LICENSE missing copyright holder")
+	}
+	if strings.Contains(text, "[yyyy]") {
+		t.Errorf("LICENSE still contains the [yyyy] placeholder")
+	}
+	if strings.Contains(text, "[name of copyright owner]") {
+		t.Errorf("LICENSE still contains the copyright owner placeholder")
+	}
+}
+
+func TestLicenseTask_CaseInsensitiveLicense(t *testing.T) {
+	tmpDir := t.TempDir()
+	m := &types.Manifest{
+		Metadata: map[string]string{"license": "mit", "copyright_holder": "Case Holder"},
+	}
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: tmpDir,
+		Manifest:   m,
+	}
+	task := &LicenseTask{TaskPrio: 100}
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() failed: %v", err)
+	}
+
+	//nolint:gosec // Test temp directory
+	content, err := os.ReadFile(filepath.Join(tmpDir, "LICENSE"))
+	if err != nil {
+		t.Fatalf("read LICENSE: %v", err)
+	}
+	if !strings.Contains(string(content), "MIT License") {
+		t.Errorf("LICENSE is not MIT")
+	}
+}
+
 func TestLicenseTask_DryRun(t *testing.T) {
 	tmpDir := t.TempDir()
 	m := &types.Manifest{Metadata: map[string]string{"license": "MIT", "copyright_holder": "DryRun Holder"}}
