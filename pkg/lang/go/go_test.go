@@ -58,6 +58,34 @@ func assertGoModInitTask(t *testing.T, task types.Task, expectedModule string) {
 	}
 }
 
+// TestGetTasks_RejectsLeadingDashName is a regression test for issue #38
+// (SCB-038): a flag-like directory name must never reach the `go mod init`
+// argv, where Go's flag parser would consume it as an option.
+func TestGetTasks_RejectsLeadingDashName(t *testing.T) {
+	handler := &Handler{}
+	base := t.TempDir()
+
+	for _, name := range []string{"-x", "-C", "-modfile=x", "--"} {
+		t.Run(name, func(t *testing.T) {
+			target := filepath.Join(base, name)
+			if err := os.Mkdir(target, 0700); err != nil {
+				t.Fatal(err)
+			}
+
+			plan, err := handler.GetTasks(target, "", "")
+			if err == nil {
+				t.Fatalf("expected an error for flag-like name %q, got plan %v", name, plan)
+			}
+			if plan != nil {
+				t.Errorf("expected no tasks on error, got %v", plan)
+			}
+			if !strings.Contains(err.Error(), "leading dash") {
+				t.Errorf("error should mention leading dash, got: %v", err)
+			}
+		})
+	}
+}
+
 // TestGetTasks_ExistingProject validates the maintenance path when go.mod exists.
 func TestGetTasks_ExistingProject(t *testing.T) {
 	tempDir := t.TempDir()
