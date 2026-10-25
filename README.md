@@ -387,7 +387,8 @@ task := &tasks.InsertXMLTask{
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines,
 [docs/SCOPE.md](docs/SCOPE.md) for what belongs in core,
-[docs/COMMIT_MESSAGES.md](docs/COMMIT_MESSAGES.md) for commit conventions, and
+[docs/COMMIT_MESSAGES.md](docs/COMMIT_MESSAGES.md) for commit conventions,
+[docs/CI_ARTIFACTS.md](docs/CI_ARTIFACTS.md) for verifying CI artifacts, and
 [docs/TRIAGE.md](docs/TRIAGE.md) for how issues are handled.
 
 ## License
