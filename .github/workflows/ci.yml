@@ -36,6 +36,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Lint workflows
+        # Pin the linter like govulncheck. Disable the optional shellcheck and
+        # pyflakes integrations so the result does not depend on the runner
+        # image.
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          actionlint -shellcheck= -pyflakes= .github/workflows/*.yml
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
