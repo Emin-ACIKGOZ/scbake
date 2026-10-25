@@ -36,6 +36,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Lint workflows
+        # Pin the linter like govulncheck. Disable the optional shellcheck and
+        # pyflakes integrations so the result does not depend on the runner
+        # image.
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          actionlint -shellcheck= -pyflakes= .github/workflows/*.yml
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
@@ -105,6 +113,10 @@ jobs:
     name: Coverage gate
     needs: lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout
@@ -128,6 +140,16 @@ jobs:
           echo "Total coverage: ${total}% (minimum: ${COVERAGE_MIN}%)"
           awk -v t="$total" -v m="$COVERAGE_MIN" 'BEGIN { if (t+0 < m+0) { printf "::error::Coverage %.1f%% is below the required %s%%\n", t, m; exit 1 } }'
 
+      - name: Attest coverage artifact
+        if: >-
+          github.event_name != 'pull_request' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          github.actor != 'dependabot[bot]')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: coverage.out
+
       - name: Upload coverage artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -138,6 +160,10 @@ jobs:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
     needs: [test, coverage]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: true
       matrix:
@@ -166,6 +192,16 @@ jobs:
 
           echo "Building $OUTPUT_NAME..."
           go build -trimpath -ldflags="-s -w" -o "$OUTPUT_NAME" ./main.go
+
+      - name: Attest binary artifact
+        if: >-
+          github.event_name != 'pull_request' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          github.actor != 'dependabot[bot]')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: dist/scbake-${{ matrix.goos }}-${{ matrix.goarch }}*
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

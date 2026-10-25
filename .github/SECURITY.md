@@ -20,6 +20,15 @@ This policy applies to:
 
 Issues caused by misuse outside documented guarantees are generally out of scope.
 
+## Build provenance
+
+CI artifacts from trusted runs (pushes to `master` and manual runs on `master`)
+and releases are built by GitHub Actions and carry verifiable provenance. Fork
+and Dependabot pull request artifacts are intentionally un-attested. See
+[CI_ARTIFACTS.md](../docs/CI_ARTIFACTS.md) for CI verification and
+[INSTALLING.md](../docs/INSTALLING.md#verifying-a-release) for release
+signatures and SBOMs.
+
 ## Disclosure Process
 
 Reported vulnerabilities will be reviewed and triaged as soon as possible.  
