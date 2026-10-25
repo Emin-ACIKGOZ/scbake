@@ -323,7 +323,7 @@ scbake list [langs|templates|projects]
 - **CreateTemplateTask**: Creates new files from templates using a 3-tier resolution chain: **local overrides** (`--template-dir`) → **registry cache** (pulled templates) → **embedded defaults** (compiled-in)
 - **AppendFileTask**: Appends content to existing files with idempotency checks
 - **ExecCommandTask**: Executes shell commands with optional output tracking
-- **CreateDirectoryTask**: Creates directories with transaction tracking
+- **CreateDirTask**: Creates directories with transaction tracking
 - **InsertXMLTask**: Modifies existing XML files by inserting fragments at specified paths
 
 ### Example: Modifying Existing XML Files

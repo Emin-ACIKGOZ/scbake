@@ -24,7 +24,7 @@ Core does one thing well:
 - The planner, executor, and transaction/rollback system.
 - The `Handler` / `Task` interfaces and the built-in task types
   (`CreateTemplateTask`, `AppendFileTask`, `ExecCommandTask`,
-  `CreateDirectoryTask`, `InsertXMLTask`).
+  `CreateDirTask`, `InsertXMLTask`).
 - Manifest loading, the monorepo root-discovery algorithm, and conflict strategies.
 - Template resolution, the registry/cache, and schema validation.
 - The CLI surface (`new`, `apply`, `list`, `template`), output, and exit codes.

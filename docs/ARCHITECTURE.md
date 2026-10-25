@@ -68,13 +68,14 @@ type Task interface {
 }
 ```
 
-**Four built-in task types**:
+**Five built-in task types** (in `pkg/tasks/`):
 
 | Type | Purpose | Example |
 |------|---------|---------|
 | **CreateTemplateTask** | Create files from Go templates | Create `Makefile` from template |
+| **AppendFileTask** | Append to a file, creating it if absent (idempotent) | Append an entry to `.github/CODEOWNERS` |
 | **ExecCommandTask** | Run shell commands | `go mod init` |
-| **CreateDirectoryTask** | Create directory structure | Create `src/` directory |
+| **CreateDirTask** | Create directory structure | Create `src/` directory |
 | **InsertXMLTask** | Insert XML into existing files | Add plugin to `pom.xml` |
 
 **Key insight**: Tasks are **self-contained operations** with built-in error handling and rollback support.
@@ -414,8 +415,9 @@ scbake/
 │   │   └── ...
 │   └── tasks/                       # Built-in task types
 │       ├── create_template.go       # CreateTemplateTask
+│       ├── append_file.go           # AppendFileTask
 │       ├── exec_command.go          # ExecCommandTask
-│       ├── create_directory.go      # CreateDirectoryTask
+│       ├── create_directory.go      # CreateDirTask
 │       └── insert_xml.go            # InsertXMLTask
 └── docs/                            # Documentation
     ├── EXTENDING.md                 # Extension guide
