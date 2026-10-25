@@ -236,23 +236,42 @@ Tasks execute in bands, ensuring correct ordering:
 
 ### 2. Manifest as Source of Truth
 
-`scbake.toml` is the **single source of truth** for project state:
+`scbake.toml` is the **single source of truth** for project state. Running
+`scbake new demo --lang go --with editorconfig` writes:
 
 ```toml
-[scbake]
-scbake_version = "0.0.1"
+scbake_version = "v0.3.0"
 
-[[project]]
-name = "my-backend"
-path = "."
-language = "go"
+[[projects]]
+  name = "demo"
+  path = "."
+  language = "go"
 
-[[project.template]]
-name = "makefile"
+[[templates]]
+  name = "editorconfig"
+  path = "."
 
-[[project.template]]
-name = "ci_github"
+[metadata]
+  go_version = "1.22"
+
+[managed_files]
+  ".editorconfig" = "9a59be2b2273da919904dc36048d240a38cfe1e4d528f6c5222fee868360b34d"
+  ".gitignore" = "5f93f936a7096c41860b0c66ca27264cf6d2d2dc4dce71505963c76462bbbe03"
+  "main.go" = "dbab7a356d8c97f9f4bb306186a30b801e2ea07cb7fd2d4e4aa3bcf6a94e706f"
 ```
+
+| Key | Meaning |
+|-----|---------|
+| `scbake_version` | Manifest **schema** version, not the CLI release version. Written from `manifest.DefaultSbakeVersion` (`internal/manifest/io.go`). |
+| `[[projects]]` | One table per applied language pack. `path` is relative to the manifest root (`"."` for the root project). |
+| `[[templates]]` | One table per applied tooling template, recording its `name` and the `path` it was applied to. |
+| `[metadata]` | Inputs declared by template schemas (including defaults), values passed with `--set`, and `--license`/`--copyright-holder`. Omitted when empty. |
+| `[managed_files]` | SHA-256 of every template-rendered file scbake manages, keyed by path relative to the manifest root. Drives `update` and `drift`. Omitted when empty. |
+
+The hashes above are real values from the current embedded templates; they change
+whenever a rendered template changes. `[metadata]` and `[managed_files]` are omitted
+entirely when empty, so a manifest for a run with no language pack has no `[[projects]]`
+or `[metadata]` table.
 
 **Why this matters**:
 - ✅ Reproducibility: `scbake apply` re-reads manifest
