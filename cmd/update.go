@@ -41,13 +41,14 @@ With no template change the command is a no-op, so it is safe to run repeatedly.
 		}
 
 		rc := core.RunContext{
-			TargetPath:       absPath,
-			ManifestPathArg:  manifestPathArg,
-			DryRun:           dryRun,
-			Force:            force,
-			ConflictStrategy: updateConflictStrategyFlag,
-			TemplateDir:      templateDirFlag,
-			RegistryCacheDir: GetRegistryCacheDir(),
+			TargetPath:          absPath,
+			ManifestPathArg:     manifestPathArg,
+			DryRun:              dryRun,
+			Force:               force,
+			ConflictStrategy:    updateConflictStrategyFlag,
+			TemplateDir:         templateDirFlag,
+			RegistryCacheDir:    GetRegistryCacheDir(),
+			AllowAncestorSearch: allowAncestorSearch,
 		}
 
 		reporter := ui.NewReporter(runUpdateTotalSteps, dryRun)

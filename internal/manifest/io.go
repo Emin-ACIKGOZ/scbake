@@ -27,47 +27,32 @@ var (
 	modTimesLock     sync.Mutex
 )
 
+// DiscoveryOptions controls how a project root is discovered.
+type DiscoveryOptions struct {
+	// AllowAncestorSearch permits adopting an ancestor scbake.toml when no
+	// .git marker bounds the tree. It never crosses a .git root and has no
+	// effect on manifests found in the start directory itself.
+	AllowAncestorSearch bool
+}
+
 // FindProjectRoot looks for scbake.toml or .git starting in startPath and walking up.
-// It returns the directory containing the marker, or the startPath (normalized directory) if not found.
+// A manifest in the start directory is always accepted. An ancestor manifest is
+// accepted only when a .git marker bounds it; without one, discovery falls back to
+// the start directory. Use FindProjectRootWithOptions to allow ancestor search in
+// marker-less trees (non-Git monorepos).
 func FindProjectRoot(startPath string) (string, error) {
-	// 1. Normalize startPath to an absolute directory once.
-	// This serves as our starting point and our fallback.
-	startDir, err := filepath.Abs(startPath)
+	return FindProjectRootWithOptions(startPath, DiscoveryOptions{})
+}
+
+// FindProjectRootWithOptions is FindProjectRoot with an explicit boundary policy.
+func FindProjectRootWithOptions(startPath string, opts DiscoveryOptions) (string, error) {
+	startDir, err := normalizeStartDir(startPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to get absolute path: %w", err)
+		return "", err
 	}
 
-	// If the input is a file (e.g. "main.go"), start from its directory.
-	info, err := os.Stat(startDir)
-	if err == nil && !info.IsDir() {
-		startDir = filepath.Dir(startDir)
-	}
-
-	current := startDir
-
-	for {
-		// 2. Check for scbake.toml (Primary Marker)
-		manifestPath := filepath.Join(current, fileutil.ManifestFileName)
-		if _, err := os.Stat(manifestPath); err == nil {
-			return current, nil
-		}
-
-		// 3. Check for .git (Secondary Marker)
-		// This helps in monorepos where scbake.toml might not exist yet (init phase)
-		// but we still want to respect the git root.
-		gitPath := filepath.Join(current, fileutil.GitDir)
-		if _, err := os.Stat(gitPath); err == nil {
-			return current, nil
-		}
-
-		// 4. Move up one level
-		parent := filepath.Dir(current)
-
-		// 5. Root Detection: If parent is same as current, we hit the FS root.
-		if parent == current {
-			break
-		}
-		current = parent
+	if root, ok := walkToMarker(startDir, opts); ok {
+		return root, nil
 	}
 
 	// Fallback: If no marker found, return the normalized start directory.
@@ -75,11 +60,79 @@ func FindProjectRoot(startPath string) (string, error) {
 	return startDir, nil
 }
 
+// normalizeStartDir resolves startPath to an absolute directory once. A file
+// start (for example "main.go") resolves to its parent directory.
+func normalizeStartDir(startPath string) (string, error) {
+	startDir, err := filepath.Abs(startPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	info, err := os.Stat(startDir)
+	if err == nil && !info.IsDir() {
+		startDir = filepath.Dir(startDir)
+	}
+	return startDir, nil
+}
+
+// walkToMarker walks from startDir towards the filesystem root. A manifest in
+// the start directory belongs to this invocation and is always trusted; an
+// ancestor manifest is only a candidate until a .git marker proves it is inside
+// a repository. The bool reports whether a marker resolved the root; when it is
+// false the caller falls back to startDir.
+func walkToMarker(startDir string, opts DiscoveryOptions) (string, bool) {
+	current := startDir
+	var manifestRoot string
+	for {
+		if manifestRoot == "" && hasMarker(current, fileutil.ManifestFileName) {
+			manifestRoot = current
+		}
+
+		// The nearest .git is a hard boundary: a candidate manifest below it
+		// wins, otherwise the repository root itself is the project root.
+		if hasMarker(current, fileutil.GitDir) {
+			return gitBoundedRoot(current, manifestRoot), true
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+
+	// A marker-less ancestor manifest is only adopted with an explicit opt-in.
+	if opts.AllowAncestorSearch && manifestRoot != "" {
+		return manifestRoot, true
+	}
+	return "", false
+}
+
+// hasMarker reports whether dir contains the named discovery marker.
+func hasMarker(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, name))
+	return err == nil
+}
+
+// gitBoundedRoot prefers a manifest inside the repository; without one, the
+// repository root is the project root (the init-phase fallback).
+func gitBoundedRoot(gitRoot, manifestRoot string) string {
+	if manifestRoot != "" {
+		return manifestRoot
+	}
+	return gitRoot
+}
+
 // Load reads scbake.toml from the project root discovered from startPath.
 // If not found, it returns a new, empty manifest.
 // It returns the Manifest and the discovered Root Path.
 func Load(startPath string) (*types.Manifest, string, error) {
-	rootPath, err := FindProjectRoot(startPath)
+	return LoadWithOptions(startPath, DiscoveryOptions{})
+}
+
+// LoadWithOptions is Load with an explicit root-discovery boundary policy.
+func LoadWithOptions(startPath string, opts DiscoveryOptions) (*types.Manifest, string, error) {
+	rootPath, err := FindProjectRootWithOptions(startPath, opts)
 	if err != nil {
 		return nil, "", err
 	}

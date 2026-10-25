@@ -278,12 +278,17 @@ scbake list [langs|templates|projects]
 
 ### Monorepo Management
 
-`scbake` is natively monorepo-aware. It uses a **Recursive Root Discovery** algorithm to find the nearest `scbake.toml` or `.git` folder, allowing you to manage a fleet of projects from a single central manifest.
+`scbake` is natively monorepo-aware. It walks up from the target path to find the nearest `scbake.toml` or `.git` folder, allowing you to manage a fleet of projects from a single central manifest.
 
-- **Central Manifest**: Initialize your monorepo root with `scbake new <root-name>`.
+Discovery is bounded by the nearest Git root: a manifest at or below that root wins, and a manifest above it is ignored. When the target tree has no `scbake.toml` and no `.git` bounds it (for example a directory under `/tmp` or a shared parent), a stray ancestor manifest is **not** adopted; discovery falls back to the target directory. This prevents a stray ancestor manifest in a shared parent from supplying project state, though it is not a security boundary against a principal that can also plant `.git` (see the caveat below).
+
+- **Central Manifest**: Initialize your monorepo root with `scbake new <root-name> --with git` (or run `git init` in the root). This gives discovery an unambiguous repository boundary.
 - **Add Projects**: Run `scbake apply <path> --lang <lang>` to add a new project in a subdirectory. `scbake` will find the root manifest and add the project to the central tracking list.
 - **Scoped Templates**: Apply templates to specific sub-directories by passing the path: `scbake apply services/api --with go_linter`.
 - **Fleet-wide Governance**: Run `scbake apply --with makefile` at the root to generate a unified build system that orchestrates all sub-projects.
+- **Non-Git Monorepos**: If the central manifest lives in a tree without a Git root, pass `--allow-ancestor-search` to `apply`, `update`, `drift`, or `list` so an ancestor manifest can be adopted. The flag never crosses a `.git` root. It is not a security boundary: a principal that can write an ancestor directory can also plant a `.git` marker there.
+
+**Note:** `--allow-ancestor-search` is an explicit opt-in for non-Git monorepos. Without it, applying to a marker-less subproject creates a nested manifest in that subproject instead of updating the central one. `update`, `drift`, and `list` also need the flag in a non-Git monorepo; without it, `drift` evaluates the local (possibly absent) manifest and can report no drift.
 
 
 ## Supported Language Packs
@@ -373,6 +378,7 @@ task := &tasks.InsertXMLTask{
 | `--dry-run`           | Show planned changes without applying them            |
 | `--force`             | Override safety checks                               |
 | `--template-dir`      | Directory with custom template overrides (env: `SCBAKE_TEMPLATE_DIR`) |
+| `--allow-ancestor-search` | Allow ancestor `scbake.toml` discovery when no Git root bounds the tree |
 | `--conflict-strategy` | How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` |
 | `-v`, `--version`     | Show version                                          |
 | `--set`              | Set template variable (`key=value`, can be repeated)  |

@@ -56,6 +56,13 @@ cat scbake.toml
 > ```
 > All projects will be tracked in the single `scbake.toml` at the root.
 
+> **Non-Git monorepos:** root discovery is bounded by the nearest Git root by
+> default, so a central manifest in a tree without `.git` needs
+> `--allow-ancestor-search` when applying to a subproject. `update`, `drift`, and
+> `list` also need the flag; without it, `drift` evaluates the local (possibly
+> absent) manifest and can report no drift. Run
+> `scbake new <root-name> --with git` (or `git init`) to avoid the flag.
+
 If something goes wrong:
 ```bash
 # Undo the last operation

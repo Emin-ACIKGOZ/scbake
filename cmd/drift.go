@@ -57,7 +57,9 @@ edits it does not clear drift; use 'overwrite' to force restoration.`,
 			return repairDrift(absPath, manifestPathArg)
 		}
 
-		m, rootPath, err := manifest.Load(absPath)
+		m, rootPath, err := manifest.LoadWithOptions(absPath, manifest.DiscoveryOptions{
+			AllowAncestorSearch: allowAncestorSearch,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to load manifest: %w", err)
 		}
@@ -89,13 +91,14 @@ edits it does not clear drift; use 'overwrite' to force restoration.`,
 // transaction implementation. Local edits are preserved per --conflict-strategy.
 func repairDrift(absPath, manifestPathArg string) error {
 	rc := core.RunContext{
-		TargetPath:       absPath,
-		ManifestPathArg:  manifestPathArg,
-		DryRun:           dryRun,
-		Force:            force,
-		ConflictStrategy: driftStrategyFlag,
-		TemplateDir:      templateDirFlag,
-		RegistryCacheDir: GetRegistryCacheDir(),
+		TargetPath:          absPath,
+		ManifestPathArg:     manifestPathArg,
+		DryRun:              dryRun,
+		Force:               force,
+		ConflictStrategy:    driftStrategyFlag,
+		TemplateDir:         templateDirFlag,
+		RegistryCacheDir:    GetRegistryCacheDir(),
+		AllowAncestorSearch: allowAncestorSearch,
 	}
 	reporter := ui.NewReporter(runUpdateTotalSteps, dryRun)
 	return core.RunUpdate(rc, reporter)

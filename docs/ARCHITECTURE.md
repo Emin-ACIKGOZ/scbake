@@ -131,7 +131,7 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 ```
 
 **What happens**:
-1. **Recursive Root Discovery**: `manifest.Load` uses a recursive algorithm to walk up the directory tree from `TargetPath` until it finds an `scbake.toml` or a `.git` folder. This enables **Native Monorepo Support**, where a single root manifest manages projects in subdirectories.
+1. **Root Discovery**: `manifest.Load` walks up the directory tree from `TargetPath` until it finds an `scbake.toml` or a `.git` folder. Discovery is **bounded by the nearest Git root**: a manifest at or below that root is used, a manifest above it is ignored, and a manifest in the start directory is always accepted as local. When no `.git` bounds a marker-less tree, an ancestor manifest is adopted only with the `--allow-ancestor-search` opt-in (`manifest.LoadWithOptions`); otherwise discovery falls back to the start directory. This enables **Native Monorepo Support**, where a single root manifest manages projects in subdirectories, without silently trusting a stray manifest in a shared parent.
 2. Initialize transaction system at the discovered `rootPath` to ensure cross-project atomicity.
 3. Build list of tasks to execute.
 
@@ -567,6 +567,7 @@ go vet ./...          # Vet checks
 
 ### What scbake does
 ✅ Validates paths to prevent directory traversal
+✅ Bounds ancestor manifest discovery to the nearest Git root; marker-less ancestors require `--allow-ancestor-search`
 ✅ Uses atomic operations to prevent partial updates
 ✅ Detects concurrent modification attempts
 ✅ Backs up files before overwrite
@@ -574,6 +575,7 @@ go vet ./...          # Vet checks
 
 ### What scbake doesn't do
 ❌ Sandbox handlers (they run with user's permissions)
+❌ Protect against a principal that can plant both `scbake.toml` and `.git` in an ancestor directory
 ❌ Verify signatures (no plugin system yet)
 ❌ Audit all commands (could add logging in v0.2.0)
 ❌ Prevent fork bombs (subprocess resource limits not enforced)
