@@ -400,7 +400,7 @@ schema validation failed with 1 error(s):
 | :----------- | :------------------------- | :----------------------------------- |
 | `type`       | `string`, `number`, `boolean` | Expected input type               |
 | `required`   | `true`, `false`            | Must be provided by the user         |
-| `default`    | any string                 | Used when the user omits the value   |
+| `default`    | any string                 | Used when the user omits the value; must satisfy `type`, `pattern`, and `enum` or validation fails |
 | `description`| text                       | Human-readable documentation         |
 
 ---
