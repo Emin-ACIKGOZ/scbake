@@ -47,8 +47,8 @@ func (r *ValidationResult) Error() string {
 // Validate checks the provided metadata against the schema.
 // It returns missing required variables, type mismatches, and
 // populates defaults for any optional variables that are absent.
-//
-//nolint:cyclop,gocognit // Each case is a simple field check; combined they exceed the threshold.
+// A default that violates its own type, pattern, or enum is reported
+// as an error and is not applied.
 func Validate(s *Schema, metadata map[string]string) *ValidationResult {
 	res := &ValidationResult{}
 
@@ -70,68 +70,89 @@ func Validate(s *Schema, metadata map[string]string) *ValidationResult {
 					Message:      fmt.Sprintf("required variable %q is missing", name),
 				})
 			} else if def.Default != nil {
-				if metadata != nil {
-					metadata[name] = *def.Default
-				}
+				res.Errors = append(res.Errors, applyDefault(name, def, metadata)...)
 			}
 			continue
 		}
 
-		// Type validation (only for number and boolean where we can check)
-		switch def.Type {
-		case TypeNumber:
-			if !isNumber(val) {
-				res.Errors = append(res.Errors, ValidationError{
-					VariableName: name,
-					Message:      fmt.Sprintf("expected a number, got %q", val),
-				})
-				continue
-			}
-		case TypeBool:
-			if !isBool(val) {
-				res.Errors = append(res.Errors, ValidationError{
-					VariableName: name,
-					Message:      fmt.Sprintf("expected true or false, got %q", val),
-				})
-				continue
-			}
-		}
-
-		// Pattern (regex) validation
-		if def.Pattern != "" {
-			matched, err := regexp.MatchString(def.Pattern, val)
-			if err != nil {
-				res.Errors = append(res.Errors, ValidationError{
-					VariableName: name,
-					Message:      fmt.Sprintf("invalid pattern %q: %v", def.Pattern, err),
-				})
-			} else if !matched {
-				res.Errors = append(res.Errors, ValidationError{
-					VariableName: name,
-					Message:      fmt.Sprintf("does not match required pattern %q", def.Pattern),
-				})
-			}
-		}
-
-		// Enum validation
-		if len(def.Enum) > 0 {
-			found := false
-			for _, allowed := range def.Enum {
-				if val == allowed {
-					found = true
-					break
-				}
-			}
-			if !found {
-				res.Errors = append(res.Errors, ValidationError{
-					VariableName: name,
-					Message:      fmt.Sprintf("must be one of %v, got %q", def.Enum, val),
-				})
-			}
-		}
+		res.Errors = append(res.Errors, validateValue(name, def, val)...)
 	}
 
 	return res
+}
+
+// applyDefault validates def's default and, when valid, writes it to metadata.
+// Invalid defaults are returned as errors and never applied; def.Default must
+// be non-nil.
+func applyDefault(name string, def VariableDef, metadata map[string]string) []ValidationError {
+	value := *def.Default
+	errs := validateValue(name, def, value)
+	if len(errs) == 0 {
+		if metadata != nil {
+			metadata[name] = value
+		}
+		return nil
+	}
+	for i := range errs {
+		errs[i].Message = fmt.Sprintf("invalid default %q: %s", value, errs[i].Message)
+	}
+	return errs
+}
+
+// validateValue checks val against the type, pattern, and enum rules of def.
+//
+//nolint:cyclop // Each check is simple, but the switch and rules exceed the threshold.
+func validateValue(name string, def VariableDef, val string) []ValidationError {
+	switch def.Type {
+	case TypeNumber:
+		if !isNumber(val) {
+			return []ValidationError{{
+				VariableName: name,
+				Message:      fmt.Sprintf("expected a number, got %q", val),
+			}}
+		}
+	case TypeBool:
+		if !isBool(val) {
+			return []ValidationError{{
+				VariableName: name,
+				Message:      fmt.Sprintf("expected true or false, got %q", val),
+			}}
+		}
+	}
+
+	var errs []ValidationError
+	if def.Pattern != "" {
+		matched, err := regexp.MatchString(def.Pattern, val)
+		if err != nil {
+			errs = append(errs, ValidationError{
+				VariableName: name,
+				Message:      fmt.Sprintf("invalid pattern %q: %v", def.Pattern, err),
+			})
+		} else if !matched {
+			errs = append(errs, ValidationError{
+				VariableName: name,
+				Message:      fmt.Sprintf("does not match required pattern %q", def.Pattern),
+			})
+		}
+	}
+
+	if len(def.Enum) > 0 {
+		found := false
+		for _, allowed := range def.Enum {
+			if val == allowed {
+				found = true
+				break
+			}
+		}
+		if !found {
+			errs = append(errs, ValidationError{
+				VariableName: name,
+				Message:      fmt.Sprintf("must be one of %v, got %q", def.Enum, val),
+			})
+		}
+	}
+
+	return errs
 }
 
 func isNumber(s string) bool {
