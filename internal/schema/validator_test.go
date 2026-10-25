@@ -4,8 +4,11 @@
 package schema
 
 import (
+	"strings"
 	"testing"
 )
+
+func stringPtr(s string) *string { return &s }
 
 func TestValidate_MissingRequired(t *testing.T) {
 	s := &Schema{
@@ -217,5 +220,220 @@ func TestValidationError_Error(t *testing.T) {
 	expected := `variable "foo": bar`
 	if e.Error() != expected {
 		t.Errorf("expected %q, got %q", expected, e.Error())
+	}
+}
+
+func TestValidate_InvalidDefault(t *testing.T) {
+	tests := []struct {
+		name        string
+		def         VariableDef
+		wantMessage string
+	}{
+		{
+			name:        "number type",
+			def:         VariableDef{Type: TypeNumber, Default: stringPtr("not-a-number")},
+			wantMessage: `invalid default "not-a-number": expected a number`,
+		},
+		{
+			name:        "non-integer number",
+			def:         VariableDef{Type: TypeNumber, Default: stringPtr("1.5")},
+			wantMessage: `invalid default "1.5": expected a number`,
+		},
+		{
+			name:        "empty default for number",
+			def:         VariableDef{Type: TypeNumber, Default: stringPtr("")},
+			wantMessage: `invalid default "": expected a number`,
+		},
+		{
+			name:        "boolean type",
+			def:         VariableDef{Type: TypeBool, Default: stringPtr("yes")},
+			wantMessage: `invalid default "yes": expected true or false`,
+		},
+		{
+			name:        "pattern mismatch",
+			def:         VariableDef{Type: TypeString, Pattern: `^1\.\d+$`, Default: stringPtr("v1.22")},
+			wantMessage: `invalid default "v1.22": does not match required pattern`,
+		},
+		{
+			name:        "whitespace default",
+			def:         VariableDef{Type: TypeString, Pattern: `^\S+$`, Default: stringPtr(" ")},
+			wantMessage: `invalid default " ": does not match required pattern`,
+		},
+		{
+			name:        "enum mismatch",
+			def:         VariableDef{Type: TypeString, Enum: []string{"ubuntu-latest", "macos-latest"}, Default: stringPtr("windows-2019")},
+			wantMessage: `invalid default "windows-2019": must be one of`,
+		},
+		{
+			name:        "invalid pattern",
+			def:         VariableDef{Type: TypeString, Pattern: "[", Default: stringPtr("x")},
+			wantMessage: `invalid default "x": invalid pattern "["`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Schema{Variables: map[string]VariableDef{"v": tt.def}}
+			meta := map[string]string{}
+			res := Validate(s, meta)
+
+			if !res.HasErrors() {
+				t.Fatalf("expected validation error for invalid default")
+			}
+			if len(res.Errors) != 1 {
+				t.Fatalf("expected 1 error, got %d: %v", len(res.Errors), res.Errors)
+			}
+			if res.Errors[0].VariableName != "v" {
+				t.Errorf("expected error for 'v', got %q", res.Errors[0].VariableName)
+			}
+			if !strings.Contains(res.Errors[0].Message, tt.wantMessage) {
+				t.Errorf("expected message containing %q, got %q", tt.wantMessage, res.Errors[0].Message)
+			}
+			if _, ok := meta["v"]; ok {
+				t.Errorf("expected invalid default not to be applied, got %q", meta["v"])
+			}
+		})
+	}
+}
+
+func TestValidate_ValidDefault(t *testing.T) {
+	tests := []struct {
+		name string
+		def  VariableDef
+		want string
+	}{
+		{
+			name: "string",
+			def:  VariableDef{Type: TypeString, Default: stringPtr("go")},
+			want: "go",
+		},
+		{
+			name: "number",
+			def:  VariableDef{Type: TypeNumber, Default: stringPtr("8080")},
+			want: "8080",
+		},
+		{
+			name: "boolean",
+			def:  VariableDef{Type: TypeBool, Default: stringPtr("true")},
+			want: "true",
+		},
+		{
+			name: "pattern match",
+			def:  VariableDef{Type: TypeString, Pattern: `^1\.\d+$`, Default: stringPtr("1.22")},
+			want: "1.22",
+		},
+		{
+			name: "enum match",
+			def:  VariableDef{Type: TypeString, Enum: []string{"ubuntu-latest", "macos-latest"}, Default: stringPtr("ubuntu-latest")},
+			want: "ubuntu-latest",
+		},
+		{
+			name: "empty string with no constraints",
+			def:  VariableDef{Type: TypeString, Default: stringPtr("")},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Schema{Variables: map[string]VariableDef{"v": tt.def}}
+			meta := map[string]string{}
+			res := Validate(s, meta)
+
+			if res.HasErrors() {
+				t.Errorf("unexpected errors: %v", res.Errors)
+			}
+			if meta["v"] != tt.want {
+				t.Errorf("expected default %q, got %q", tt.want, meta["v"])
+			}
+		})
+	}
+}
+
+func TestValidate_InvalidDefaultWithEmptyProvidedValue(t *testing.T) {
+	s := &Schema{
+		Variables: map[string]VariableDef{
+			"v": {Type: TypeNumber, Default: stringPtr("not-a-number")},
+		},
+	}
+	meta := map[string]string{"v": ""}
+	res := Validate(s, meta)
+
+	if len(res.Errors) != 1 {
+		t.Fatalf("expected 1 error, got %d: %v", len(res.Errors), res.Errors)
+	}
+	if res.Errors[0].VariableName != "v" {
+		t.Errorf("expected error for 'v', got %q", res.Errors[0].VariableName)
+	}
+	if meta["v"] != "" {
+		t.Errorf("expected existing empty value preserved, got %q", meta["v"])
+	}
+}
+
+func TestValidate_InvalidDefaultLeavesOtherDefaultsApplied(t *testing.T) {
+	s := &Schema{
+		Variables: map[string]VariableDef{
+			"a_valid":   {Type: TypeString, Default: stringPtr("go")},
+			"z_invalid": {Type: TypeNumber, Default: stringPtr("nope")},
+		},
+	}
+	meta := map[string]string{}
+	res := Validate(s, meta)
+
+	if !res.HasErrors() {
+		t.Fatal("expected validation error for invalid default")
+	}
+	if meta["a_valid"] != "go" {
+		t.Errorf("expected valid default 'go', got %q", meta["a_valid"])
+	}
+	if _, ok := meta["z_invalid"]; ok {
+		t.Errorf("expected invalid default not to be applied, got %q", meta["z_invalid"])
+	}
+}
+
+func TestValidate_InvalidDefaultReportsAllViolations(t *testing.T) {
+	s := &Schema{
+		Variables: map[string]VariableDef{
+			"v": {Type: TypeString, Pattern: "^a", Enum: []string{"b"}, Default: stringPtr("zzz")},
+		},
+	}
+	meta := map[string]string{}
+	res := Validate(s, meta)
+
+	if !res.HasErrors() {
+		t.Fatal("expected validation errors for invalid default")
+	}
+	if len(res.Errors) != 2 {
+		t.Fatalf("expected 2 errors, got %d: %v", len(res.Errors), res.Errors)
+	}
+	for _, err := range res.Errors {
+		if err.VariableName != "v" {
+			t.Errorf("expected error for 'v', got %q", err.VariableName)
+		}
+	}
+	if !strings.Contains(res.Errors[0].Message, "does not match required pattern") {
+		t.Errorf("expected pattern error, got %q", res.Errors[0].Message)
+	}
+	if !strings.Contains(res.Errors[1].Message, "must be one of") {
+		t.Errorf("expected enum error, got %q", res.Errors[1].Message)
+	}
+	if _, ok := meta["v"]; ok {
+		t.Errorf("expected invalid default not to be applied, got %q", meta["v"])
+	}
+}
+
+func TestValidate_InvalidDefaultNilMetadata(t *testing.T) {
+	s := &Schema{
+		Variables: map[string]VariableDef{
+			"v": {Type: TypeString, Pattern: "^a", Default: stringPtr("zzz")},
+		},
+	}
+	res := Validate(s, nil)
+
+	if len(res.Errors) != 1 {
+		t.Fatalf("expected 1 error, got %d: %v", len(res.Errors), res.Errors)
+	}
+	if res.Errors[0].VariableName != "v" {
+		t.Errorf("expected error for 'v', got %q", res.Errors[0].VariableName)
 	}
 }
