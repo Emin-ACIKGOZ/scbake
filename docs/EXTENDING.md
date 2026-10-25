@@ -52,7 +52,7 @@ func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 
 	// Task 1: Create directory structure
 	p, _ := seq.Next()
-	plan = append(plan, &tasks.CreateDirectoryTask{
+	plan = append(plan, &tasks.CreateDirTask{
 		Path:     "src",
 		TaskPrio: int(p),
 		Desc:     "Create src directory",
@@ -141,7 +141,7 @@ Each call to `seq.Next()` gives you the next available priority in your band. Ta
 
 ## Available Task Types
 
-scbake provides four built-in task types. Use them to compose your handler:
+The `pkg/tasks` package provides five reusable task types. Use them to compose your handler:
 
 ### 1. **CreateTemplateTask** - Create files from templates
 
@@ -187,12 +187,12 @@ plan = append(plan, &tasks.ExecCommandTask{
 - `RunInTarget: true` - Run in the project directory (not scbake's directory)
 - `Cmd` and `Args` - The command to execute (no shell interpretation, so it's safe)
 
-### 3. **CreateDirectoryTask** - Create directories
+### 3. **CreateDirTask** - Create directories
 
 Use this to create directories with full path creation:
 
 ```go
-plan = append(plan, &tasks.CreateDirectoryTask{
+plan = append(plan, &tasks.CreateDirTask{
 	Path:     "src",
 	TaskPrio: int(p),
 	Desc:     "Create src directory",
@@ -216,6 +216,29 @@ plan = append(plan, &tasks.InsertXMLTask{
 This task:
 - ✅ Automatically detects and prevents duplicate insertions
 - ✅ Validates XML structure before modifying
+- ✅ Integrates with the transaction system for rollback
+- ✅ Validates paths to prevent directory traversal attacks
+
+### 5. **AppendFileTask** - Append to existing files
+
+Use this to add content to a file that may already exist. The task creates the file when
+it is missing and skips the write when the content is already present as a standalone
+block, so it is safe to re-run. The parent directory must already exist (the task does not
+create missing ancestors), so create it first (for example with `CreateDirTask`) when it
+is absent:
+
+```go
+plan = append(plan, &tasks.AppendFileTask{
+	FilePath: ".github/CODEOWNERS",
+	Content:  "# Managed by scbake\n* @maintainers\n",
+	TaskPrio: int(p),
+	Desc:     "Initialize .github/CODEOWNERS",
+})
+```
+
+This task:
+- ✅ Creates the file when it does not exist
+- ✅ Skips the append when the content is already present as a standalone block
 - ✅ Integrates with the transaction system for rollback
 - ✅ Validates paths to prevent directory traversal attacks
 
@@ -251,7 +274,7 @@ func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 
 	// Task 1: Create src directory
 	p, _ := seq.Next()
-	plan = append(plan, &tasks.CreateDirectoryTask{
+	plan = append(plan, &tasks.CreateDirTask{
 		Path:     "src",
 		TaskPrio: int(p),
 		Desc:     "Create src directory",

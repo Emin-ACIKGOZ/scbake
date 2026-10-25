@@ -47,7 +47,7 @@ A complete, working example of adding a new language to scbake.
 
 - ✅ How to implement the Handler interface
 - ✅ How to use priority sequences
-- ✅ How to create tasks using CreateDirectoryTask and CreateTemplateTask
+- ✅ How to create tasks using CreateDirTask and CreateTemplateTask
 - ✅ How to embed templates with Go's `embed` package
 - ✅ How to handle template variable substitution
 
