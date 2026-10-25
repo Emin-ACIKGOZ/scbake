@@ -48,6 +48,41 @@ func TestSanitizeModuleName(t *testing.T) {
 			expected: expectedCurrentDirName, // Likely "util"
 			wantErr:  false,
 		},
+		{
+			name:    "Leading Dash",
+			input:   "-x",
+			wantErr: true,
+		},
+		{
+			name:    "Leading Dash Flag",
+			input:   "-modfile=custom.mod",
+			wantErr: true,
+		},
+		{
+			name:    "Single Dash",
+			input:   "-",
+			wantErr: true,
+		},
+		{
+			name:    "Leading Space Becomes Dash",
+			input:   " my app",
+			wantErr: true,
+		},
+		{
+			name:     "Leading Digit",
+			input:    "123abc",
+			expected: "123abc",
+		},
+		{
+			name:     "Internal Dash",
+			input:    "back-end",
+			expected: "back-end",
+		},
+		{
+			name:     "Dots Underscores and Hyphens",
+			input:    "My.Project_2",
+			expected: "my.project_2",
+		},
 	}
 
 	for _, tt := range tests {
