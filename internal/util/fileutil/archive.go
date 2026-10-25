@@ -14,6 +14,9 @@ import (
 
 // ExtractTarGz extracts a gzipped tarball stream into destDir while enforcing
 // path containment safety (Zip Slip prevention) and maximum read byte limits (Zip Bomb protection).
+// Only regular files and directories are extracted; every other entry type is rejected,
+// including symbolic links, hardlinks, devices, and fifos. PAX global headers are metadata
+// and are ignored.
 func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) error {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
@@ -40,6 +43,8 @@ func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) error {
 }
 
 // extractTarEntry processes a single tar header entry safely.
+//
+//nolint:cyclop // Switch over tar entry types; each case is a flat check.
 func extractTarEntry(tr *tar.Reader, header *tar.Header, destDir string, maxBytes int64) error {
 	// Sanitize and verify target path containment inside destDir (Zip Slip protection)
 	safePath, err := SafePath(destDir, header.Name)
@@ -68,6 +73,19 @@ func extractTarEntry(tr *tar.Reader, header *tar.Header, destDir string, maxByte
 		if _, err := io.Copy(f, io.LimitReader(tr, maxBytes)); err != nil {
 			return fmt.Errorf("writing file %s: %w", safePath, err)
 		}
+	case tar.TypeSymlink, tar.TypeLink:
+		return fmt.Errorf(
+			"unsupported tar entry %q (type %q): symbolic and hard links are not extracted",
+			header.Name, header.Typeflag,
+		)
+	case tar.TypeXGlobalHeader:
+		// PAX global metadata carries no filesystem entry. git archive emits one,
+		// so ignoring it keeps git-archive tarballs extractable.
+	default:
+		return fmt.Errorf(
+			"unsupported tar entry %q (type %q): only regular files and directories are extracted",
+			header.Name, header.Typeflag,
+		)
 	}
 
 	return nil

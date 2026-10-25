@@ -4,6 +4,30 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.8.3] - 2026-10-25
+
+### Bug Fixes
+
+- **registry:** Reject tar link entries instead of dropping them (#119)
+
+## [0.8.2] - 2026-10-25
+
+### Bug Fixes
+
+- **lang:** Reject leading-dash go module names (#118)
+
+### Build
+
+- Bump Go toolchain to 1.27.3 (#117)
+
+### Continuous Integration
+
+- **deps:** Bump goreleaser/goreleaser-action from 7.2.3 to 7.3.0 (#109)
+
+### Documentation
+
+- Drop self-evident and duplicated comments (#108)
+
 ## [0.8.1] - 2026-10-18
 
 ### Bug Fixes
