@@ -54,6 +54,10 @@ type RunContext struct {
 	CopyrightHolder  string
 	SetVars          map[string]string
 
+	// AllowAncestorSearch permits finding scbake.toml above a marker-less
+	// start directory. It is set by the global --allow-ancestor-search flag.
+	AllowAncestorSearch bool
+
 	// Update indicates a manifest-driven `update` rather than a flag-driven
 	// `apply`. It restricts execution to managed file writes and skips
 	// environment prerequisites, so re-running a project is safe.
@@ -71,7 +75,9 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
 	// 1. Root Discovery & Manifest Load
-	m, rootPath, err := manifest.Load(rc.TargetPath)
+	m, rootPath, err := manifest.LoadWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
+		AllowAncestorSearch: rc.AllowAncestorSearch,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
 	}
@@ -118,7 +124,9 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 func RunUpdate(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
-	m, rootPath, err := manifest.Load(rc.TargetPath)
+	m, rootPath, err := manifest.LoadWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
+		AllowAncestorSearch: rc.AllowAncestorSearch,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
 	}

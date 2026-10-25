@@ -28,6 +28,7 @@ func resetFlags() {
 	withFlag = []string{}
 	dryRun = false
 	force = false
+	allowAncestorSearch = false
 }
 
 // executeCLI simulates command invocation by setting args on the root Cobra command.
@@ -200,6 +201,26 @@ func TestRegistryList_RedactsCredentials(t *testing.T) {
 }
 
 // --- Registration Tests ---
+
+// TestAllowAncestorSearchFlagRegistered pins the global root-discovery opt-in
+// flag: it must exist, default to false, and document its boundary.
+func TestAllowAncestorSearchFlagRegistered(t *testing.T) {
+	resetFlags()
+
+	flag := rootCmd.PersistentFlags().Lookup("allow-ancestor-search")
+	if flag == nil {
+		t.Fatal("--allow-ancestor-search is not registered as a persistent flag")
+	}
+	if flag.DefValue != "false" {
+		t.Errorf("--allow-ancestor-search default = %q, want %q", flag.DefValue, "false")
+	}
+	if !strings.Contains(flag.Usage, "scbake.toml") && !strings.Contains(flag.Usage, "Git") {
+		t.Errorf("--allow-ancestor-search usage does not describe its boundary: %q", flag.Usage)
+	}
+	if allowAncestorSearch {
+		t.Error("resetFlags() did not reset allowAncestorSearch")
+	}
+}
 
 // Verifies that every subcommand is registered exactly once on rootCmd.
 // Cobra's AddCommand does not de-duplicate, so a duplicate registration

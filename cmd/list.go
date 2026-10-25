@@ -37,7 +37,9 @@ or the projects currently managed in this repository's ` + fileutil.ManifestFile
 		case "projects":
 			fmt.Printf("Managed Projects (from %s):\n", fileutil.ManifestFileName)
 			// Pass "." as start path, ignore rootPath return
-			m, _, err := manifest.Load(".")
+			m, _, err := manifest.LoadWithOptions(".", manifest.DiscoveryOptions{
+				AllowAncestorSearch: allowAncestorSearch,
+			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error loading %s: %v\n", fileutil.ManifestFileName, err)
 				os.Exit(fileutil.ExitError)

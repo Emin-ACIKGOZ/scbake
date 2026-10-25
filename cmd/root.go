@@ -19,9 +19,10 @@ import (
 var version = "dev"
 
 var (
-	dryRun          bool
-	force           bool
-	templateDirFlag string
+	dryRun              bool
+	force               bool
+	templateDirFlag     string
+	allowAncestorSearch bool
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -60,6 +61,12 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Show what changes would be made without executing them")
 	rootCmd.PersistentFlags().BoolVar(&force, "force", false, "Override safety checks for file overwrites")
 	rootCmd.PersistentFlags().StringVar(&templateDirFlag, "template-dir", os.Getenv("SCBAKE_TEMPLATE_DIR"), "Directory containing custom template overrides (default: $SCBAKE_TEMPLATE_DIR)")
+	rootCmd.PersistentFlags().BoolVar(
+		&allowAncestorSearch,
+		"allow-ancestor-search",
+		false,
+		"Allow ancestor scbake.toml discovery when no Git root bounds the tree",
+	)
 
 	// Add a local version flag to the root command
 	rootCmd.Flags().BoolP("version", "v", false, "Show the scbake version")
