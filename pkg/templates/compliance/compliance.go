@@ -112,20 +112,33 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	text := lic.Text
 	year := strconv.Itoa(time.Now().Year())
 
-	// 2. Replace common SPDX placeholders
-	// SPDX templates use various formats: <year>, [year], <copyright holders>, [fullname]
-	replacer := strings.NewReplacer(
-		"<year>", year,
-		"[year]", year,
-		"[yyyy]", year,
-		"<copyright holders>", holders,
-		"[fullname]", holders,
-		"<name of author>", holders,
-		"<owner>", holders,
-		"[name of copyright owner]", holders,
-	)
-	text = replacer.Replace(text)
+	// 2. Replace common SPDX placeholders.
+	text = fillLicensePlaceholders(text, year, holders)
 
 	// 3. Write license file with state-aware reconciliation and transaction tracking
 	return tasks.WriteManagedFile(tc, "LICENSE", []byte(text), fileutil.FilePerms)
+}
+
+// fillLicensePlaceholders replaces the year and copyright-holder fields used by
+// SPDX license texts. Matching is literal; SPDX casing is inconsistent.
+func fillLicensePlaceholders(text, year, holders string) string {
+	return strings.NewReplacer(
+		"<year>", year,
+		"<YEAR>", year,
+		"<Year>", year,
+		"[year]", year,
+		"[YEAR]", year,
+		"[Year]", year,
+		"[yyyy]", year,
+		"<copyright holder>", holders,
+		"<COPYRIGHT HOLDER>", holders,
+		"<copyright holders>", holders,
+		"<COPYRIGHT HOLDERS>", holders,
+		"[copyright holders]", holders,
+		"[name of copyright holder]", holders,
+		"[name of copyright owner]", holders,
+		"[fullname]", holders,
+		"<name of author>", holders,
+		"<owner>", holders,
+	).Replace(text)
 }

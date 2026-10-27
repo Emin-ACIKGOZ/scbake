@@ -314,3 +314,35 @@ func TestDependabot_ProjectPathCannotInject(t *testing.T) {
 		t.Errorf("project path broke out of the YAML scalar:\n%s", out)
 	}
 }
+
+// TestFillLicensePlaceholders is a regression test for issue #114.
+func TestFillLicensePlaceholders(t *testing.T) {
+	const year, holder = "2026", "Acme Corp"
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"MIT", "Copyright (c) <year> <copyright holders>", "Copyright (c) 2026 Acme Corp"},
+		{"MIT-0", "Copyright <YEAR> <COPYRIGHT HOLDER>", "Copyright 2026 Acme Corp"},
+		{"BSD-2-Clause-Patent", "Copyright (c) <YEAR> <COPYRIGHT HOLDERS>", "Copyright (c) 2026 Acme Corp"},
+		{"UPL-1.0", "Copyright (c) [year] [copyright holders]", "Copyright (c) 2026 Acme Corp"},
+		{"MulanPSL-2.0", "Copyright (c) [Year] [name of copyright holder]", "Copyright (c) 2026 Acme Corp"},
+		{"unrelated", "<program> <software name> <owner organization> [Software Name]", "<program> <software name> <owner organization> [Software Name]"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := fillLicensePlaceholders(tc.text, year, holder); got != tc.want {
+				t.Errorf("fillLicensePlaceholders() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFillLicensePlaceholdersPreservesDollar(t *testing.T) {
+	got := fillLicensePlaceholders("Copyright (c) <year> <copyright holders>", "2026", "ACME $1")
+	want := "Copyright (c) 2026 ACME $1"
+	if got != want {
+		t.Errorf("fillLicensePlaceholders() = %q, want %q", got, want)
+	}
+}
