@@ -14,7 +14,7 @@ func writeValidManifest(t *testing.T, tplDir, name string) {
 	if err != nil {
 		t.Fatalf("hashTree failed: %v", err)
 	}
-	if err := writeCacheManifest(tplDir+manifestSuffix, name, hash); err != nil {
+	if err := writeCacheManifest(tplDir+manifestSuffix, name, hash, "", ""); err != nil {
 		t.Fatalf("writeCacheManifest failed: %v", err)
 	}
 }

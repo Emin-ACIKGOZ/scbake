@@ -309,7 +309,7 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir)
 1. `scbake template registry add <name> <url>` — registers a remote source
 2. `scbake template pull <name> --registry <name>` — downloads and caches the archive
 3. Archives are extracted to `<cacheDir>/<registry>/<templateName>/<files...>`
-4. On subsequent pulls, the cache exists and redownload is skipped (idempotent)
+4. On subsequent pulls, the cache is reused only when its manifest hash, version, and source URL match; a version or URL change (or a manifest without provenance) forces a re-download
 5. Token auth supported via stored config or `SCBAKE_REGISTRY_TOKEN_<NAME>` env var
 
 ### 4. Optimistic Locking
