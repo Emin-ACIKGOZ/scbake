@@ -4,7 +4,7 @@
     "license": {
       "type": "string",
       "required": false,
-      "description": "SPDX license identifier used to generate the LICENSE file (e.g. MIT, Apache-2.0)."
+      "description": "SPDX license identifier used to generate the LICENSE file from the embedded SPDX License List (e.g. MIT, Apache-2.0)."
     },
     "copyright_holder": {
       "type": "string",

@@ -53,6 +53,7 @@ Useful commands:
 | `golangci-lint run ./...` | Lint (uses `.golangci.yml`) |
 | `go vet ./...` | Vet checks |
 | `go fmt ./...` | Format |
+| `go generate ./...` | Regenerate the embedded SPDX license data |
 | `./scbake list` | Run the built binary |
 
 ## Code standards
