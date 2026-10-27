@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"scbake/internal/filesystem/transaction"
+	"scbake/internal/templateregistry"
 	"scbake/internal/types"
 	"slices"
 	"strings"
@@ -110,8 +111,20 @@ func TestScrubRegistryTokens(t *testing.T) {
 }
 
 func TestScrubRegistryTokensNeverReturnsNil(t *testing.T) {
-	if got := scrubRegistryTokens([]string{"SCBAKE_REGISTRY_TOKEN_A=secret"}); got == nil {
-		t.Fatal("nil env restores inheritance")
+	for _, env := range [][]string{
+		nil,
+		{"SCBAKE_REGISTRY_TOKEN_A=secret"},
+	} {
+		if got := scrubRegistryTokens(env); got == nil {
+			t.Fatalf("scrubRegistryTokens(%v) returned nil", env)
+		}
+	}
+}
+
+func TestScrubRegistryTokensMatchesRegistryKey(t *testing.T) {
+	env := []string{templateregistry.RegistryTokenEnvKey("prod") + "=secret"}
+	if got := scrubRegistryTokens(env); len(got) != 0 {
+		t.Errorf("scrubRegistryTokens() = %v, want empty", got)
 	}
 }
 
