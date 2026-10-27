@@ -10,7 +10,47 @@ import (
 	"os/exec"
 	"path/filepath"
 	"scbake/internal/types"
+	"slices"
+	"strings"
 )
+
+const (
+	//nolint:gosec // environment variable name prefix, not a credential
+	registryTokenEnvPrefix = "SCBAKE_REGISTRY_TOKEN_"
+	maxStderrBytes         = 4 << 10
+)
+
+// scrubRegistryTokens removes registry credentials from a child environment.
+// Names are compared case-insensitively for Windows.
+func scrubRegistryTokens(env []string) []string {
+	out := slices.DeleteFunc(env, func(kv string) bool {
+		key, _, _ := strings.Cut(kv, "=")
+		return len(key) >= len(registryTokenEnvPrefix) &&
+			strings.EqualFold(key[:len(registryTokenEnvPrefix)], registryTokenEnvPrefix)
+	})
+	if out == nil {
+		return []string{}
+	}
+	return out
+}
+
+// limitedBuffer caps captured stderr and records whether it was truncated.
+type limitedBuffer struct {
+	buf       bytes.Buffer
+	truncated bool
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if remaining := maxStderrBytes - b.buf.Len(); remaining < len(p) {
+		b.truncated = true
+		if remaining > 0 {
+			_, _ = b.buf.Write(p[:remaining])
+		}
+		return len(p), nil
+	}
+	_, _ = b.buf.Write(p)
+	return len(p), nil
+}
 
 // ExecCommandTask runs an external shell command.
 type ExecCommandTask struct {
@@ -80,13 +120,20 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 		cmd.Dir = "."
 	}
 
+	// Children must not inherit registry credentials.
+	cmd.Env = scrubRegistryTokens(cmd.Environ())
+
 	// We capture stderr to provide better error messages
-	var stderr bytes.Buffer
+	var stderr limitedBuffer
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("failed to run command '%s %v': %v\nstderr: %s", t.Cmd, t.Args, err, stderr.String())
+		msg := stderr.buf.String()
+		if stderr.truncated {
+			msg += "\n[stderr truncated]"
+		}
+		return fmt.Errorf("failed to run command '%s %v': %v\nstderr: %s", t.Cmd, t.Args, err, msg)
 	}
 
 	return nil
