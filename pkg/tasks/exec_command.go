@@ -9,14 +9,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"scbake/internal/templateregistry"
 	"scbake/internal/types"
 	"slices"
 	"strings"
 )
 
 const (
-	//nolint:gosec // environment variable name prefix, not a credential
-	registryTokenEnvPrefix = "SCBAKE_REGISTRY_TOKEN_"
+	registryTokenEnvPrefix = templateregistry.RegistryTokenEnvPrefix
 	maxStderrBytes         = 4 << 10
 )
 
