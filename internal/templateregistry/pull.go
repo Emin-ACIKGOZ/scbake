@@ -50,7 +50,7 @@ func (m *Manager) Pull(registryName, templateName string) error {
 	}
 
 	token := registry.Token
-	envKey := "SCBAKE_REGISTRY_TOKEN_" + strings.ToUpper(strings.ReplaceAll(registryName, "-", "_"))
+	envKey := RegistryTokenEnvKey(registryName)
 	if envToken := os.Getenv(envKey); envToken != "" {
 		token = envToken
 	}

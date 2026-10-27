@@ -5,10 +5,14 @@ package tasks
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"scbake/internal/filesystem/transaction"
+	"scbake/internal/templateregistry"
 	"scbake/internal/types"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -81,6 +85,98 @@ func TestExecCommandTask(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(tmpDir, "should_not_exist")); !os.IsNotExist(err) {
 		t.Error("Dry run failed: Command was actually executed!")
+	}
+}
+
+func TestScrubRegistryTokens(t *testing.T) {
+	tests := []struct {
+		name string
+		env  []string
+		want []string
+	}{
+		{"uppercase", []string{"PATH=/bin", "SCBAKE_REGISTRY_TOKEN_PROD=secret", "KEEP=1"}, []string{"PATH=/bin", "KEEP=1"}},
+		{"lowercase", []string{"scbake_registry_token_prod=secret"}, []string{}},
+		{"duplicate", []string{"SCBAKE_REGISTRY_TOKEN_A=one", "SCBAKE_REGISTRY_TOKEN_A=two"}, []string{}},
+		{"no separator", []string{"SCBAKE_REGISTRY_TOKEN_PROD"}, []string{}},
+		{"value has separator", []string{"SCBAKE_REGISTRY_TOKEN_PROD=a=b"}, []string{}},
+		{"unrelated", []string{"SCBAKE_TEMPLATE_DIR=/tmp"}, []string{"SCBAKE_TEMPLATE_DIR=/tmp"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := scrubRegistryTokens(tc.env); !slices.Equal(got, tc.want) {
+				t.Errorf("scrubRegistryTokens() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestScrubRegistryTokensNeverReturnsNil(t *testing.T) {
+	for _, env := range [][]string{
+		nil,
+		{"SCBAKE_REGISTRY_TOKEN_A=secret"},
+	} {
+		if got := scrubRegistryTokens(env); got == nil {
+			t.Fatalf("scrubRegistryTokens(%v) returned nil", env)
+		}
+	}
+}
+
+func TestScrubRegistryTokensMatchesRegistryKey(t *testing.T) {
+	env := []string{templateregistry.RegistryTokenEnvKey("prod") + "=secret"}
+	if got := scrubRegistryTokens(env); len(got) != 0 {
+		t.Errorf("scrubRegistryTokens() = %v, want empty", got)
+	}
+}
+
+func TestExecCommandTask_ScrubsRegistryTokens(t *testing.T) {
+	t.Setenv("SCBAKE_REGISTRY_TOKEN_PROD", "super-secret")
+	t.Setenv("GO_WANT_EXEC_HELPER", "env")
+
+	task := &ExecCommandTask{
+		Cmd:  os.Args[0],
+		Args: []string{"-test.run=^TestExecCommandTaskHelper$"},
+		Desc: "Check child environment",
+	}
+	tc := types.TaskContext{Ctx: context.Background(), TargetPath: t.TempDir()}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("child inherited a registry token: %v", err)
+	}
+}
+
+func TestExecCommandTask_BoundsStderr(t *testing.T) {
+	t.Setenv("GO_WANT_EXEC_HELPER", "stderr")
+
+	task := &ExecCommandTask{
+		Cmd:  os.Args[0],
+		Args: []string{"-test.run=^TestExecCommandTaskHelper$"},
+		Desc: "Overflow stderr",
+	}
+	tc := types.TaskContext{Ctx: context.Background(), TargetPath: t.TempDir()}
+
+	err := task.Execute(tc)
+	if err == nil {
+		t.Fatal("expected the helper to fail")
+	}
+	if !strings.Contains(err.Error(), "[stderr truncated]") {
+		t.Error("error does not report truncated stderr")
+	}
+	if len(err.Error()) > maxStderrBytes+200 {
+		t.Errorf("captured stderr is not bounded: %d bytes", len(err.Error()))
+	}
+}
+
+// TestExecCommandTaskHelper is a child process for the tests above.
+func TestExecCommandTaskHelper(_ *testing.T) {
+	switch os.Getenv("GO_WANT_EXEC_HELPER") {
+	case "env":
+		if token := os.Getenv("SCBAKE_REGISTRY_TOKEN_PROD"); token != "" {
+			fmt.Fprintf(os.Stderr, "registry token leaked: %s\n", token)
+			os.Exit(1)
+		}
+	case "stderr":
+		fmt.Fprint(os.Stderr, strings.Repeat("x", maxStderrBytes*2))
+		os.Exit(1)
 	}
 }
 
