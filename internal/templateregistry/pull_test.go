@@ -458,11 +458,11 @@ func TestCacheIsValid_RejectsEmptyTree(t *testing.T) {
 		t.Fatalf("hashTree failed: %v", err)
 	}
 	manifestPath := TemplateManifestPath(dir, "acme", "go-api")
-	if err := writeCacheManifest(manifestPath, "go-api", hash); err != nil {
+	if err := writeCacheManifest(manifestPath, "go-api", hash, "", ""); err != nil {
 		t.Fatalf("writeCacheManifest failed: %v", err)
 	}
 
-	if cacheIsValid(destDir, manifestPath) {
+	if cacheIsValid(pullRequest{destDir: destDir}, manifestPath) {
 		t.Error("expected empty template tree to be rejected as an invalid cache")
 	}
 }
@@ -489,7 +489,7 @@ func TestPullFromURL_RepullsEmptyTreeCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hashTree failed: %v", err)
 	}
-	if err := writeCacheManifest(TemplateManifestPath(m.cacheDir, "acme", "go-api"), "go-api", hash); err != nil {
+	if err := writeCacheManifest(TemplateManifestPath(m.cacheDir, "acme", "go-api"), "go-api", hash, "", cacheSourceKey(srv.URL)); err != nil {
 		t.Fatalf("writeCacheManifest failed: %v", err)
 	}
 
@@ -1001,4 +1001,78 @@ func TestRemoveAllContained_RechecksSymlink(t *testing.T) {
 	if _, err := os.Stat(marker); err != nil {
 		t.Errorf("removeAllContained deleted through an escaping symlink: %v", err)
 	}
+}
+
+// TestPull_RefetchesOnVersionBump is a regression test for SCB-023: the cache
+// records the configured version, so bumping it must refetch.
+func TestPull_RefetchesOnVersionBump(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		content := "v1"
+		if strings.Contains(r.URL.Path, "/v2") {
+			content = "v2"
+		}
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": content}))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+	if err := m.Add("acme", srv.URL, "", "v1", ""); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	cacheFile := filepath.Join(TemplateCachePath(m.cacheDir, "acme", "go-api"), "main.go.tpl")
+	if err := m.Pull("acme", "go-api"); err != nil {
+		t.Fatalf("first Pull failed: %v", err)
+	}
+	if got := readCachedFile(t, cacheFile); got != "v1" {
+		t.Fatalf("after v1 pull: got %q, want %q", got, "v1")
+	}
+
+	m.mu.Lock()
+	m.config.Registries[0].Version = "v2"
+	m.mu.Unlock()
+
+	if err := m.Pull("acme", "go-api"); err != nil {
+		t.Fatalf("second Pull failed: %v", err)
+	}
+	if got := readCachedFile(t, cacheFile); got != "v2" {
+		t.Fatalf("after v2 pull: got %q, want %q (stale cache reused)", got, "v2")
+	}
+}
+
+// TestPullFromURL_RefetchesOnURLChange covers the URL half of SCB-023.
+func TestPullFromURL_RefetchesOnURLChange(t *testing.T) {
+	newServer := func(content string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": content}))
+		}))
+	}
+	first, second := newServer("first"), newServer("second")
+	defer first.Close()
+	defer second.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+	cacheFile := filepath.Join(TemplateCachePath(m.cacheDir, "acme", "go-api"), "main.go.tpl")
+
+	if err := m.PullFromURL("acme", "go-api", first.URL, ""); err != nil {
+		t.Fatalf("first PullFromURL failed: %v", err)
+	}
+	if err := m.PullFromURL("acme", "go-api", second.URL, ""); err != nil {
+		t.Fatalf("second PullFromURL failed: %v", err)
+	}
+	if got := readCachedFile(t, cacheFile); got != "second" {
+		t.Fatalf("after URL change: got %q, want %q (stale cache reused)", got, "second")
+	}
+}
+
+func readCachedFile(t *testing.T, path string) string {
+	t.Helper()
+	//nolint:gosec // test temp directory
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	return string(data)
 }

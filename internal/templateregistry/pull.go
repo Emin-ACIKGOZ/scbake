@@ -70,6 +70,8 @@ func (m *Manager) Pull(registryName, templateName string) error {
 		registryName: registryName,
 		templateName: templateName,
 		subdirectory: registry.Subdirectory,
+		version:      registry.Version,
+		source:       cacheSourceKey(downloadURL),
 	}
 	return m.pullFromURL(pullCtx)
 }
@@ -91,6 +93,7 @@ func (m *Manager) PullFromURL(registryName, templateName, downloadURL, token str
 		destDir:      destDir,
 		registryName: registryName,
 		templateName: templateName,
+		source:       cacheSourceKey(downloadURL),
 	}
 	return m.pullFromURL(pullCtx)
 }
@@ -102,6 +105,8 @@ type pullRequest struct {
 	registryName string
 	templateName string
 	subdirectory string
+	version      string
+	source       string
 }
 
 func (m *Manager) pullFromURL(pr pullRequest) error {
@@ -110,12 +115,12 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 		return err
 	}
 
-	// A cache hit is only trusted when the directory exists and its contents
-	// still match the recorded manifest. Anything else (missing directory,
-	// missing manifest, or a hash mismatch from tampering) is treated as a miss
-	// and re-downloaded. Caches written before manifests existed have no
-	// manifest, so they are re-pulled once and gain one.
-	if cacheIsValid(pr.destDir, manifestPath) {
+	// A cache hit is only trusted when the directory exists, its contents still
+	// match the recorded manifest, and the manifest was fetched from the same
+	// version and URL. Anything else (missing directory, missing manifest, a
+	// hash mismatch, or a config change) is treated as a miss and re-downloaded.
+	// Manifests written before provenance was recorded re-pull once.
+	if cacheIsValid(pr, manifestPath) {
 		return nil
 	}
 
@@ -174,7 +179,7 @@ func (m *Manager) downloadAndCache(pr pullRequest, manifestPath string) error {
 		_ = removeContained(m.cacheDir, manifestPath)
 		return fmt.Errorf("hashing extracted template: %w", err)
 	}
-	if err := writeCacheManifest(manifestPath, pr.templateName, hash); err != nil {
+	if err := writeCacheManifest(manifestPath, pr.templateName, hash, pr.version, pr.source); err != nil {
 		_ = removeAllContained(m.cacheDir, pr.destDir)
 		_ = removeContained(m.cacheDir, manifestPath)
 		return err
@@ -183,9 +188,10 @@ func (m *Manager) downloadAndCache(pr pullRequest, manifestPath string) error {
 	return nil
 }
 
-// cacheManifest records the provenance of a cached template: the template name
-// and a deterministic SHA-256 of the extracted tree. It lets the pull path and
-// the resolver detect a corrupted, stale, or naively tampered cache directory.
+// cacheManifest records the provenance of a cached template: the template name,
+// a deterministic SHA-256 of the extracted tree, and the version and download
+// URL it was fetched from. It lets the pull path and the resolver detect a
+// corrupted, stale, or naively tampered cache directory.
 //
 // The hash is unkeyed, so this is integrity checking, not authentication: an
 // actor who can write both the cache tree and its manifest can forge a matching
@@ -193,17 +199,33 @@ func (m *Manager) downloadAndCache(pr pullRequest, manifestPath string) error {
 // tampering that does not also rewrite the manifest, but it is not a
 // cryptographic defense against a local writer with access to the cache root.
 type cacheManifest struct {
-	Name string `json:"name"`
-	Hash string `json:"hash"`
+	Name    string `json:"name"`
+	Hash    string `json:"hash"`
+	Version string `json:"version,omitempty"`
+	Source  string `json:"source,omitempty"`
 }
 
-// cacheIsValid reports whether destDir exists and its contents match the hash
-// recorded in the manifest at manifestPath.
-func cacheIsValid(destDir, manifestPath string) bool {
-	if _, err := os.Stat(destDir); err != nil {
+// cacheSourceKey hashes the download URL. Hashing avoids persisting credentials
+// embedded in a URL while still changing when the version or registry changes.
+func cacheSourceKey(downloadURL string) string {
+	sum := sha256.Sum256([]byte(downloadURL))
+	return hex.EncodeToString(sum[:])
+}
+
+// cacheIsValid reports whether pr.destDir exists, matches the manifest hash, and
+// was fetched from the configured version and URL.
+func cacheIsValid(pr pullRequest, manifestPath string) bool {
+	if _, err := os.Stat(pr.destDir); err != nil {
 		return false
 	}
-	return cacheManifestMatches(destDir, manifestPath)
+	mf, err := readCacheManifest(manifestPath)
+	if err != nil {
+		return false
+	}
+	if mf.Version != pr.version || mf.Source != pr.source {
+		return false
+	}
+	return treeMatches(pr.destDir, mf)
 }
 
 // cacheManifestMatches reports whether the tree at dir hashes to the value
@@ -217,6 +239,12 @@ func cacheManifestMatches(dir, manifestPath string) bool {
 	if err != nil {
 		return false
 	}
+	return treeMatches(dir, mf)
+}
+
+// treeMatches reports whether the regular files under dir hash to mf.Hash. An
+// empty tree is never considered a match.
+func treeMatches(dir string, mf *cacheManifest) bool {
 	hash, err := hashTree(dir)
 	if err != nil {
 		return false
@@ -268,8 +296,8 @@ func readCacheManifest(path string) (*cacheManifest, error) {
 	return &mf, nil
 }
 
-func writeCacheManifest(path, name, hash string) error {
-	data, err := json.MarshalIndent(cacheManifest{Name: name, Hash: hash}, "", "  ")
+func writeCacheManifest(path, name, hash, version, source string) error {
+	data, err := json.MarshalIndent(cacheManifest{Name: name, Hash: hash, Version: version, Source: source}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling cache manifest: %w", err)
 	}
