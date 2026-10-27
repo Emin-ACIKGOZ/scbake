@@ -1076,3 +1076,49 @@ func readCachedFile(t *testing.T, path string) string {
 	}
 	return string(data)
 }
+
+// TestPullFromURL_RepullsLegacyManifest covers the one-time migration of a
+// manifest written before version and source provenance were recorded.
+func TestPullFromURL_RepullsLegacyManifest(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": "new"}))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+	destDir := TemplateCachePath(m.cacheDir, "acme", "go-api")
+	if err := os.MkdirAll(destDir, 0750); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destDir, "main.go.tpl"), []byte("old"), 0600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	hash, err := hashTree(destDir)
+	if err != nil {
+		t.Fatalf("hashTree failed: %v", err)
+	}
+	legacy := `{"name":"go-api","hash":"` + hash + `"}`
+	if err := os.WriteFile(TemplateManifestPath(m.cacheDir, "acme", "go-api"), []byte(legacy), 0600); err != nil {
+		t.Fatalf("writing legacy manifest: %v", err)
+	}
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err != nil {
+		t.Fatalf("first PullFromURL failed: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("legacy manifest should trigger one re-download, got %d", callCount)
+	}
+	if got := readCachedFile(t, filepath.Join(destDir, "main.go.tpl")); got != "new" {
+		t.Fatalf("after legacy re-pull: got %q, want %q", got, "new")
+	}
+
+	if err := m.PullFromURL("acme", "go-api", srv.URL, ""); err != nil {
+		t.Fatalf("second PullFromURL failed: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("upgraded manifest should be a cache hit, got %d downloads", callCount)
+	}
+}
