@@ -4,11 +4,11 @@ This document explains scbake's design for contributors and maintainers.
 
 ## Overview
 
-scbake is a **manifest-driven, atomic project scaffolder** built on three core concepts:
+scbake is a **manifest-driven project scaffolder with rollback** built on three core concepts:
 
 1. **Handlers** - Plugins (language packs, templates) that define what to create
-2. **Tasks** - Atomic operations (create files, run commands) that handlers compose
-3. **Transactions** - LIFO (Last-In-First-Out) rollback system for atomicity
+2. **Tasks** - Discrete operations (create files, run commands) that handlers compose
+3. **Transactions** - Rollback of created paths and backed-up files
 
 ```
 User Command (scbake new)
@@ -22,7 +22,7 @@ Priority Sorting (execute in order)
 Task Execution (with transaction tracking)
     ↓
 On success: Commit (delete backups)
-On failure: Rollback (restore backups, LIFO order)
+On failure: Rollback (delete created paths in reverse order; restore backups)
 ```
 
 ---
@@ -53,7 +53,7 @@ Tasks created at plan time use `registryCacheDir` later at execution time via `T
 - `pkg/lang/go/go.go` - Go language handler
 - `pkg/templates/makefile/makefile.go` - Makefile template
 
-**Key insight**: Handlers are **pure functions** that produce tasks. They don't execute anything—they just plan.
+**Key insight**: Handlers inspect the target tree but do not modify it; they only produce tasks.
 
 ### 2. Task Interface
 
@@ -78,11 +78,11 @@ type Task interface {
 | **CreateDirTask** | Create directory structure | Create `src/` directory |
 | **InsertXMLTask** | Insert XML into existing files | Add plugin to `pom.xml` |
 
-**Key insight**: Tasks are **self-contained operations** with built-in error handling and rollback support.
+**Key insight**: Tasks are **self-contained operations** with their own error handling; file tasks integrate with transaction tracking.
 
 ### 3. Transaction System
 
-scbake's transaction system provides **LIFO rollback** for atomicity:
+scbake's transaction system provides **rollback for handled failures**:
 
 ```mermaid
 sequenceDiagram
@@ -96,9 +96,9 @@ sequenceDiagram
     T->>FS: Backup/Track File 2
     E->>T: Execute Task 3 (FAILS)
     Note over E,FS: Failure detected, starting rollback
-    T->>FS: Rollback Task 2 (Restore Backup)
-    T->>FS: Rollback Task 1 (Restore Backup/Delete)
-    Note over E,FS: Original state restored
+    T->>FS: Delete created paths in reverse order
+    T->>FS: Restore backed-up files
+    Note over E,FS: Tracked changes rolled back (handled failures)
 ```
 
 **Location**: `internal/filesystem/transaction/`
@@ -106,9 +106,14 @@ sequenceDiagram
 **Key features**:
 - ✅ Tracks created files and directory changes
 - ✅ Backs up modified files before overwrite
-- ✅ LIFO rollback order (last-in, first-out)
+- ✅ Reverse-order deletion of created paths; backups restored from the transaction directory
 - ✅ Atomic rename for manifest updates
 - ✅ Cleanup of orphaned backups
+
+Rollback is process-level and best-effort. SIGKILL, power loss, SIGINT/Ctrl-C,
+or any crash that bypasses deferred cleanup can leave a transaction directory
+behind; a later start reclaims it after the stale threshold, but never replays
+it. External commands are tracked only when their outputs are predicted.
 
 ---
 
@@ -132,7 +137,7 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 
 **What happens**:
 1. **Root Discovery**: `manifest.Load` walks up the directory tree from `TargetPath` until it finds an `scbake.toml` or a `.git` folder. Discovery is **bounded by the nearest Git root**: a manifest at or below that root is used, a manifest above it is ignored, and a manifest in the start directory is always accepted as local. When no `.git` bounds a marker-less tree, an ancestor manifest is adopted only with the `--allow-ancestor-search` opt-in (`manifest.LoadWithOptions`); otherwise discovery falls back to the start directory. This enables **Native Monorepo Support**, where a single root manifest manages projects in subdirectories, without silently trusting a stray manifest in a shared parent.
-2. Initialize transaction system at the discovered `rootPath` to ensure cross-project atomicity.
+2. Initialize transaction system at the discovered `rootPath` to ensure cross-project rollback.
 3. Build list of tasks to execute.
 
 ### Phase 2: Planning
@@ -187,7 +192,7 @@ func Execute(plan *types.Plan, tc types.TaskContext, reporter types.Reporter) er
    - Show success/failure indicator
 2. If any task fails:
    - Transaction `Rollback()` is called (via defer in `RunApply`)
-   - All backups are restored in LIFO order
+   - Backups are restored from the transaction directory.
 
 ### Phase 4: Finalization
 
@@ -275,7 +280,7 @@ entirely when empty, so a manifest for a run with no language pack has no `[[pro
 or `[metadata]` table.
 
 **Why this matters**:
-- ✅ Reproducibility: `scbake apply` re-reads manifest
+- ✅ Consistency: `scbake apply` re-reads manifest
 - ✅ Idempotency: Applying same templates twice is safe
 - ✅ Audit trail: Git history shows what was applied, when
 - ✅ Team coordination: Everyone uses same manifest
@@ -387,7 +392,7 @@ scbake/
 │   │   ├── run.go                   # Main orchestration
 │   │   └── executor.go              # Task execution loop
 │   ├── filesystem/
-│   │   └── transaction/             # LIFO rollback system
+│   │   └── transaction/             # rollback system
 │   ├── manifest/                    # Manifest I/O & conflict detection
 │   ├── templateregistry/            # Private registry system
 │   │   ├── config.go                # Registry CRUD, JSON persistence
@@ -551,7 +556,7 @@ go vet ./...          # Vet checks
 
 ### Task Execution (O(n))
 - Tasks execute in sequence (single-threaded)
-- No parallelization (atomic transaction requires ordering)
+- No parallelization (rollback requires ordering)
 
 ### Transaction System (O(n))
 - Rollback is linear in number of created files
@@ -568,7 +573,7 @@ go vet ./...          # Vet checks
 ### What scbake does
 ✅ Validates paths to prevent directory traversal
 ✅ Bounds ancestor manifest discovery to the nearest Git root; marker-less ancestors require `--allow-ancestor-search`
-✅ Uses atomic operations to prevent partial updates
+✅ Uses transaction tracking and rollback to recover from handled failures
 ✅ Detects concurrent modification attempts
 ✅ Backs up files before overwrite
 ✅ Validates XML structure before insertion

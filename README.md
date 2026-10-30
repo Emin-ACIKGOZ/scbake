@@ -1,6 +1,6 @@
-# Scaffold Bake: The Atomic Project Scaffolder
+# Scaffold Bake: The Transactional Project Scaffolder
 
-`scbake` is a single-binary CLI tool that simplifies project setup and maintenance by applying layered infrastructure templates and language packs atomically. It uses a **manifest file (`scbake.toml`)** as the source of truth for configuration, ensuring consistency and reproducibility.
+`scbake` is a single-binary CLI tool that simplifies project setup and maintenance by applying layered infrastructure templates and language packs with rollback on handled failures. It uses a **manifest file (`scbake.toml`)** as the source of truth for configuration, ensuring consistent configuration across projects. The scbake binary is self-contained; language packs may invoke the external toolchains listed below.
 
 
 ## Core Philosophy: Layering, Safety, and Extensibility
@@ -17,11 +17,11 @@ graph LR
     subgraph Core Engine
     P[Planner]
     E[Executor]
-    TX[LIFO Transaction Manager]
+    TX[Transaction Manager]
     end
 
     subgraph Output
-    FS[Atomic Filesystem Changes]
+    FS[Rollback-Managed Changes]
     end
 
     M --> P
@@ -31,20 +31,27 @@ graph LR
     E --> FS
 ```
 
-- **Atomic Layering and Composition**  
+- **Layered Composition**
   Projects are built by applying independent **layers** (language packs and tooling templates). You can **mix and match** templates to achieve the desired setup.
 
 - **Highly Configurable & Extensible**  
   Designed for flexibility. If a language pack is missing, simply **add it**. If a template doesn't fit, you can **modify or replace it**. The handler interface simplifies extension.
 
-- **Built-in Atomic Safety**  
-  All modifications are managed by a **LIFO-based Transaction Manager**. If any task fails, the engine executes a journaled rollback. This deletes created artifacts and restores file backups in reverse order, ensuring the filesystem returns to its original state.
+- **Built-in Rollback Safety**
+  File and directory writes performed by scbake's file tasks are managed by a
+  transaction manager: created paths are removed in reverse order, and files
+  those tasks overwrite are restored from on-disk backups when a task or the
+  manifest save fails. External tool commands are opaque; only explicitly
+  predicted outputs that did not already exist are tracked, so their side
+  effects may remain. Rollback is process-level and best-effort, not crash or
+  interrupt recovery.
 
 - **Prioritized Execution**  
   Tasks run in a defined order using **Priority Bands** (e.g., directory creation → language setup → universal config) to ensure dependencies are met.
 
-- **Professional Governance**  
-  Built-in support for enterprise-grade and open-source compliance standards (Licenses, Code Owners, Security Policies).
+- **Governance File Templates**
+  Generates common governance files: a license, code owners, security policy,
+  and community documents.
 
 - **Custom Template Overrides (BYOT)**  
   Override any embedded `.tpl` file with your own version by passing `--template-dir` or setting the `SCBAKE_TEMPLATE_DIR` environment variable. Files in the override directory shadow the compiled-in defaults, enabling team-specific customizations without recompiling.
@@ -56,13 +63,16 @@ graph LR
   Every template can declare its expected inputs in a `schema.json` embedded alongside its templates. Before a single task executes, scbake validates the manifest metadata and `--set` flags against all selected templates' schemas, catching missing required variables early.
 
 - **Explicit & Non-Interactive**  
-  No "magic" defaults or hidden prompts—reproducible results every time via explicit flags and manifest configuration.
+  No hidden prompts. Output is deterministic for fixed inputs and a fixed clock,
+  except where a task fetches external content: `npm create vite@latest`,
+  `go mod tidy`, `start.spring.io`, and the `compliance` license text (SPDX,
+  plus the current year) inherit upstream-version, network, and clock behavior.
 
 
 
 ## Installation
 
-### Quick Install (macOS, Linux, Windows)
+### Quick Install (macOS, Linux, and Windows via WSL/Git Bash)
 
 Install from a **pinned release tag**. Unlike a branch URL, a release tag is
 immutable, and the installer is attached to the release alongside its checksum.
@@ -154,7 +164,7 @@ scbake new my-backend --lang go --with makefile,ci_github
 
 ### `apply`: Apply Templates to an Existing Project
 
-Applies new language packs or tooling templates to an existing path. Because `scbake` uses its own transaction logic, it does **not** require a clean Git tree to operate safely.
+Applies new language packs or tooling templates to an existing path. Because `scbake` uses its own transaction logic, it does **not** require a clean Git tree to start; rollback and opaque-command caveats still apply.
 
 ```bash
 scbake apply [--lang <lang>] [--with <template...>] [--template-dir <dir>] [--conflict-strategy <strategy>] [<path>]
@@ -173,8 +183,10 @@ scbake apply --with maven_linter
 
 ### `update`: Update a Generated Project
 
-Re-applies the language pack and tooling templates recorded in `scbake.toml`,
-bringing a generated project up to date **without clobbering local edits**.
+Re-applies the managed template file writes recorded in `scbake.toml`, bringing a
+generated project up to date **without clobbering local edits**. It does not
+replay side-effecting commands or custom tasks such as license generation, file
+appends, or XML insertions.
 
 ```bash
 scbake update [--template-dir <dir>] [--conflict-strategy <strategy>] [<path>]
@@ -188,7 +200,7 @@ Unlike `apply`, `update` reads *what was applied* from the manifest and runs no
 side-effecting commands (no `go mod init`, `npm install`, …), so it is safe to
 run repeatedly:
 
-- **Idempotent.** With no template change it makes no writes.
+- **Idempotent.** With no template change and no drift, it makes no writes.
 - **Three-way merge.** A pristine copy of each managed file is kept under
   `.scbake/base/`; when both the template and your file changed, `update` merges
   non-overlapping edits. Overlapping edits are written to a `<file>.scbake-new`
