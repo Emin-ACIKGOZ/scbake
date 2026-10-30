@@ -190,7 +190,8 @@ func managedWriteTasks(plan []types.Task) []types.Task {
 }
 
 // setupTransaction initializes the transaction safety net and returns a cleanup rollback deferral.
-// If the program panics or returns an error at any point, the filesystem is restored to its original state.
+// Handled errors and panics on the main goroutine trigger rollback of tracked changes; external
+// command side effects may remain, and crashes bypass deferred cleanup.
 // Calling tx.Commit() explicitly at the end disables the rollback safety net.
 func setupTransaction(rootPath string, dryRun bool) (*transaction.Manager, func(), error) {
 	if dryRun {
