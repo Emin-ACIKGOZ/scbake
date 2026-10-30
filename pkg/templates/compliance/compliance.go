@@ -1,7 +1,7 @@
 // Copyright 2025 Emin Salih Açıkgöz
 // SPDX-License-Identifier: Apache-2.0
 
-// Package compliance provides templates for enterprise security and compliance.
+// Package compliance provides templates for common security and compliance files.
 package compliance
 
 import (
