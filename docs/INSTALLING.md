@@ -112,15 +112,20 @@ Verify build provenance with the GitHub CLI:
 gh attestation verify scbake-linux-amd64 --repo Emin-ACIKGOZ/scbake
 ```
 
-## Alternative: Go Install
+## Alternative: Go Install (from a local clone)
 
-If you have Go 1.26+ installed:
+The module path is `scbake`, so remote `go install` commands such as
+`go install github.com/Emin-ACIKGOZ/scbake@latest` fail with a module-path
+mismatch. Clone and install locally instead:
 
 ```bash
-go install github.com/Emin-ACIKGOZ/scbake/cmd/scbake@latest
+git clone https://github.com/Emin-ACIKGOZ/scbake.git
+cd scbake
+go install .
 ```
 
-Binary will be installed to `$GOPATH/bin/` (usually `~/go/bin/`).
+The binary is installed to `$(go env GOBIN)`, or `$(go env GOPATH)/bin`
+(usually `~/go/bin/`).
 
 ## Manual Installation
 
@@ -207,7 +212,7 @@ Or reinstall using the quick install command at the top of this page.
 - **Sudo escalation warnings** - Warns before requesting sudo for elevated installations
 - **Retry with backoff** - Failed downloads retry with exponential backoff (1s, 2s, 4s)
 - **No sudo for downloads** - `sudo` is only used for final installation to protected directories
-- **Minimal dependencies** - Only `curl` or `wget` required; graceful fallbacks throughout
+- **Minimal dependencies** - `curl` or `wget`, plus a SHA-256 tool (`sha256sum` or `shasum`); graceful fallbacks throughout
 
 ## Next Steps
 
