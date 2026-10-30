@@ -1,5 +1,5 @@
 {
-  "description": "Enterprise security and compliance files (SECURITY.md, dependabot, LICENSE).",
+  "description": "Common security and compliance files (SECURITY.md, dependabot, LICENSE).",
   "variables": {
     "license": {
       "type": "string",
