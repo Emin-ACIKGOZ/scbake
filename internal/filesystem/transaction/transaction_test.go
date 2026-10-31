@@ -309,6 +309,76 @@ func TestCommit_Cleanup(t *testing.T) {
 	}
 }
 
+// blockTempDirRemoval makes os.RemoveAll(dir) fail until the returned release
+// function is called. On Windows an open file handle blocks deletion; elsewhere
+// the directory is made read-only so its entries cannot be unlinked.
+func blockTempDirRemoval(t *testing.T, dir string) func() {
+	t.Helper()
+
+	if runtime.GOOS == osWindows {
+		var held *os.File
+		err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || held != nil {
+				return err
+			}
+			f, openErr := os.Open(p)
+			if openErr != nil {
+				return openErr
+			}
+			held = f
+			return nil
+		})
+		if err != nil || held == nil {
+			t.Fatalf("failed to hold a backup file open in %s: %v", dir, err)
+		}
+		return func() { _ = held.Close() }
+	}
+
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("failed to make %s read-only: %v", dir, err)
+	}
+	return func() { _ = os.Chmod(dir, 0o700) }
+}
+
+// TestCommit_CleanupFailureKeepsRollbackAvailable is a regression test for
+// issue #128: when Commit fails to remove the backup directory, it must not
+// disable Rollback, so the deferred rollback in RunApply can still restore
+// the tracked file.
+func TestCommit_CleanupFailureKeepsRollbackAvailable(t *testing.T) {
+	rootDir := t.TempDir()
+	file := filepath.Join(rootDir, "a.txt")
+	createFile(t, file, "original", fileutil.FilePerms)
+
+	tx, err := New(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Track(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("modified"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	release := blockTempDirRemoval(t, tx.tempDir)
+	if err := tx.Commit(); err == nil {
+		release()
+		t.Fatal("expected Commit to fail when the temp dir cannot be removed")
+	}
+	release()
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback after failed Commit returned error: %v", err)
+	}
+	got, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "original" {
+		t.Errorf("Rollback after failed Commit: got %q, want %q", got, "original")
+	}
+}
+
 func TestCommit_DisablesRollback_NoBackups(t *testing.T) {
 	rootDir := t.TempDir()
 	tx, err := New(rootDir)
