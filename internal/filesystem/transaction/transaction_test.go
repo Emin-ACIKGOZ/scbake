@@ -4,6 +4,7 @@
 package transaction
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -307,6 +308,76 @@ func TestCommit_Cleanup(t *testing.T) {
 
 	if _, err := os.Stat(tx.tempDir); !os.IsNotExist(err) {
 		t.Error("Commit failed to remove temp directory")
+	}
+}
+
+// blockTempDirRemoval makes os.RemoveAll(dir) fail until the returned release
+// function is called. On Windows an open file handle blocks deletion; elsewhere
+// the directory is made read-only so its entries cannot be unlinked.
+func blockTempDirRemoval(t *testing.T, dir string) func() {
+	t.Helper()
+
+	if runtime.GOOS == osWindows {
+		var held *os.File
+		err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || held != nil {
+				return err
+			}
+			f, openErr := os.Open(p)
+			if openErr != nil {
+				return openErr
+			}
+			held = f
+			return nil
+		})
+		if err != nil || held == nil {
+			t.Fatalf("failed to hold a backup file open in %s: %v", dir, err)
+		}
+		return func() { _ = held.Close() }
+	}
+
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("failed to make %s read-only: %v", dir, err)
+	}
+	return func() { _ = os.Chmod(dir, 0o700) }
+}
+
+// TestCommit_CleanupFailureAfterMarkerIsCommittedWithWarning is a regression
+// test for issue #128: once the commit marker is published, a failure to remove
+// the backup directory must be reported as ErrCommitted (committed with
+// warning), and the trailing Rollback in RunApply must not undo the changes.
+func TestCommit_CleanupFailureAfterMarkerIsCommittedWithWarning(t *testing.T) {
+	rootDir := t.TempDir()
+	file := filepath.Join(rootDir, "a.txt")
+	createFile(t, file, "original", fileutil.FilePerms)
+
+	tx, err := New(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Track(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("modified"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	release := blockTempDirRemoval(t, tx.tempDir)
+	commitErr := tx.Commit()
+	release()
+	if !errors.Is(commitErr, ErrCommitted) {
+		t.Fatalf("Commit error = %v, want ErrCommitted", commitErr)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback after committed Commit returned error: %v", err)
+	}
+	got, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "modified" {
+		t.Errorf("Rollback after committed Commit: got %q, want %q (changes must stay permanent)", got, "modified")
 	}
 }
 
