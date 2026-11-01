@@ -22,31 +22,31 @@ jobs:
       {{ range .Projects }}
         {{ if eq .Language "go" }}
           {{ if not $hasGo }}
-            - name: Setup Go Environment
-              uses: actions/setup-go@v5
-              with:
-                go-version: {{ index $root.Metadata "go_version" | default "1.22" | quote }}
+      - name: Setup Go Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: {{ index $root.Metadata "go_version" | default "1.22" | quote }}
             {{ $hasGo = true }}
           {{ end }}
         {{ end }}
         
         {{ if eq .Language "svelte" }}
           {{ if not $hasSvelte }}
-            - name: Setup Node.js Environment
-              uses: actions/setup-node@v4
-              with:
-                node-version: {{ index $root.Metadata "node_version" | default "20" | quote }}
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: {{ index $root.Metadata "node_version" | default "20" | quote }}
             {{ $hasSvelte = true }}
           {{ end }}
         {{ end }}
         
         {{ if eq .Language "spring" }}
           {{ if not $hasSpring }}
-            - name: Setup Java Environment
-              uses: actions/setup-java@v4
-              with:
-                distribution: {{ index $root.Metadata "java_distribution" | default "temurin" | quote }}
-                java-version: {{ index $root.Metadata "java_version" | default "17" | quote }}
+      - name: Setup Java Environment
+        uses: actions/setup-java@v4
+        with:
+          distribution: {{ index $root.Metadata "java_distribution" | default "temurin" | quote }}
+          java-version: {{ index $root.Metadata "java_version" | default "17" | quote }}
           {{ $hasSpring = true }}
           {{ end }}
         {{ end }}
