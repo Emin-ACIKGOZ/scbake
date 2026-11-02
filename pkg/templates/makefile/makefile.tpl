@@ -30,7 +30,10 @@ test:
 	{{- if index .Metadata "test_command" }}
 	{{ index .Metadata "test_command" }}
 	{{- else }}
-	go test ./...
+	{{- range .Projects }}
+	@echo {{ printf "Testing %s..." .Name | quote }}
+	(cd {{.Path}} && $(MAKE_TEST_COMMAND_{{.Language}}))
+	{{- end }}
 	{{- end }}
 
 # --- Main Clean Target ---
@@ -65,17 +68,20 @@ lint-fix:
 # FIX: Corrected LINT and LINT_FIX commands to use 'run' and include './...'
 MAKE_BUILD_COMMAND_go := go build -v .
 MAKE_CLEAN_COMMAND_go := go clean
+MAKE_TEST_COMMAND_go := go test ./...
 MAKE_LINT_COMMAND_go := golangci-lint run ./...
 MAKE_LINT_FIX_COMMAND_go := golangci-lint run --fix --timeout=5m ./...
 
 # Svelte/Node Commands (Uses ESLint/Prettier setup assumed to be present)
 MAKE_BUILD_COMMAND_svelte := npm run build
 MAKE_CLEAN_COMMAND_svelte := rm -rf dist node_modules
+MAKE_TEST_COMMAND_svelte := npm test
 MAKE_LINT_COMMAND_svelte := npm run lint
 MAKE_LINT_FIX_COMMAND_svelte := npm run lint -- --fix
 
 # Spring/Java Commands (Uses Maven Checkstyle plugin, assumed to be present)
 MAKE_BUILD_COMMAND_spring := ./mvnw clean package -DskipTests
 MAKE_CLEAN_COMMAND_spring := ./mvnw clean
+MAKE_TEST_COMMAND_spring := ./mvnw test
 MAKE_LINT_COMMAND_spring := ./mvnw checkstyle:check
 MAKE_LINT_FIX_COMMAND_spring := echo "Fix command not applicable for Maven Checkstyle"
