@@ -199,7 +199,7 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 func managedWriteTasks(plan []types.Task) []types.Task {
 	out := make([]types.Task, 0, len(plan))
 	for _, t := range plan {
-		if _, ok := t.(*tasks.CreateTemplateTask); ok {
+		if _, ok := t.(types.ManagedWriter); ok {
 			out = append(out, t)
 		}
 	}

@@ -90,6 +90,9 @@ func (t *LicenseTask) Description() string { return "Generate LICENSE file" }
 // Priority implements types.Task.
 func (t *LicenseTask) Priority() int { return t.TaskPrio }
 
+// ManagedWrite implements types.ManagedWriter.
+func (t *LicenseTask) ManagedWrite() {}
+
 // Execute performs the license generation task.
 func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	if tc.Manifest.Metadata == nil {

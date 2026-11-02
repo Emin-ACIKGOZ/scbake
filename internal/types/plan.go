@@ -62,6 +62,15 @@ type Task interface {
 	Execute(tc TaskContext) error
 }
 
+// ManagedWriter is implemented by tasks that write a file through
+// WriteManagedFile and therefore record it in managed_files.
+type ManagedWriter interface {
+	Task
+
+	// ManagedWrite marks the task as a managed file writer.
+	ManagedWrite()
+}
+
 // Plan is a sorted list of tasks to be executed.
 type Plan struct {
 	Tasks []Task
