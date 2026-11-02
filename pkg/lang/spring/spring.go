@@ -49,8 +49,13 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 	if os.IsNotExist(checkErr) {
 		// --- Path 1: pom.xml does NOT exist (Initialization) ---
 
-		// Determine project name from target path.
-		projectName := filepath.Base(targetPath)
+		// Determine project name from target path. A relative target such as "."
+		// has no name of its own, so resolve it first.
+		absTarget, err := filepath.Abs(targetPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve target path: %w", err)
+		}
+		projectName := filepath.Base(absTarget)
 
 		// URL-encode project name for query parameters.
 		encodedName := url.QueryEscape(projectName)
