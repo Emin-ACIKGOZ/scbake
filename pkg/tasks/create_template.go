@@ -91,6 +91,9 @@ func (t *CreateTemplateTask) Priority() int {
 	return t.TaskPrio
 }
 
+// ManagedWrite implements types.ManagedWriter.
+func (t *CreateTemplateTask) ManagedWrite() {}
+
 // HashContent calculates the SHA-256 hash of the given bytes after normalizing
 // text line endings. CRLF and LF therefore hash identically, which keeps the
 // managed_files ledger stable across Git checkouts that rewrite EOL bytes.
