@@ -351,16 +351,23 @@ func TestApply_RollbackRestoresFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(tmpDir, fileutil.ManifestFileName), []byte(""), fileutil.PrivateFilePerms)
 
-	targetFile := filepath.Join(tmpDir, "config.txt")
+	oldWD, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	_ = os.Chdir(tmpDir)
+
+	// Use the path the command will discover after chdir. On macOS /var is a
+	// symlink to /private/var, so mixing both spellings would make Track's
+	// lexical containment check reject the file.
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetFile := filepath.Join(root, "config.txt")
 	_ = os.WriteFile(targetFile, []byte("ORIGINAL"), fileutil.FilePerms)
 
 	templates.Register("fail", &MockHandlerGeneric{
 		Tasks: []types.Task{&MockFailTask{TargetFile: targetFile}},
 	})
-
-	oldWD, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(oldWD) })
-	_ = os.Chdir(tmpDir)
 
 	_ = executeCLI("apply", "--with", "fail", ".")
 
