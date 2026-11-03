@@ -54,11 +54,9 @@ type Manager struct {
 	// tracking Θ(n²) in the number of created paths.
 	createdSet map[string]struct{}
 
-	// journal is the open append-only journal file for this transaction. It is
-	// created lazily before the first tracked mutation.
-	journal *os.File
-
-	// journalPath is the path of the open journal file.
+	// journalPath is the path of the transaction journal, once one has been
+	// created. Journal appends open, fsync, and close the file so no handle is
+	// left open on Windows.
 	journalPath string
 
 	// removeRootOnRecovery marks a transaction whose root was created by
@@ -116,7 +114,7 @@ func NewWithOptions(rootPath string, opts Options) (*Manager, error) {
 	if opts.RemoveRootOnRecovery {
 		// `new` must be recoverable even if it is killed before the first
 		// tracked mutation (for example during planning or preflight).
-		if err := manager.ensureJournal(); err != nil {
+		if err := manager.startJournal(); err != nil {
 			return nil, err
 		}
 	}
@@ -171,9 +169,6 @@ func (m *Manager) Commit() error {
 		// before closing the handle so a close error cannot trigger a rollback
 		// of a run that is already committed.
 		m.committed = true
-		if err := m.closeJournal(); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️  Transaction journal close warning: %v\n", err)
-		}
 	}
 	m.committed = true
 

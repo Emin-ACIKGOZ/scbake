@@ -28,13 +28,9 @@ func (m *Manager) Rollback() error {
 	errs = append(errs, m.restoreBackups()...)
 	if len(errs) == 0 {
 		errs = append(errs, m.cleanupTempDir()...)
-	} else {
-		// Keep the journal and backups when any step failed. The directory is
-		// the only way to retry the recovery after the user fixes the cause.
-		if err := m.closeJournal(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close transaction journal: %w", err))
-		}
 	}
+	// On failure, keep the journal and backups: the directory is the only way
+	// to retry recovery after the user fixes the cause.
 
 	if len(errs) > 0 {
 		return fmt.Errorf("rollback completed with errors: %v", errs)
@@ -96,9 +92,6 @@ func (m *Manager) cleanupTempDir() []error {
 		return nil
 	}
 	var errs []error
-	if err := m.closeJournal(); err != nil {
-		errs = append(errs, fmt.Errorf("failed to close transaction journal: %w", err))
-	}
 	if err := os.RemoveAll(m.tempDir); err != nil {
 		errs = append(errs, fmt.Errorf("failed to remove temp dir: %w", err))
 	}

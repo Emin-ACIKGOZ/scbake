@@ -90,10 +90,10 @@ func (e *IncompleteTransactionError) Unwrap() error {
 	return ErrIncompleteTransaction
 }
 
-// ensureJournal opens the journal, creating the transaction directory first.
-// The header is fsynced before the first entry is appended.
-func (m *Manager) ensureJournal() error {
-	if m.journal != nil {
+// startJournal creates the journal and writes its header. The file is closed
+// immediately; each append reopens it so Windows never sees a lingering handle.
+func (m *Manager) startJournal() error {
+	if m.journalPath != "" {
 		return nil
 	}
 	if err := m.ensureTempDir(); err != nil {
@@ -128,23 +128,41 @@ func (m *Manager) ensureJournal() error {
 		_ = os.Remove(journalPath)
 		return fmt.Errorf("failed to sync transaction journal: %w", err)
 	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(journalPath)
+		return fmt.Errorf("failed to close transaction journal: %w", err)
+	}
 
-	m.journal = f
 	m.journalPath = journalPath
 	return nil
 }
 
 // appendJournal writes and fsyncs one durable record before the caller mutates
-// the path it describes.
+// the path it describes. The journal is closed again before returning.
 func (m *Manager) appendJournal(record journalRecord) error {
-	if err := m.ensureJournal(); err != nil {
+	if err := m.startJournal(); err != nil {
 		return err
 	}
-	if err := writeJournalRecord(m.journal, record); err != nil {
+
+	f, err := fileutil.SafeOpenFile(
+		m.tempDir,
+		journalFileName,
+		os.O_WRONLY|os.O_APPEND,
+		fileutil.PrivateFilePerms,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to open transaction journal: %w", err)
+	}
+	if err := writeJournalRecord(f, record); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("failed to append transaction journal: %w", err)
 	}
-	if err := m.journal.Sync(); err != nil {
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("failed to sync transaction journal: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close transaction journal: %w", err)
 	}
 	return nil
 }
@@ -158,17 +176,6 @@ func writeJournalRecord(f *os.File, record journalRecord) error {
 	data = append(data, '\n')
 	_, err = f.Write(data)
 	return err
-}
-
-// closeJournal flushes and closes the journal file, if one is open.
-func (m *Manager) closeJournal() error {
-	if m.journal == nil {
-		return nil
-	}
-	syncErr := m.journal.Sync()
-	closeErr := m.journal.Close()
-	m.journal = nil
-	return errors.Join(syncErr, closeErr)
 }
 
 // sweepStaleTransactions removes transaction directories that cannot contain

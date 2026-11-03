@@ -93,9 +93,6 @@ func TestRecoverRestoresInterruptedTransaction(t *testing.T) {
 
 	// Simulate the crash: close the journal without committing or rolling back,
 	// then mark the owner as a process that is not running.
-	if err := tx.closeJournal(); err != nil {
-		t.Fatal(err)
-	}
 	markJournalOwnerDead(t, tx.tempDir, 1<<30)
 
 	if _, err := New(root); !errors.Is(err, ErrIncompleteTransaction) {
@@ -141,9 +138,6 @@ func TestRecoverRefusesLiveTransaction(t *testing.T) {
 	if err := os.WriteFile(created, []byte("data"), fileutil.FilePerms); err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.closeJournal(); err != nil {
-		t.Fatal(err)
-	}
 
 	if _, err := Recover(root, false); err == nil {
 		t.Fatal("Recover touched a transaction owned by a live process")
@@ -169,9 +163,6 @@ func TestRecoverDiscardRemovesTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("data"), fileutil.FilePerms); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.closeJournal(); err != nil {
 		t.Fatal(err)
 	}
 	markJournalOwnerDead(t, tx.tempDir, 1<<30)
@@ -200,9 +191,6 @@ func TestJournalRejectsMalformedTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := tx.Track(filepath.Join(root, "created.txt")); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.closeJournal(); err != nil {
 		t.Fatal(err)
 	}
 	markJournalOwnerDead(t, tx.tempDir, 1<<30)
@@ -301,9 +289,6 @@ func TestRecoverPreservesJournalOnRestoreFailure(t *testing.T) {
 	if err := os.WriteFile(existing, []byte("modified"), fileutil.FilePerms); err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.closeJournal(); err != nil {
-		t.Fatal(err)
-	}
 	markJournalOwnerDead(t, tx.tempDir, 1<<30)
 
 	// Replace the restore target with an escaping symlink so restoreBackups
@@ -386,9 +371,6 @@ func TestJournalIgnoresTornTrailingRecord(t *testing.T) {
 	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.closeJournal(); err != nil {
-		t.Fatal(err)
-	}
 	markJournalOwnerDead(t, tx.tempDir, 1<<30)
 
 	journalPath := filepath.Join(tx.tempDir, journalFileName)
@@ -455,9 +437,6 @@ func TestRecoverThroughSymlinkedRoot(t *testing.T) {
 	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.closeJournal(); err != nil {
-		t.Fatal(err)
-	}
 	markJournalOwnerDead(t, tx.tempDir, 1<<30)
 
 	link := filepath.Join(t.TempDir(), "project")
@@ -497,9 +476,6 @@ func TestRecoverIgnoresRecycledPID(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.closeJournal(); err != nil {
 		t.Fatal(err)
 	}
 

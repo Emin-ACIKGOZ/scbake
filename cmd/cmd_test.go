@@ -83,7 +83,12 @@ exit 0`, fileutil.GitDir, failStr)
 }
 
 // MockFailTask defines a task that always returns an error for rollback testing.
-type MockFailTask struct{ TargetFile string }
+// When EscapeTo is set it replaces the file with an escaping symlink, which
+// makes the subsequent restore fail deterministically on Unix.
+type MockFailTask struct {
+	TargetFile string
+	EscapeTo   string
+}
 
 func (m *MockFailTask) Description() string { return "Fail Task" }
 func (m *MockFailTask) Priority() int       { return 100 }
@@ -91,7 +96,12 @@ func (m *MockFailTask) Execute(tc types.TaskContext) error {
 	if tc.Tx != nil {
 		_ = tc.Tx.Track(m.TargetFile)
 	}
-	_ = os.WriteFile(m.TargetFile, []byte("CORRUPTED"), fileutil.PrivateFilePerms)
+	if m.EscapeTo != "" {
+		_ = os.Remove(m.TargetFile)
+		_ = os.Symlink(m.EscapeTo, m.TargetFile)
+	} else {
+		_ = os.WriteFile(m.TargetFile, []byte("CORRUPTED"), fileutil.PrivateFilePerms)
+	}
 	return errors.New("fail")
 }
 
@@ -344,10 +354,11 @@ func TestNew_DirectoryAlreadyExists(t *testing.T) {
 
 // --- Apply Command Tests ---
 
-// Verifies atomic rollback restores original file content on execution failure.
-func TestApply_PermissionError_Rollback(t *testing.T) {
+// TestApply_RollbackFailurePreservesJournal verifies that a rollback whose
+// restore step fails keeps the journal and backups for a later retry.
+func TestApply_RollbackFailurePreservesJournal(t *testing.T) {
 	if runtime.GOOS == windowsOS {
-		t.Skip() // Permission modes (0400) behave differently on Windows.
+		t.Skip() // Symlink creation requires elevated privileges on Windows.
 	}
 
 	resetFlags()
@@ -355,11 +366,14 @@ func TestApply_PermissionError_Rollback(t *testing.T) {
 	tmpDir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(tmpDir, fileutil.ManifestFileName), []byte(""), fileutil.PrivateFilePerms)
 
-	targetFile := filepath.Join(tmpDir, "readonly.txt")
-	_ = os.WriteFile(targetFile, []byte("ORIGINAL"), 0400)
+	targetFile := filepath.Join(tmpDir, "config.txt")
+	_ = os.WriteFile(targetFile, []byte("ORIGINAL"), fileutil.FilePerms)
+
+	escapeTarget := filepath.Join(t.TempDir(), "outside.txt")
+	_ = os.WriteFile(escapeTarget, []byte("OUTSIDE"), fileutil.FilePerms)
 
 	templates.Register("fail", &MockHandlerGeneric{
-		Tasks: []types.Task{&MockFailTask{TargetFile: targetFile}},
+		Tasks: []types.Task{&MockFailTask{TargetFile: targetFile, EscapeTo: escapeTarget}},
 	})
 
 	oldWD, _ := os.Getwd()
@@ -368,23 +382,27 @@ func TestApply_PermissionError_Rollback(t *testing.T) {
 
 	_ = executeCLI("apply", "--with", "fail", ".")
 
-	// The write failed, so the original content is intact.
-	content, _ := os.ReadFile(filepath.Clean(targetFile)) // #nosec G304
-	if string(content) != "ORIGINAL" {
-		t.Error("rollback failed to restore original content")
-	}
-
-	// Restore is impossible while the file is read-only. The transaction must
-	// keep its journal and backups so recovery can be retried after the cause
-	// is fixed.
+	// The escaping symlink makes restore fail, so the transaction must keep
+	// its journal and backups.
 	if _, err := os.Stat(filepath.Join(tmpDir, fileutil.InternalDir)); err != nil {
 		t.Fatalf("failed rollback discarded the recoverable transaction: %v", err)
 	}
 
-	_ = os.Chmod(targetFile, fileutil.PrivateFilePerms)
+	// Remove the symlink and retry recovery after the cause is fixed.
+	if err := os.Remove(targetFile); err != nil {
+		t.Fatal(err)
+	}
 	markJournalOwnerDead(t, tmpDir)
 	if err := executeCLI("recover", "."); err != nil {
-		t.Fatalf("recovery after fixing permissions failed: %v", err)
+		t.Fatalf("recovery after fixing the restore target failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Clean(targetFile)) // #nosec G304
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "ORIGINAL" {
+		t.Errorf("restored content = %q, want %q", content, "ORIGINAL")
 	}
 	verifyTransactionCleanup(t, tmpDir)
 }
