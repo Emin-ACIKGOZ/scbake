@@ -125,8 +125,6 @@ func TestExecuteAndFinalize_Rollback(t *testing.T) {
 	}
 }
 
-// TestExecuteAndFinalize_Success verifies that a successful run commits changes
-// and cleans up the temp directory.
 // TestExecuteAndFinalize_ManagedFilesRecords verifies that after a successful
 // execution, ManagedFiles are recorded in the manifest for reconciliation.
 func TestExecuteAndFinalize_ManagedFilesRecords(t *testing.T) {
@@ -507,5 +505,93 @@ func TestRepoRelativeProjectPath(t *testing.T) {
 	}
 	if _, err := repoRelativeProjectPath(root, ""); err == nil {
 		t.Error("repoRelativeProjectPath with empty arg = nil error, want error")
+	}
+}
+
+// TestBuildTaskContextInheritsCancellation verifies that RunContext.Ctx is the
+// parent of the task context, so a CLI signal reaches running tasks instead of
+// being replaced by a background context.
+func TestBuildTaskContextInheritsCancellation(t *testing.T) {
+	ctx, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+
+	rc := RunContext{TargetPath: t.TempDir(), Ctx: ctx}
+	tc, cancel, err := buildTaskContext(rc, &types.Manifest{}, &manifestChanges{}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskContext failed: %v", err)
+	}
+	defer cancel()
+
+	if !errors.Is(tc.Ctx.Err(), context.Canceled) {
+		t.Errorf("task context error = %v, want context.Canceled", tc.Ctx.Err())
+	}
+}
+
+// TestExecuteStopsWhenContextCanceled verifies that a canceled run does not
+// start another task. File tasks do not block on the context themselves.
+func TestExecuteStopsWhenContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	file := filepath.Join(t.TempDir(), "must-not-exist.txt")
+	plan := &types.Plan{
+		Tasks: []types.Task{&MockTask{Name: "blocked", PathToCreate: file}},
+	}
+	tc := types.TaskContext{Ctx: ctx, TargetPath: t.TempDir()}
+	reporter := ui.NewPlainReporter(1, false)
+
+	if err := Execute(plan, tc, reporter); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Errorf("task ran after cancellation: %s exists", file)
+	}
+}
+
+// cancelAfterTask requests cancellation after a successful task, exercising a
+// signal that arrives after the last task but before finalization.
+type cancelAfterTask struct {
+	cancel context.CancelFunc
+}
+
+func (c *cancelAfterTask) Description() string { return "cancel after task" }
+func (c *cancelAfterTask) Priority() int       { return 100 }
+func (c *cancelAfterTask) Execute(types.TaskContext) error {
+	c.cancel()
+	return nil
+}
+
+// TestExecuteAndFinalizeDoesNotFinalizeCanceledRun verifies that a cancellation
+// which arrives after the last task stops the run before the manifest is
+// persisted or the transaction is committed.
+func TestExecuteAndFinalizeDoesNotFinalizeCanceledRun(t *testing.T) {
+	rootDir := t.TempDir()
+	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
+	if err := os.WriteFile(manifestPath, nil, fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := transaction.New(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	plan := &types.Plan{Tasks: []types.Task{&cancelAfterTask{cancel: cancel}}}
+
+	m, rootPath, err := manifest.Load(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := types.TaskContext{Ctx: ctx, TargetPath: rootDir, Manifest: m, Tx: tx}
+	reporter := ui.NewPlainReporter(3, false)
+
+	err = executeAndFinalize(reporter, plan, tc, m, &manifestChanges{}, rootPath, tx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("executeAndFinalize error = %v, want context.Canceled", err)
+	}
+
+	if rollbackErr := tx.Rollback(); rollbackErr != nil {
+		t.Fatalf("rollback after canceled finalization failed: %v", rollbackErr)
 	}
 }

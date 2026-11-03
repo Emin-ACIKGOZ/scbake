@@ -27,7 +27,7 @@ bringing a generated project up to date without clobbering local edits.
 
 With no template change the command is a no-op, so it is safe to run repeatedly.`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		manifestPathArg := "."
 		targetPath := "."
 		if len(args) > 0 {
@@ -48,6 +48,7 @@ With no template change the command is a no-op, so it is safe to run repeatedly.
 			ConflictStrategy:    updateConflictStrategyFlag,
 			TemplateDir:         templateDirFlag,
 			RegistryCacheDir:    GetRegistryCacheDir(),
+			Ctx:                 cmd.Context(),
 			AllowAncestorSearch: allowAncestorSearch,
 		}
 

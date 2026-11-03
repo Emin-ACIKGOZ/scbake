@@ -43,8 +43,11 @@ graph LR
   those tasks overwrite are restored from on-disk backups when a task or the
   manifest save fails. External tool commands are opaque; only explicitly
   predicted outputs that did not already exist are tracked, so their side
-  effects may remain. Rollback is process-level and best-effort, not crash or
-  interrupt recovery.
+  effects may remain. SIGINT and SIGTERM cancel running tasks, stop the child
+  process, run the same rollback as an in-process error, and exit 130/143.
+  SIGKILL and other abrupt process termination bypass deferred cleanup, but the
+  next run reports the interrupted transaction instead of treating it as clean;
+  `scbake recover` rolls it back from the on-disk journal.
 
 - **Prioritized Execution**  
   Tasks run in a defined order using **Priority Bands** (e.g., directory creation → language setup → universal config) to ensure dependencies are met.
@@ -252,6 +255,28 @@ scbake drift --repair --conflict-strategy overwrite
 # Re-apply template changes, keeping non-overlapping local edits.
 scbake drift --repair --conflict-strategy merge
 ```
+
+
+### `recover`: Roll Back an Interrupted Transaction
+
+A crash or `SIGKILL` can leave a transaction journal under
+`.scbake/tmp/`. The next `apply`, `update`, `drift --repair`, or `drift` refuses
+to treat that tree as clean. Roll the interrupted run back with:
+
+```bash
+scbake recover [--discard] [<path>]
+```
+
+| Argument    | Description                                      | Default |
+| :---------- | :----------------------------------------------- | :------ |
+| `<path>`    | Project directory inside the manifest root       | `.`     |
+| `--discard` | Delete the transaction without restoring backups | `false` |
+
+Recovery refuses to touch a transaction whose process is still running. Use
+`--discard` only when the backups are known to be unusable; it deletes the
+transaction directory without restoring files. An interrupted `new` is removed
+as a whole after a successful recovery, matching the command's handled-error
+cleanup.
 
 
 ### `template registry`: Manage Remote Registries

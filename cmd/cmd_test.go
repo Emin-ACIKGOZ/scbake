@@ -4,6 +4,8 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +31,7 @@ func resetFlags() {
 	dryRun = false
 	force = false
 	allowAncestorSearch = false
+	recoverDiscardFlag = false
 }
 
 // executeCLI simulates command invocation by setting args on the root Cobra command.
@@ -365,14 +368,55 @@ func TestApply_PermissionError_Rollback(t *testing.T) {
 
 	_ = executeCLI("apply", "--with", "fail", ".")
 
-	// Validate content restoration via cleaned path to satisfy G304.
+	// The write failed, so the original content is intact.
 	content, _ := os.ReadFile(filepath.Clean(targetFile)) // #nosec G304
 	if string(content) != "ORIGINAL" {
 		t.Error("rollback failed to restore original content")
 	}
 
+	// Restore is impossible while the file is read-only. The transaction must
+	// keep its journal and backups so recovery can be retried after the cause
+	// is fixed.
+	if _, err := os.Stat(filepath.Join(tmpDir, fileutil.InternalDir)); err != nil {
+		t.Fatalf("failed rollback discarded the recoverable transaction: %v", err)
+	}
+
 	_ = os.Chmod(targetFile, fileutil.PrivateFilePerms)
+	markJournalOwnerDead(t, tmpDir)
+	if err := executeCLI("recover", "."); err != nil {
+		t.Fatalf("recovery after fixing permissions failed: %v", err)
+	}
 	verifyTransactionCleanup(t, tmpDir)
+}
+
+// markJournalOwnerDead rewrites the transaction journal header so recovery in
+// the same test process behaves as it would after the owner exited.
+func markJournalOwnerDead(t *testing.T, root string) {
+	t.Helper()
+
+	matches, err := filepath.Glob(filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir, "tx-*", "journal.jsonl"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("expected one transaction journal, got %v (err=%v)", matches, err)
+	}
+
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(data), "\n")
+	var header map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &header); err != nil {
+		t.Fatal(err)
+	}
+	header["pid"] = 1 << 30
+	encoded, err := json.Marshal(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines[0] = string(encoded)
+	if err := os.WriteFile(matches[0], []byte(strings.Join(lines, "\n")), fileutil.PrivateFilePerms); err != nil { //nolint:gosec // test-controlled path
+		t.Fatal(err)
+	}
 }
 
 // Verifies that the dry-run flag prevents any filesystem writes.
@@ -466,7 +510,7 @@ func TestRunNew_RejectsTraversalProjectName(t *testing.T) {
 
 	for _, name := range []string{"../evil", "..", "/abs", "a/b"} {
 		created := false
-		if err := runNew(name, &created); err == nil {
+		if err := runNew(context.Background(), name, &created); err == nil {
 			t.Errorf("runNew(%q) = nil, want error for traversal project name", name)
 		}
 		if created {

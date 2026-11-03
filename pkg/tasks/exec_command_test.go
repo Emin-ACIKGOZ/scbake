@@ -5,15 +5,19 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/templateregistry"
 	"scbake/internal/types"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestExecCommandTask verifies that external commands run correctly.
@@ -177,6 +181,26 @@ func TestExecCommandTaskHelper(_ *testing.T) {
 	case "stderr":
 		fmt.Fprint(os.Stderr, strings.Repeat("x", maxStderrBytes*2))
 		os.Exit(1)
+	case "descendant":
+		// Keep a descendant alive with the inherited stderr pipe open, to
+		// exercise Cmd.WaitDelay after this process is killed.
+		child := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestExecCommandTaskHelper$") //nolint:gosec // test helper
+		child.Env = append(os.Environ(), "GO_WANT_EXEC_HELPER=sleep")
+		child.Stderr = os.Stderr
+		if err := child.Start(); err != nil {
+			os.Exit(1)
+		}
+		_ = child.Wait()
+	case "orphan-success":
+		child := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestExecCommandTaskHelper$") //nolint:gosec // test helper
+		child.Env = append(os.Environ(), "GO_WANT_EXEC_HELPER=sleep")
+		child.Stderr = os.Stderr
+		if err := child.Start(); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	case "sleep":
+		time.Sleep(5 * time.Second)
 	}
 }
 
@@ -216,4 +240,84 @@ func TestExecCommandTask_PredictedCreated(t *testing.T) {
 	// Since we are black-box testing the integration, we rely on the fact that
 	// Track() was called without error.
 	// Ideally, we'd check tx internals, but we can infer success by the absence of error.
+}
+
+// TestExecCommandTask_ContextCanceled verifies that a canceled task context is
+// reported as an interruption rather than as an ordinary child failure.
+func TestExecCommandTask_ContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	task := &ExecCommandTask{
+		Cmd:  "echo",
+		Args: []string{"should not run"},
+		Desc: "Canceled command",
+	}
+	tc := types.TaskContext{Ctx: ctx, TargetPath: t.TempDir()}
+
+	err := task.Execute(tc)
+	if err == nil {
+		t.Fatal("expected a canceled command to fail")
+	}
+	if !strings.Contains(err.Error(), "interrupted") {
+		t.Errorf("error = %q, want an interruption message", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error does not wrap context.Canceled: %v", err)
+	}
+}
+
+// TestExecCommandTask_WaitDelayClosesInheritedPipes verifies that a canceled
+// command does not block on stderr pipes held open by orphaned descendants.
+func TestExecCommandTask_WaitDelayClosesInheritedPipes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("helper uses a POSIX test binary process tree")
+	}
+	t.Setenv("GO_WANT_EXEC_HELPER", "descendant")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	task := &ExecCommandTask{
+		Cmd:  os.Args[0],
+		Args: []string{"-test.run=^TestExecCommandTaskHelper$"},
+		Desc: "Inherited pipe",
+	}
+	tc := types.TaskContext{Ctx: ctx, TargetPath: t.TempDir()}
+
+	start := time.Now()
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	err := task.Execute(tc)
+	if err == nil {
+		t.Fatal("expected cancellation to fail the task")
+	}
+	if elapsed := time.Since(start); elapsed > commandWaitDelay+2*time.Second {
+		t.Errorf("task waited %s for an orphaned descendant; WaitDelay did not bound it", elapsed)
+	}
+}
+
+// TestExecCommandTask_WaitDelayIgnoresSuccessfulExit verifies that a command
+// which exits 0 while leaving an orphan holding stderr is still a success.
+func TestExecCommandTask_WaitDelayIgnoresSuccessfulExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("helper uses a POSIX test binary process tree")
+	}
+	t.Setenv("GO_WANT_EXEC_HELPER", "orphan-success")
+
+	task := &ExecCommandTask{
+		Cmd:  os.Args[0],
+		Args: []string{"-test.run=^TestExecCommandTaskHelper$"},
+		Desc: "Orphaned pipe after success",
+	}
+	tc := types.TaskContext{Ctx: context.Background(), TargetPath: t.TempDir()}
+
+	start := time.Now()
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("successful command with an orphaned pipe failed: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > commandWaitDelay+2*time.Second {
+		t.Errorf("task waited %s for an orphaned descendant", elapsed)
+	}
 }

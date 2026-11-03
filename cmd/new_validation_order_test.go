@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -65,7 +66,7 @@ func TestRunNew_ValidatesBeforeCreatingDirectory(t *testing.T) {
 			newSetFlag = tc.set
 
 			created := false
-			err := runNew(tc.project, &created)
+			err := runNew(context.Background(), tc.project, &created)
 			if err == nil {
 				t.Fatalf("runNew(%q) = nil, want an error", tc.project)
 			}
@@ -101,7 +102,7 @@ func TestRunNew_ValidSelectionStillCreatesProject(t *testing.T) {
 	newWithFlag = []string{"scb012-ok"}
 
 	created := false
-	if err := runNew(project, &created); err != nil {
+	if err := runNew(context.Background(), project, &created); err != nil {
 		t.Fatalf("runNew(%q) = %v, want nil", project, err)
 	}
 	if !created {

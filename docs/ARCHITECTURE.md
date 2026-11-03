@@ -110,10 +110,16 @@ sequenceDiagram
 - ✅ Atomic rename for manifest updates
 - ✅ Cleanup of orphaned backups
 
-Rollback is process-level and best-effort. SIGKILL, power loss, SIGINT/Ctrl-C,
-or any crash that bypasses deferred cleanup can leave a transaction directory
-behind; a later start reclaims it after the stale threshold, but never replays
-it. External commands are tracked only when their outputs are predicted.
+Rollback is process-level and best-effort. SIGINT and SIGTERM are diverted into
+the command context: the running child process is stopped, the normal rollback
+path runs, and the process exits with 130 or 143. SIGKILL and other abrupt
+process termination cannot run deferred cleanup, so every tracked mutation is
+recorded in an fsynced `.scbake/tmp/tx-*/journal.jsonl` before it happens. The next `apply`, `update`,
+or `drift` reports a dead owner's uncommitted journal instead of reporting the
+tree clean, and `scbake recover` replays it to restore backups and remove
+created paths. This protects against process crashes; it is not a power-loss
+durability guarantee. External commands are tracked only when their outputs are
+predicted.
 
 ---
 

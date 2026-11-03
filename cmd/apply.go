@@ -29,7 +29,7 @@ var applyCmd = &cobra.Command{
 	Use:   "apply [--lang <lang>] [--with <template...>] [<path>]",
 	Short: "Apply a language pack or tooling template to a project",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// Store the original argument for the manifest, which must be relative.
 		manifestPathArg := "."
 		targetPath := "."
@@ -68,6 +68,7 @@ var applyCmd = &cobra.Command{
 			License:             licenseFlag,
 			CopyrightHolder:     copyrightHolderFlag,
 			SetVars:             setVars,
+			Ctx:                 cmd.Context(),
 			AllowAncestorSearch: allowAncestorSearch,
 		}
 

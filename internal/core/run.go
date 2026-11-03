@@ -54,6 +54,11 @@ type RunContext struct {
 	CopyrightHolder  string
 	SetVars          map[string]string
 
+	// Ctx is the caller's cancellation context. It is typically the CLI signal
+	// context; nil means context.Background(). buildTaskContext derives the
+	// per-run timeout from it, so signals reach running tasks.
+	Ctx context.Context
+
 	// AllowAncestorSearch permits finding scbake.toml above a marker-less
 	// start directory. It is set by the global --allow-ancestor-search flag.
 	AllowAncestorSearch bool
@@ -62,6 +67,11 @@ type RunContext struct {
 	// `apply`. It restricts execution to managed file writes and skips
 	// environment prerequisites, so re-running a project is safe.
 	Update bool
+
+	// NewProject marks the initial `new` run. If it is interrupted before
+	// commit, recovery removes the bootstrap project directory as well as the
+	// transaction's tracked files.
+	NewProject bool
 }
 
 // A struct to hold all proposed manifest changes
@@ -83,7 +93,14 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	}
 
 	// 2. Initialize Transaction Engine
-	tx, cleanupTx, err := setupTransaction(rootPath, rc.DryRun)
+	if rc.DryRun {
+		// A dry run opens no transaction, but it must not plan against a tree
+		// left half-written by an interrupted run.
+		if err := transaction.CheckPending(rootPath); err != nil {
+			return err
+		}
+	}
+	tx, cleanupTx, err := setupTransaction(rootPath, rc.DryRun, rc.NewProject)
 	if err != nil {
 		return err
 	}
@@ -193,12 +210,14 @@ func managedWriteTasks(plan []types.Task) []types.Task {
 // Handled errors and panics on the main goroutine trigger rollback of tracked changes; external
 // command side effects may remain, and crashes bypass deferred cleanup.
 // Calling tx.Commit() explicitly at the end disables the rollback safety net.
-func setupTransaction(rootPath string, dryRun bool) (*transaction.Manager, func(), error) {
+func setupTransaction(rootPath string, dryRun, removeRootOnRecovery bool) (*transaction.Manager, func(), error) {
 	if dryRun {
 		return nil, func() {}, nil
 	}
 
-	tx, err := transaction.New(rootPath)
+	tx, err := transaction.NewWithOptions(rootPath, transaction.Options{
+		RemoveRootOnRecovery: removeRootOnRecovery,
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize transaction manager: %w", err)
 	}
@@ -213,6 +232,17 @@ func setupTransaction(rootPath string, dryRun bool) (*transaction.Manager, func(
 		}
 	}
 	return tx, cleanup, nil
+}
+
+// taskContextWithTimeout derives the per-run timeout from the caller's signal
+// context. A nil RunContext.Ctx means a background context, preserving the
+// library behavior for callers that do not supply one.
+func taskContextWithTimeout(rc RunContext) (context.Context, context.CancelFunc) {
+	parent := rc.Ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, defaultTimeout)
 }
 
 // buildTaskContext constructs future manifest state and validates template schemas against metadata.
@@ -256,8 +286,10 @@ func buildTaskContext(
 		return types.TaskContext{}, nil, err
 	}
 
-	// Prepare task context with default timeout
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	// Prepare task context with default timeout, derived from the caller's
+	// context so SIGINT/SIGTERM cancellation reaches exec.CommandContext and
+	// the executor's cancellation checks.
+	ctx, cancel := taskContextWithTimeout(rc)
 	tc := types.TaskContext{
 		Ctx:              ctx,
 		DryRun:           rc.DryRun,
@@ -288,9 +320,19 @@ func executeAndFinalize(
 		return err
 	}
 
+	// A signal can arrive after the last task returns. Do not persist or commit
+	// a run that was canceled while it still had work left to finalize.
+	if err := contextError(tc.Ctx); err != nil {
+		return fmt.Errorf("execution interrupted before updating manifest: %w", err)
+	}
+
 	reporter.Step("✍️", "Updating manifest...")
 	if err := persistManifestState(m, tc, changes, rootPath, tx); err != nil {
 		return err
+	}
+
+	if err := contextError(tc.Ctx); err != nil {
+		return fmt.Errorf("execution interrupted before commit: %w", err)
 	}
 
 	reporter.Step("✅", "Committing transaction...")

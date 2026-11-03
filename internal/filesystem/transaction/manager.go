@@ -54,62 +54,73 @@ type Manager struct {
 	// tracking Θ(n²) in the number of created paths.
 	createdSet map[string]struct{}
 
+	// journal is the open append-only journal file for this transaction. It is
+	// created lazily before the first tracked mutation.
+	journal *os.File
+
+	// journalPath is the path of the open journal file.
+	journalPath string
+
+	// removeRootOnRecovery marks a transaction whose root was created by
+	// `scbake new`; recovering it removes the whole bootstrap directory.
+	removeRootOnRecovery bool
+
 	// committed records that the transaction was finalized with Commit().
 	// After a commit, Rollback() must be a no-op: the deferred rollback safety
 	// net (RunApply) runs after Commit() even on success.
 	committed bool
 }
 
+// Options controls transaction setup.
+type Options struct {
+	// RemoveRootOnRecovery records that the transaction root was created by
+	// `scbake new`, so recovering an interrupted run removes the bootstrap
+	// directory along with the partial project.
+	RemoveRootOnRecovery bool
+}
+
 // New creates a new transaction manager scoped to the given project root.
 func New(rootPath string) (*Manager, error) {
+	return NewWithOptions(rootPath, Options{})
+}
+
+// NewWithOptions creates a transaction manager with explicit options.
+func NewWithOptions(rootPath string, opts Options) (*Manager, error) {
 	absRoot, err := filepath.Abs(rootPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve absolute root path: %w", err)
 	}
 
-	// Best-effort reclamation of transaction dirs orphaned by a crashed apply.
-	// A failure here must never prevent a new transaction from starting.
+	// Reclaim committed or legacy residue, then refuse to start a new
+	// transaction while an interrupted one still needs recovery. A failure here
+	// must prevent new mutations: recovering the previous run is a precondition.
 	sweepStaleTransactions(absRoot)
-
-	return &Manager{
-		rootPath:   absRoot,
-		backups:    make(map[string]backupEntry),
-		created:    make([]string, 0),
-		createdSet: make(map[string]struct{}),
-	}, nil
-}
-
-// sweepStaleTransactions removes transaction backup directories under
-// <root>/.scbake/tmp that are older than staleTransactionThreshold. Such
-// directories are left behind when a crash skips both Commit and Rollback.
-// It is a best-effort, no-op operation: a missing directory or any filesystem
-// error is ignored.
-func sweepStaleTransactions(rootPath string) {
-	tmpDir, ok := resolvedTmpDir(rootPath)
-	if !ok {
-		return
-	}
-
-	entries, err := os.ReadDir(tmpDir)
+	pending, err := ListPending(absRoot)
 	if err != nil {
-		return
+		return nil, fmt.Errorf("failed to inspect transaction state: %w", err)
 	}
-
-	cutoff := time.Now().Add(-staleTransactionThreshold)
-	for _, entry := range entries {
-		// entry.IsDir() is false for symlink entries, so a tx-* symlink is
-		// skipped rather than followed.
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), txDirPrefix) {
+	for _, tx := range pending {
+		if tx.Alive {
 			continue
 		}
-
-		info, err := entry.Info()
-		if err != nil || info.ModTime().After(cutoff) {
-			continue
-		}
-
-		_ = os.RemoveAll(filepath.Join(tmpDir, entry.Name()))
+		return nil, &IncompleteTransactionError{Dir: tx.Dir, PID: tx.PID}
 	}
+
+	manager := &Manager{
+		rootPath:             absRoot,
+		backups:              make(map[string]backupEntry),
+		created:              make([]string, 0),
+		createdSet:           make(map[string]struct{}),
+		removeRootOnRecovery: opts.RemoveRootOnRecovery,
+	}
+	if opts.RemoveRootOnRecovery {
+		// `new` must be recoverable even if it is killed before the first
+		// tracked mutation (for example during planning or preflight).
+		if err := manager.ensureJournal(); err != nil {
+			return nil, err
+		}
+	}
+	return manager, nil
 }
 
 // resolvedTmpDir returns the symlink-resolved <root>/.scbake/tmp directory, but
@@ -147,6 +158,22 @@ func (m *Manager) Commit() error {
 
 	if m.committed {
 		return nil
+	}
+
+	// Record the commit durably before deleting the backups. If the process
+	// dies after this point, a later run knows the transaction succeeded and can
+	// reclaim the directory instead of treating it as interrupted.
+	if m.tempDir != "" {
+		if err := m.appendJournal(journalRecord{Op: journalOpCommitted}); err != nil {
+			return err
+		}
+		// The committed record is the durable point of no return. Set this
+		// before closing the handle so a close error cannot trigger a rollback
+		// of a run that is already committed.
+		m.committed = true
+		if err := m.closeJournal(); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Transaction journal close warning: %v\n", err)
+		}
 	}
 	m.committed = true
 
@@ -214,6 +241,7 @@ func (m *Manager) cleanupStructure() {
 // resetState clears the internal trackers for a fresh state.
 func (m *Manager) resetState() {
 	m.tempDir = ""
+	m.journalPath = ""
 	m.backups = make(map[string]backupEntry)
 	m.created = make([]string, 0)
 	m.createdSet = make(map[string]struct{})
