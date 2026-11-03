@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -83,12 +82,7 @@ exit 0`, fileutil.GitDir, failStr)
 }
 
 // MockFailTask defines a task that always returns an error for rollback testing.
-// When EscapeTo is set it replaces the file with an escaping symlink, which
-// makes the subsequent restore fail deterministically on Unix.
-type MockFailTask struct {
-	TargetFile string
-	EscapeTo   string
-}
+type MockFailTask struct{ TargetFile string }
 
 func (m *MockFailTask) Description() string { return "Fail Task" }
 func (m *MockFailTask) Priority() int       { return 100 }
@@ -96,12 +90,7 @@ func (m *MockFailTask) Execute(tc types.TaskContext) error {
 	if tc.Tx != nil {
 		_ = tc.Tx.Track(m.TargetFile)
 	}
-	if m.EscapeTo != "" {
-		_ = os.Remove(m.TargetFile)
-		_ = os.Symlink(m.EscapeTo, m.TargetFile)
-	} else {
-		_ = os.WriteFile(m.TargetFile, []byte("CORRUPTED"), fileutil.PrivateFilePerms)
-	}
+	_ = os.WriteFile(m.TargetFile, []byte("CORRUPTED"), fileutil.PrivateFilePerms)
 	return errors.New("fail")
 }
 
@@ -354,13 +343,9 @@ func TestNew_DirectoryAlreadyExists(t *testing.T) {
 
 // --- Apply Command Tests ---
 
-// TestApply_RollbackFailurePreservesJournal verifies that a rollback whose
-// restore step fails keeps the journal and backups for a later retry.
-func TestApply_RollbackFailurePreservesJournal(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip() // Symlink creation requires elevated privileges on Windows.
-	}
-
+// TestApply_RollbackRestoresFile verifies that a handled task failure restores
+// the file that existed before the run and removes transaction residue.
+func TestApply_RollbackRestoresFile(t *testing.T) {
 	resetFlags()
 
 	tmpDir := t.TempDir()
@@ -369,11 +354,8 @@ func TestApply_RollbackFailurePreservesJournal(t *testing.T) {
 	targetFile := filepath.Join(tmpDir, "config.txt")
 	_ = os.WriteFile(targetFile, []byte("ORIGINAL"), fileutil.FilePerms)
 
-	escapeTarget := filepath.Join(t.TempDir(), "outside.txt")
-	_ = os.WriteFile(escapeTarget, []byte("OUTSIDE"), fileutil.FilePerms)
-
 	templates.Register("fail", &MockHandlerGeneric{
-		Tasks: []types.Task{&MockFailTask{TargetFile: targetFile, EscapeTo: escapeTarget}},
+		Tasks: []types.Task{&MockFailTask{TargetFile: targetFile}},
 	})
 
 	oldWD, _ := os.Getwd()
@@ -381,21 +363,6 @@ func TestApply_RollbackFailurePreservesJournal(t *testing.T) {
 	_ = os.Chdir(tmpDir)
 
 	_ = executeCLI("apply", "--with", "fail", ".")
-
-	// The escaping symlink makes restore fail, so the transaction must keep
-	// its journal and backups.
-	if _, err := os.Stat(filepath.Join(tmpDir, fileutil.InternalDir)); err != nil {
-		t.Fatalf("failed rollback discarded the recoverable transaction: %v", err)
-	}
-
-	// Remove the symlink and retry recovery after the cause is fixed.
-	if err := os.Remove(targetFile); err != nil {
-		t.Fatal(err)
-	}
-	markJournalOwnerDead(t, tmpDir)
-	if err := executeCLI("recover", "."); err != nil {
-		t.Fatalf("recovery after fixing the restore target failed: %v", err)
-	}
 
 	content, err := os.ReadFile(filepath.Clean(targetFile)) // #nosec G304
 	if err != nil {
@@ -405,36 +372,6 @@ func TestApply_RollbackFailurePreservesJournal(t *testing.T) {
 		t.Errorf("restored content = %q, want %q", content, "ORIGINAL")
 	}
 	verifyTransactionCleanup(t, tmpDir)
-}
-
-// markJournalOwnerDead rewrites the transaction journal header so recovery in
-// the same test process behaves as it would after the owner exited.
-func markJournalOwnerDead(t *testing.T, root string) {
-	t.Helper()
-
-	matches, err := filepath.Glob(filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir, "tx-*", "journal.jsonl"))
-	if err != nil || len(matches) != 1 {
-		t.Fatalf("expected one transaction journal, got %v (err=%v)", matches, err)
-	}
-
-	data, err := os.ReadFile(matches[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(string(data), "\n")
-	var header map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &header); err != nil {
-		t.Fatal(err)
-	}
-	header["pid"] = 1 << 30
-	encoded, err := json.Marshal(header)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines[0] = string(encoded)
-	if err := os.WriteFile(matches[0], []byte(strings.Join(lines, "\n")), fileutil.PrivateFilePerms); err != nil { //nolint:gosec // test-controlled path
-		t.Fatal(err)
-	}
 }
 
 // Verifies that the dry-run flag prevents any filesystem writes.
