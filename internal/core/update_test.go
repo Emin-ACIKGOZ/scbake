@@ -168,6 +168,7 @@ func TestUpdateLicenseHandEditFollowsConflictStrategy(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
 			}
+			// #nosec G304 -- test-controlled path
 			got, readErr := os.ReadFile(licensePath)
 			if readErr != nil {
 				t.Fatal(readErr)

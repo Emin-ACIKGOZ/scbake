@@ -204,9 +204,9 @@ scbake apply --with maven_linter
 ### `update`: Update a Generated Project
 
 Re-applies the managed template file writes recorded in `scbake.toml`, bringing a
-generated project up to date **without clobbering local edits**. It does not
-replay side-effecting commands or custom tasks such as license generation, file
-appends, or XML insertions.
+generated project up to date **without clobbering local edits**. It replays
+managed template and license writes, but does not replay side-effecting commands
+or custom tasks such as file appends or XML insertions.
 
 ```bash
 scbake update [--template-dir <dir>] [--conflict-strategy <strategy>] [<path>]
