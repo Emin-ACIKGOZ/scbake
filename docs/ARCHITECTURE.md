@@ -359,8 +359,9 @@ flags. Two properties make it safe:
   `.scbake/base/<path>`. When both the template and the working file changed,
   `update` runs a conservative line-oriented three-way merge
   (`internal/merge`) against that base. Non-overlapping edits merge; overlaps
-  fall back to an artifact. Only `CreateTemplateTask` writes are replayed, so
-  environment commands never re-run.
+  fall back to an artifact. Managed writes implement `ManagedWriter`, so both
+`CreateTemplateTask` and `LicenseTask` are replayed; environment commands,
+append tasks, and XML insertion tasks never re-run.
 
 `managed_files` continues to hold the hash of the pristine render, so a merged
 file is still recognized as locally modified on the next `apply` (SCB-056).
