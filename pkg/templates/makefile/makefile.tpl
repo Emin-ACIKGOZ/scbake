@@ -27,7 +27,7 @@ build:
 # --- Test Target ---
 test:
 	@echo "Running tests..."
-	{{- if index .Metadata "test_command" }}
+	{{- if and (index .Metadata "test_command") (ne (index .Metadata "test_command") "go test ./...") }}
 	{{ index .Metadata "test_command" }}
 	{{- else }}
 	{{- range .Projects }}
@@ -75,7 +75,7 @@ MAKE_LINT_FIX_COMMAND_go := golangci-lint run --fix --timeout=5m ./...
 # Svelte/Node Commands (Uses ESLint/Prettier setup assumed to be present)
 MAKE_BUILD_COMMAND_svelte := npm run build
 MAKE_CLEAN_COMMAND_svelte := rm -rf dist node_modules
-MAKE_TEST_COMMAND_svelte := npm test
+MAKE_TEST_COMMAND_svelte := npm test --if-present
 MAKE_LINT_COMMAND_svelte := npm run lint
 MAKE_LINT_FIX_COMMAND_svelte := npm run lint -- --fix
 

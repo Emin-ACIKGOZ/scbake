@@ -13,8 +13,41 @@ import (
 	"scbake/internal/types"
 	"scbake/internal/ui"
 	"scbake/internal/util/fileutil"
+	"strings"
 	"testing"
 )
+
+// TestRunApplyMakefileUsesPerProjectTests verifies schema validation and the
+// real apply pipeline preserve an unset test_command as unset.
+func TestRunApplyMakefileUsesPerProjectTests(t *testing.T) {
+	root := t.TempDir()
+	m := &types.Manifest{
+		Projects: []types.Project{
+			{Name: "backend", Path: "backend", Language: "go"},
+			{Name: "api", Path: "api", Language: "go"},
+		},
+		Templates: []types.Template{{Name: "makefile", Path: "."}},
+		Metadata:  map[string]string{"test_command": "go test ./..."}, // legacy schema default
+	}
+	if err := manifest.Save(m, root); err != nil {
+		t.Fatalf("save manifest: %v", err)
+	}
+	if err := RunApply(RunContext{TargetPath: root, ManifestPathArg: ".", WithFlag: []string{"makefile"}}, ui.NewPlainReporter(10, false)); err != nil {
+		t.Fatalf("RunApply failed: %v", err)
+	}
+	out, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatalf("read generated Makefile: %v", err)
+	}
+	for _, want := range []string{"(cd backend && $(MAKE_TEST_COMMAND_go))", "(cd api && $(MAKE_TEST_COMMAND_go))"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("generated Makefile missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(string(out), "\n\tgo test ./...") {
+		t.Errorf("test target still runs root go test ./...:\n%s", out)
+	}
+}
 
 // MockTask implements types.Task for testing core logic.
 type MockTask struct {
