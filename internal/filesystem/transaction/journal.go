@@ -153,6 +153,20 @@ var openJournalForAppend = func(baseDir, targetPath string, flag int, perm os.Fi
 	return fileutil.SafeOpenFile(baseDir, targetPath, flag, perm)
 }
 
+// journalCloseErrorHookForTest lets tests make a journal Close fail after a
+// successful Sync for a specific record operation. Production leaves it nil.
+var journalCloseErrorHookForTest func(op string) error
+
+// SetJournalCloseErrorHookForTest installs a hook that can fail a journal
+// Close after Sync and returns a function that restores the previous hook. It
+// exists only so end-to-end tests can inject a post-sync close failure; it is
+// not intended for production callers.
+func SetJournalCloseErrorHookForTest(hook func(op string) error) (restore func()) {
+	previous := journalCloseErrorHookForTest
+	journalCloseErrorHookForTest = hook
+	return func() { journalCloseErrorHookForTest = previous }
+}
+
 // appendJournal writes and fsyncs one durable record. durable reports whether
 // the record reached disk, independent of a later Close error. Callers must
 // keep any state described by a durable record even when err is non-nil.
@@ -190,6 +204,11 @@ func (m *Manager) appendJournalRecord(record journalRecord) (durable bool, err e
 	// caller treat the record as unwritten.
 	if err := f.Close(); err != nil {
 		return true, fmt.Errorf("failed to close transaction journal: %w", err)
+	}
+	if hook := journalCloseErrorHookForTest; hook != nil {
+		if err := hook(record.Op); err != nil {
+			return true, fmt.Errorf("failed to close transaction journal: %w", err)
+		}
 	}
 	return true, nil
 }

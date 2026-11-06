@@ -340,6 +340,12 @@ func executeAndFinalize(
 	reporter.Step("✅", "Committing transaction...")
 	// Point of No Return: We delete the backups.
 	if err := tx.Commit(); err != nil {
+		if errors.Is(err, transaction.ErrCommitted) {
+			// The committed record is durable. A cleanup failure cannot undo
+			// the scaffold, so report it without failing the command.
+			fmt.Fprintf(os.Stderr, "⚠️  Transaction committed with warning: %v\n", err)
+			return nil
+		}
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 

@@ -4,6 +4,7 @@
 package transaction
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,11 @@ import (
 	"sync"
 	"time"
 )
+
+// ErrCommitted marks a Commit error that happened after the committed journal
+// record became durable. The transaction's changes are permanent even though
+// cleanup reported an error; callers must not roll back or delete the result.
+var ErrCommitted = errors.New("transaction committed with cleanup error")
 
 // staleTransactionThreshold is the minimum age a transaction backup directory
 // must reach before a startup sweep reclaims it. A live apply touches its
@@ -169,7 +175,7 @@ func (m *Manager) Commit() error {
 			m.committed = true
 		}
 		if err != nil {
-			return err
+			return m.commitError(err)
 		}
 	}
 	m.committed = true
@@ -178,7 +184,7 @@ func (m *Manager) Commit() error {
 	if m.tempDir != "" {
 		// Remove the temp directory and all backed-up files.
 		if err := os.RemoveAll(m.tempDir); err != nil {
-			return fmt.Errorf("failed to cleanup transaction temp dir: %w", err)
+			return m.commitError(fmt.Errorf("failed to cleanup transaction temp dir: %w", err))
 		}
 
 		// Prune parent scaffolding if empty (.scbake/tmp and .scbake)
@@ -189,6 +195,18 @@ func (m *Manager) Commit() error {
 	m.resetState()
 
 	return nil
+}
+
+// commitError marks errors that occur after the point of no return. Callers
+// treat those as committed-with-warning rather than undoing the result.
+func (m *Manager) commitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if !m.committed {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrCommitted, err)
 }
 
 // ensureTempDir creates the hidden temporary directory if it doesn't exist.

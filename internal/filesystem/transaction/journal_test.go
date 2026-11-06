@@ -378,6 +378,8 @@ func TestCommitRemainsCommittedAfterJournalCloseError(t *testing.T) {
 
 	if err := tx.Commit(); err == nil {
 		t.Fatal("Commit did not report the injected journal close error")
+	} else if !errors.Is(err, ErrCommitted) {
+		t.Errorf("Commit error = %v, want ErrCommitted", err)
 	}
 	if !tx.committed {
 		t.Error("Commit did not treat the fsynced committed record as durable")
