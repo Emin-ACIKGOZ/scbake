@@ -4,6 +4,39 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.9.7] - 2026-11-06
+
+### Bug Fixes
+
+- **transaction:** Recover interrupted runs on signals and crashes
+- **transaction:** Close the journal after each append
+- **core:** Persist the manifest before version-control tasks
+- **git:** Keep transaction state out of the initial commit
+- **git:** Use a glob exclude for transaction state
+- **transaction:** Keep committed runs committed after close error
+- **recover:** Honor cancellation and signal exit status
+- **transaction:** Keep backups after durable record close errors
+- **core:** Keep committed projects after journal close errors
+- **transaction:** Retain the recovery journal until root removal
+- **transaction:** Resolve recovery roots canonically
+- **git:** Ignore transaction state in the worktree
+- **git:** Create info directory before writing exclude
+
+### Documentation
+
+- **git:** Clarify exclude path lifecycle
+
+### Refactor
+
+- **recover:** Drop redundant dry-run root canonicalization
+
+### Testing
+
+- **cmd:** Make rollback test platform-neutral
+- **cmd:** Use discovered root path in rollback test
+- **transaction:** Verify rollback restores backups on signal
+- **core:** Remove unused nolint directive
+
 ## [0.9.6] - 2026-11-06
 
 ### Bug Fixes
