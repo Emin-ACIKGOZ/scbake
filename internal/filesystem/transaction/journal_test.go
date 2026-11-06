@@ -623,6 +623,40 @@ func TestJournalRejectsMalformedTransaction(t *testing.T) {
 	}
 }
 
+// TestRecoverDiscardSweepsMarkerWithUnreadableHeader verifies that discard also
+// cleans up a marker when the journal header itself cannot be parsed, so an
+// empty or corrupt journal cannot leave orphan markers behind.
+func TestRecoverDiscardSweepsMarkerWithUnreadableHeader(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir, txDirPrefix+"badheader")
+	if err := os.MkdirAll(dir, fileutil.DirPerms); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, journalFileName), []byte("not json\n"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+	nonce, err := newJournalNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerPath, err := writeRunMarker(nonce, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(markerPath) })
+
+	recovered, err := Recover(root, true)
+	if err != nil {
+		t.Fatalf("discard failed: %v", err)
+	}
+	if recovered != 1 {
+		t.Errorf("discard handled %d transactions, want 1", recovered)
+	}
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Errorf("discard left the marker for an unreadable journal: %v", err)
+	}
+}
+
 // TestJournalRejectsOversizedFile verifies that a force-added or corrupted
 // journal larger than the size cap fails closed before it is parsed.
 func TestJournalRejectsOversizedFile(t *testing.T) {

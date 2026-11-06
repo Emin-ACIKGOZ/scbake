@@ -1006,7 +1006,55 @@ func discardTransactions(ctx context.Context, rootPath string) (int, error) {
 		}
 	}
 
+	// A journal whose header is also unreadable cannot name its nonce. Every
+	// transaction directory is gone now, so any marker that records this root
+	// is orphaned and safe to remove.
+	removeRootMarkers(rootPath)
+
 	return len(dirs), nil
+}
+
+// removeRootMarkers deletes local run markers whose recorded root matches
+// rootPath. It is used after discard to clean up markers that cannot be named
+// from a journal header.
+func removeRootMarkers(rootPath string) {
+	dir, err := runMarkerDir(rootPath, false)
+	if err != nil {
+		return
+	}
+	canonical := canonicalRoot(rootPath)
+	if canonical == "" {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() ||
+			!strings.HasPrefix(name, runMarkerPrefix) ||
+			!strings.HasSuffix(name, runMarkerSuffix) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		info, err := os.Lstat(path)
+		if err != nil || !markerFileTrusted(info) {
+			continue
+		}
+		f, err := fileutil.SafeOpenFile(dir, name, os.O_RDONLY, 0)
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(f, maxRunMarkerBytes+1))
+		_ = f.Close()
+		if err != nil || len(data) > maxRunMarkerBytes {
+			continue
+		}
+		if sameRoot(strings.TrimSpace(string(data)), canonical) {
+			_ = os.Remove(path)
+		}
+	}
 }
 
 // recoverTransaction replays the journal in reverse, then removes the
