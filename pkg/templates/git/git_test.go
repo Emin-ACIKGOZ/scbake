@@ -39,7 +39,7 @@ func TestGitHandler_Structure(t *testing.T) {
 		args []string
 	}{
 		{"git", []string{"init"}},
-		{"git", []string{"-c", noHooks, "add", "."}},
+		{"git", []string{"-c", noHooks, "add", "--", ".", internalStateExclude}},
 		{"git", []string{"-c", noHooks, "commit", "--allow-empty", "-m", "scbake: Apply templates"}},
 	}
 
