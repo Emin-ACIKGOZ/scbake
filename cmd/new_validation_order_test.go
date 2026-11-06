@@ -128,14 +128,20 @@ func TestRunNew_DryRunWarnsOnMissingTool(t *testing.T) {
 
 	created := false
 	var runErr error
-	stderr := captureStderr(t, func() {
-		runErr = runNew(project, &created)
+	var stderr string
+	stdout := captureStdout(t, func() {
+		stderr = captureStderr(t, func() {
+			runErr = runNew(project, &created)
+		})
 	})
 	if runErr != nil {
 		t.Fatalf("runNew(%q) dry run = %v, want nil (missing tool is a warning)", project, runErr)
 	}
 	if !strings.Contains(stderr, "⚠️  'go' command not found") {
 		t.Errorf("runNew(%q) dry run stderr = %q, want the missing-go warning", project, stderr)
+	}
+	if !strings.Contains(stdout, "[DRY RUN] Create .gitignore") {
+		t.Errorf("runNew(%q) dry run stdout = %q, want the plan line '[DRY RUN] Create .gitignore'", project, stdout)
 	}
 	if _, statErr := os.Stat(filepath.Join(work, project)); !os.IsNotExist(statErr) {
 		t.Errorf("runNew(%q) dry run created a project directory (stat err: %v)", project, statErr)
