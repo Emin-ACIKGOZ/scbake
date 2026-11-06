@@ -264,19 +264,22 @@ A crash or `SIGKILL` can leave a transaction journal under
 to treat that tree as clean. Roll the interrupted run back with:
 
 ```bash
-scbake recover [--discard] [<path>]
+scbake recover [--discard] [--force] [<path>]
 ```
 
 | Argument    | Description                                      | Default |
 | :---------- | :----------------------------------------------- | :------ |
 | `<path>`    | Project directory inside the manifest root       | `.`     |
 | `--discard` | Delete the transaction without restoring backups | `false` |
+| `--force`   | Replay a journal that has no local run marker    | `false` |
 
-Recovery refuses to touch a transaction whose process is still running. Use
-`--discard` only when the backups are known to be unusable; it deletes the
-transaction directory without restoring files. An interrupted `new` is removed
-as a whole after a successful recovery, matching the command's handled-error
-cleanup.
+Recovery refuses to touch a transaction whose process is still running. Each
+local run also writes a marker outside the project, so a journal copied through
+Git or another checkout is not replayed automatically; use `--force` only after
+inspecting that journal yourself. Use `--discard` only when the backups are
+known to be unusable; it deletes the transaction directory without restoring
+files. An interrupted `new` is removed as a whole after a successful recovery,
+matching the command's handled-error cleanup.
 
 
 ### `template registry`: Manage Remote Registries

@@ -6,12 +6,15 @@ package transaction
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"scbake/internal/util/fileutil"
 	"strings"
 	"time"
@@ -28,6 +31,16 @@ const (
 	journalOpCreate    = "create"
 	journalOpBackup    = "backup"
 	journalOpCommitted = "committed"
+
+	// journalNonceBytes is the size of the random identifier in the journal
+	// header. The matching run marker lives outside the project so a journal
+	// copied through Git does not authorize recovery in the checkout.
+	journalNonceBytes = 16
+
+	runMarkerPrefix = "scbake-tx-"
+	runMarkerSuffix = ".marker"
+
+	maxRunMarkerBytes = 4096
 )
 
 // journalRecord is one JSON line in a transaction journal. The first line
@@ -36,6 +49,7 @@ type journalRecord struct {
 	Version    int       `json:"version,omitempty"`
 	PID        int       `json:"pid,omitempty"`
 	OwnerStart string    `json:"owner_start,omitempty"`
+	Nonce      string    `json:"nonce,omitempty"`
 	Started    time.Time `json:"started,omitempty"`
 
 	Op     string `json:"op,omitempty"`
@@ -53,6 +67,7 @@ type journalRecord struct {
 type transactionJournal struct {
 	PID        int
 	OwnerStart string
+	Nonce      string
 	Started    time.Time
 	Entries    []journalRecord
 	Committed  bool
@@ -60,12 +75,24 @@ type transactionJournal struct {
 }
 
 // PendingTransaction is a transaction directory with an uncommitted journal.
-// Alive reports whether the process that created it is still running.
+// Alive reports whether the process that created it is still running. Trusted
+// reports whether the journal has a matching local run marker; a journal copied
+// through Git has none and must not be replayed without explicit opt-in.
 type PendingTransaction struct {
 	Dir        string
 	PID        int
 	OwnerStart string
 	Alive      bool
+	Trusted    bool
+}
+
+// RecoverOptions controls how Recover handles pending transactions.
+type RecoverOptions struct {
+	// Discard removes transaction directories without restoring their backups.
+	Discard bool
+	// Force allows replaying a journal that has no matching local run marker,
+	// for example after the marker was removed with the system temp directory.
+	Force bool
 }
 
 // ErrIncompleteTransaction identifies a transaction that was interrupted after
@@ -100,6 +127,16 @@ func (m *Manager) startJournal() error {
 		return err
 	}
 
+	nonce, err := newJournalNonce()
+	if err != nil {
+		return fmt.Errorf("failed to generate transaction identifier: %w", err)
+	}
+	// The marker is deliberately outside the project: it cannot be committed,
+	// so a journal found in a checkout does not authorize automatic recovery.
+	// Marker creation is best-effort; a failure only means recovery needs the
+	// explicit --force opt-in later.
+	m.markerPath, _ = writeRunMarker(nonce, m.rootPath)
+
 	journalPath := filepath.Join(m.tempDir, journalFileName)
 	f, err := fileutil.SafeOpenFile(
 		m.tempDir,
@@ -108,6 +145,7 @@ func (m *Manager) startJournal() error {
 		fileutil.PrivateFilePerms,
 	)
 	if err != nil {
+		m.removeRunMarker()
 		return fmt.Errorf("failed to create transaction journal: %w", err)
 	}
 
@@ -115,21 +153,25 @@ func (m *Manager) startJournal() error {
 		Version:    journalVersion,
 		PID:        os.Getpid(),
 		OwnerStart: processStartToken(os.Getpid()),
+		Nonce:      nonce,
 		Started:    time.Now().UTC(),
 		RemoveRoot: m.removeRootOnRecovery,
 	}
 	if err := writeJournalRecord(f, header); err != nil {
 		_ = f.Close()
 		_ = os.Remove(journalPath)
+		m.removeRunMarker()
 		return fmt.Errorf("failed to write transaction journal header: %w", err)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
 		_ = os.Remove(journalPath)
+		m.removeRunMarker()
 		return fmt.Errorf("failed to sync transaction journal: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(journalPath)
+		m.removeRunMarker()
 		return fmt.Errorf("failed to close transaction journal: %w", err)
 	}
 
@@ -176,6 +218,122 @@ func writeJournalRecord(f *os.File, record journalRecord) error {
 	data = append(data, '\n')
 	_, err = f.Write(data)
 	return err
+}
+
+// newJournalNonce creates the random identifier shared by a journal and its
+// local run marker.
+func newJournalNonce() (string, error) {
+	buf := make([]byte, journalNonceBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// validJournalNonce rejects a malformed nonce before it can be used as a file
+// name. The journal is untrusted input after it has been copied around.
+func validJournalNonce(nonce string) bool {
+	if len(nonce) != journalNonceBytes*2 {
+		return false
+	}
+	_, err := hex.DecodeString(nonce)
+	return err == nil
+}
+
+// runMarkerPath returns the local marker path for a journal nonce.
+func runMarkerPath(nonce string) string {
+	return filepath.Join(os.TempDir(), runMarkerPrefix+nonce+runMarkerSuffix)
+}
+
+// canonicalRoot resolves the project root so a marker stays valid when the
+// project is addressed through a symlinked spelling.
+func canonicalRoot(rootPath string) string {
+	abs, err := filepath.Abs(rootPath)
+	if err != nil {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return filepath.Clean(abs)
+	}
+	return resolved
+}
+
+// sameRoot compares two canonical roots, accounting for Windows case folding.
+func sameRoot(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+// writeRunMarker records that this project's transaction was started on this
+// machine. The marker lives in the system temp directory, not in the project,
+// so it cannot be committed and then replayed from a clone.
+func writeRunMarker(nonce, rootPath string) (string, error) {
+	canonical := canonicalRoot(rootPath)
+	if canonical == "" {
+		return "", fmt.Errorf("failed to resolve project root %s", rootPath)
+	}
+	name := filepath.Base(runMarkerPath(nonce))
+	f, err := fileutil.SafeOpenFile(
+		os.TempDir(),
+		name,
+		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
+		fileutil.PrivateFilePerms,
+	)
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.WriteString(canonical + "\n"); err != nil {
+		_ = f.Close()
+		_ = os.Remove(runMarkerPath(nonce))
+		return "", err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(runMarkerPath(nonce))
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(runMarkerPath(nonce))
+		return "", err
+	}
+	return runMarkerPath(nonce), nil
+}
+
+// journalTrusted reports whether a journal has a matching marker created by a
+// local run of this project. Missing, malformed, or mismatched markers mean the
+// journal may have arrived through Git or a copy and must not be replayed
+// automatically.
+func journalTrusted(journal *transactionJournal, rootPath string) bool {
+	if !validJournalNonce(journal.Nonce) {
+		return false
+	}
+	name := filepath.Base(runMarkerPath(journal.Nonce))
+	f, err := fileutil.SafeOpenFile(os.TempDir(), name, os.O_RDONLY, 0)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(f, maxRunMarkerBytes+1))
+	if err != nil || len(data) > maxRunMarkerBytes {
+		return false
+	}
+	return sameRoot(strings.TrimSpace(string(data)), canonicalRoot(rootPath))
+}
+
+// removeRunMarker deletes the local marker for a completed transaction.
+func (m *Manager) removeRunMarker() {
+	if m.markerPath == "" {
+		return
+	}
+	_ = os.Remove(m.markerPath)
+	m.markerPath = ""
 }
 
 // sweepStaleTransactions removes transaction directories that cannot contain
@@ -302,6 +460,7 @@ func (j *transactionJournal) readHeader(line []byte, dir string) error {
 	}
 	j.PID = record.PID
 	j.OwnerStart = record.OwnerStart
+	j.Nonce = record.Nonce
 	j.Started = record.Started
 	j.RemoveRoot = record.RemoveRoot
 	return nil
@@ -378,6 +537,7 @@ func ListPending(rootPath string) ([]PendingTransaction, error) {
 			PID:        journal.PID,
 			OwnerStart: journal.OwnerStart,
 			Alive:      processAlive(journal.PID, journal.OwnerStart),
+			Trusted:    journalTrusted(journal, rootPath),
 		})
 	}
 
@@ -406,12 +566,20 @@ func CheckPending(rootPath string) error {
 // true it removes the transaction directories without restoring their backups.
 // Recovery refuses to touch a transaction whose owner process is still alive.
 func Recover(rootPath string, discard bool) (int, error) {
+	return RecoverWithOptions(rootPath, RecoverOptions{Discard: discard})
+}
+
+// RecoverWithOptions rolls back pending transactions with explicit controls.
+// A journal without a matching local run marker is refused unless the caller
+// explicitly opts in with Force, so a journal committed to a repository cannot
+// rewrite or delete files in a fresh checkout.
+func RecoverWithOptions(rootPath string, opts RecoverOptions) (int, error) {
 	absRoot, err := filepath.Abs(rootPath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to resolve root path: %w", err)
 	}
 
-	if discard {
+	if opts.Discard {
 		return discardTransactions(absRoot)
 	}
 
@@ -420,10 +588,17 @@ func Recover(rootPath string, discard bool) (int, error) {
 		return 0, err
 	}
 
-	// Check liveness before mutating anything so a live run cannot be touched.
+	// Check liveness and provenance before mutating anything so a live run or a
+	// journal copied into the tree cannot be touched by accident.
 	for _, p := range pending {
 		if p.Alive {
 			return 0, fmt.Errorf("transaction in %s is still running (pid %d)", p.Dir, p.PID)
+		}
+		if !p.Trusted && !opts.Force {
+			return 0, fmt.Errorf(
+				"transaction in %s has no local run marker; it may belong to another checkout: rerun with --force to replay it or --discard to remove it",
+				p.Dir,
+			)
 		}
 	}
 
@@ -471,9 +646,16 @@ func recoverTransaction(rootPath, dir string) error {
 	if err != nil {
 		return err
 	}
+	markerPath := ""
+	if validJournalNonce(journal.Nonce) {
+		markerPath = runMarkerPath(journal.Nonce)
+	}
 	if journal.Committed {
 		if err := os.RemoveAll(dir); err != nil {
 			return fmt.Errorf("failed to clean committed transaction %s: %w", dir, err)
+		}
+		if markerPath != "" {
+			_ = os.Remove(markerPath)
 		}
 		return nil
 	}
@@ -494,6 +676,9 @@ func recoverTransaction(rootPath, dir string) error {
 		if err := os.RemoveAll(rootPath); err != nil {
 			return fmt.Errorf("failed to remove bootstrapped project root %s: %w", rootPath, err)
 		}
+	}
+	if markerPath != "" {
+		_ = os.Remove(markerPath)
 	}
 	return nil
 }

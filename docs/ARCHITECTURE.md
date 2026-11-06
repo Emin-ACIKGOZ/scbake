@@ -117,9 +117,12 @@ process termination cannot run deferred cleanup, so every tracked mutation is
 recorded in an fsynced `.scbake/tmp/tx-*/journal.jsonl` before it happens. The next `apply`, `update`,
 or `drift` reports a dead owner's uncommitted journal instead of reporting the
 tree clean, and `scbake recover` replays it to restore backups and remove
-created paths. This protects against process crashes; it is not a power-loss
-durability guarantee. External commands are tracked only when their outputs are
-predicted.
+created paths. A matching run marker outside the project proves the journal was
+started on this machine; recovery refuses a journal without one unless
+`--force` is passed, so a journal that reached a checkout through Git is not
+replayed automatically. This protects against process crashes; it is not a
+power-loss durability guarantee. External commands are tracked only when their
+outputs are predicted.
 
 ---
 

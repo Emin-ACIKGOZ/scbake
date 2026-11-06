@@ -94,6 +94,10 @@ func (m *Manager) cleanupTempDir() []error {
 	var errs []error
 	if err := os.RemoveAll(m.tempDir); err != nil {
 		errs = append(errs, fmt.Errorf("failed to remove temp dir: %w", err))
+	} else {
+		// Keep the marker when the journal and backups survive so a later
+		// recovery can still be trusted.
+		m.removeRunMarker()
 	}
 	m.cleanupStructure()
 	m.resetState()

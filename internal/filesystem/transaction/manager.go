@@ -59,6 +59,10 @@ type Manager struct {
 	// left open on Windows.
 	journalPath string
 
+	// markerPath is the local run marker outside the project that proves this
+	// journal was started on this machine, not checked out through Git.
+	markerPath string
+
 	// removeRootOnRecovery marks a transaction whose root was created by
 	// `scbake new`; recovering it removes the whole bootstrap directory.
 	removeRootOnRecovery bool
@@ -169,6 +173,9 @@ func (m *Manager) Commit() error {
 		// before closing the handle so a close error cannot trigger a rollback
 		// of a run that is already committed.
 		m.committed = true
+		// A committed transaction no longer needs recovery, so its local marker
+		// can go even if removing the backup directory below fails.
+		m.removeRunMarker()
 	}
 	m.committed = true
 
@@ -237,6 +244,7 @@ func (m *Manager) cleanupStructure() {
 func (m *Manager) resetState() {
 	m.tempDir = ""
 	m.journalPath = ""
+	m.markerPath = ""
 	m.backups = make(map[string]backupEntry)
 	m.created = make([]string, 0)
 	m.createdSet = make(map[string]struct{})

@@ -122,6 +122,97 @@ func TestRecoverRestoresInterruptedTransaction(t *testing.T) {
 	}
 }
 
+// TestRecoverRequiresLocalRunMarker verifies that a journal without a matching
+// run marker, such as one checked out through Git, is not replayed unless the
+// caller explicitly opts in.
+func TestRecoverRequiresLocalRunMarker(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "config.yml")
+	if err := os.WriteFile(existing, []byte("original"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Track(existing); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(existing, []byte("modified"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+	markJournalOwnerDead(t, tx.tempDir, 1<<30)
+	if err := os.Remove(tx.markerPath); err != nil {
+		t.Fatalf("removing run marker: %v", err)
+	}
+
+	if _, err := Recover(root, false); err == nil ||
+		!strings.Contains(err.Error(), "no local run marker") {
+		t.Fatalf("Recover error = %v, want a missing-marker refusal", err)
+	}
+	content, err := os.ReadFile(existing) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "modified" {
+		t.Errorf("recovery without opt-in changed %s to %q", existing, content)
+	}
+	if _, err := os.Stat(filepath.Join(tx.tempDir, journalFileName)); err != nil {
+		t.Errorf("refused recovery removed the journal: %v", err)
+	}
+
+	recovered, err := RecoverWithOptions(root, RecoverOptions{Force: true})
+	if err != nil {
+		t.Fatalf("RecoverWithOptions --force failed: %v", err)
+	}
+	if recovered != 1 {
+		t.Errorf("force recovery handled %d transactions, want 1", recovered)
+	}
+	content, err = os.ReadFile(existing) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "original" {
+		t.Errorf("force recovery restored %q, want %q", content, "original")
+	}
+}
+
+// TestRecoverDoesNotRemoveRootWithoutLocalMarker verifies that a journal found
+// in a checkout cannot delete the project root even when its header carries
+// remove_root: true. The explicit --force opt-in remains available.
+func TestRecoverDoesNotRemoveRootWithoutLocalMarker(t *testing.T) {
+	root := t.TempDir()
+	keep := filepath.Join(root, "keep.txt")
+	if err := os.WriteFile(keep, []byte("keep"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir, txDirPrefix+"clone")
+	writeTestJournal(t, dir, 1<<30, journalRecord{Op: journalOpCreate, Path: "keep.txt"})
+	setTestJournalRemoveRoot(t, dir, true)
+	removeTestJournalMarker(t, dir)
+
+	if _, err := Recover(root, false); err == nil ||
+		!strings.Contains(err.Error(), "no local run marker") {
+		t.Fatalf("Recover error = %v, want a missing-marker refusal", err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("untrusted recovery deleted project content: %v", err)
+	}
+
+	recovered, err := RecoverWithOptions(root, RecoverOptions{Force: true})
+	if err != nil {
+		t.Fatalf("RecoverWithOptions --force failed: %v", err)
+	}
+	if recovered != 1 {
+		t.Errorf("force recovery handled %d transactions, want 1", recovered)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("explicit force recovery did not remove the bootstrapped root: %v", err)
+	}
+}
+
 // TestRecoverRefusesLiveTransaction ensures recovery never touches a
 // transaction owned by a running process.
 func TestRecoverRefusesLiveTransaction(t *testing.T) {
@@ -218,14 +309,24 @@ func TestJournalRejectsMalformedTransaction(t *testing.T) {
 }
 
 // writeTestJournal writes a syntactically valid journal with the supplied
-// records and owner pid.
+// records and owner pid. It also writes the local run marker that makes the
+// journal trusted; tests that need an untrusted journal remove the marker.
 func writeTestJournal(t *testing.T, dir string, pid int, records ...journalRecord) {
 	t.Helper()
 	if err := os.MkdirAll(dir, fileutil.DirPerms); err != nil {
 		t.Fatal(err)
 	}
 
-	header := journalRecord{Version: journalVersion, PID: pid, Started: time.Now().UTC()}
+	nonce, err := newJournalNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := journalRecord{
+		Version: journalVersion,
+		PID:     pid,
+		Nonce:   nonce,
+		Started: time.Now().UTC(),
+	}
 	var lines []string
 	for _, record := range append([]journalRecord{header}, records...) {
 		data, err := json.Marshal(record)
@@ -237,6 +338,73 @@ func writeTestJournal(t *testing.T, dir string, pid int, records ...journalRecor
 	path := filepath.Join(dir, journalFileName)
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), fileutil.PrivateFilePerms); err != nil {
 		t.Fatal(err)
+	}
+
+	markerPath, err := writeRunMarker(nonce, testRootForTxDir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(markerPath) })
+}
+
+// testRootForTxDir recovers <root> from <root>/.scbake/tmp/tx-*.
+func testRootForTxDir(dir string) string {
+	return filepath.Dir(filepath.Dir(filepath.Dir(dir)))
+}
+
+// readTestJournalHeader parses the first line of a test journal.
+func readTestJournalHeader(t *testing.T, dir string) journalRecord {
+	t.Helper()
+	path := filepath.Join(dir, journalFileName)
+	data, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatalf("reading journal: %v", err)
+	}
+	lines := strings.Split(string(data), "\n")
+	var header journalRecord
+	if err := json.Unmarshal([]byte(lines[0]), &header); err != nil {
+		t.Fatalf("decoding journal header: %v", err)
+	}
+	return header
+}
+
+// writeTestJournalHeader replaces the first line of a test journal.
+func writeTestJournalHeader(t *testing.T, dir string, header journalRecord) {
+	t.Helper()
+	path := filepath.Join(dir, journalFileName)
+	data, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatalf("reading journal: %v", err)
+	}
+	lines := strings.Split(string(data), "\n")
+	rewritten, err := json.Marshal(header)
+	if err != nil {
+		t.Fatalf("encoding journal header: %v", err)
+	}
+	lines[0] = string(rewritten)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), fileutil.PrivateFilePerms); err != nil { //nolint:gosec // test-controlled path
+		t.Fatalf("rewriting journal: %v", err)
+	}
+}
+
+// setTestJournalRemoveRoot sets the remove_root flag in a test journal header.
+func setTestJournalRemoveRoot(t *testing.T, dir string, value bool) {
+	t.Helper()
+	header := readTestJournalHeader(t, dir)
+	header.RemoveRoot = value
+	writeTestJournalHeader(t, dir, header)
+}
+
+// removeTestJournalMarker deletes the local marker that makes a test journal
+// trusted, simulating a journal copied from another checkout.
+func removeTestJournalMarker(t *testing.T, dir string) {
+	t.Helper()
+	header := readTestJournalHeader(t, dir)
+	if !validJournalNonce(header.Nonce) {
+		t.Fatalf("test journal has invalid nonce %q", header.Nonce)
+	}
+	if err := os.Remove(runMarkerPath(header.Nonce)); err != nil {
+		t.Fatalf("removing test run marker: %v", err)
 	}
 }
 

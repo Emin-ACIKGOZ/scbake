@@ -21,10 +21,11 @@ var recoverCmd = &cobra.Command{
 its on-disk journal, restoring backed-up files and deleting paths the interrupted
 run created.
 
-Recovery refuses to touch a transaction whose process is still running. Use
---discard to delete an unrecoverable transaction directory without restoring
-its backups. Recovering an interrupted 'new' removes the bootstrap project
-directory as a whole.`,
+Recovery refuses to touch a transaction whose process is still running. A
+journal without a matching local run marker may have arrived through a
+checkout or a copy; pass --force to replay it anyway, or --discard to delete
+the transaction directory without restoring its backups. Recovering an
+interrupted 'new' removes the bootstrap project directory as a whole.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		targetPath := "."
@@ -56,6 +57,11 @@ directory as a whole.`,
 				action := "recover"
 				if recoverDiscardFlag {
 					action = "discard"
+				} else if !tx.Trusted && !force {
+					return fmt.Errorf(
+						"transaction in %s has no local run marker; rerun with --force to replay it or --discard to remove it",
+						tx.Dir,
+					)
 				}
 				fmt.Printf("Would %s transaction in %s (pid %d).\n", action, tx.Dir, tx.PID)
 			}
@@ -65,7 +71,10 @@ directory as a whole.`,
 			return nil
 		}
 
-		recovered, err := transaction.Recover(rootPath, recoverDiscardFlag)
+		recovered, err := transaction.RecoverWithOptions(rootPath, transaction.RecoverOptions{
+			Discard: recoverDiscardFlag,
+			Force:   force,
+		})
 		if err != nil {
 			return err
 		}
