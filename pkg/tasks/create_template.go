@@ -380,7 +380,57 @@ func writeBaseShadow(tc types.TaskContext, ledgerKey string, content []byte) err
 	if err := trackBaseAncestors(tc, absPath); err != nil {
 		return err
 	}
-	return writeBaseFile(absPath, content)
+	if err := writeBaseFile(absPath, content); err != nil {
+		return err
+	}
+	return ensureInternalStateIgnored(tc, root)
+}
+
+// internalStateIgnoreEntry is the standalone .gitignore line that keeps the
+// persistent .scbake state out of version control.
+const internalStateIgnoreEntry = ".scbake/"
+
+// ensureInternalStateIgnored guarantees that <root>/.gitignore ignores the
+// .scbake state directory, independently of the selected language pack. The
+// base shadow is written for every generated project, so this closes the gap
+// for tooling-only projects that have no Go language .gitignore template.
+//
+// It is idempotent with language-provided ignore entries and records the
+// change through the transaction so rollback restores or removes the file.
+func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
+	if tc.Tx == nil || tc.DryRun {
+		return nil
+	}
+
+	const gitignore = ".gitignore"
+	existing, err := fileutil.SafeReadFile(root, gitignore)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to read %s: %w", gitignore, err)
+	}
+	if gitignoreIgnoresInternalState(existing) {
+		return nil
+	}
+
+	appendTC := tc
+	appendTC.TargetPath = root
+	task := &AppendFileTask{
+		FilePath: gitignore,
+		Content:  internalStateIgnoreEntry + "\n",
+		Desc:     "Ignore scbake internal state",
+	}
+	return task.Execute(appendTC)
+}
+
+// gitignoreIgnoresInternalState reports whether existing already ignores the
+// .scbake state directory using any of its common spellings.
+func gitignoreIgnoresInternalState(existing []byte) bool {
+	for _, line := range strings.Split(string(existing), "\n") {
+		switch strings.TrimSpace(line) {
+		case ".scbake", ".scbake/", "/.scbake", "/.scbake/":
+			return true
+		}
+	}
+	return false
 }
 
 // writeBaseFile creates the base shadow's parent directory and writes content.
