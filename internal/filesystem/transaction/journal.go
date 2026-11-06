@@ -153,11 +153,11 @@ var openJournalForAppend = func(baseDir, targetPath string, flag int, perm os.Fi
 	return fileutil.SafeOpenFile(baseDir, targetPath, flag, perm)
 }
 
-// appendJournal writes and fsyncs one durable record. It reports any close
-// error after the record is durable.
-func (m *Manager) appendJournal(record journalRecord) error {
-	_, err := m.appendJournalRecord(record)
-	return err
+// appendJournal writes and fsyncs one durable record. durable reports whether
+// the record reached disk, independent of a later Close error. Callers must
+// keep any state described by a durable record even when err is non-nil.
+func (m *Manager) appendJournal(record journalRecord) (durable bool, err error) {
+	return m.appendJournalRecord(record)
 }
 
 // appendJournalRecord writes and fsyncs one durable record before the caller

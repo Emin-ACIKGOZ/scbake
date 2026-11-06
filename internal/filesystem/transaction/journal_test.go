@@ -403,6 +403,71 @@ func TestCommitRemainsCommittedAfterJournalCloseError(t *testing.T) {
 	}
 }
 
+// TestTrackBackupCloseErrorKeepsRecoverableBackup verifies that a durable
+// backup record is not left pointing at a deleted backup when closing the
+// journal fails after Sync. Recovery must still be able to restore the file.
+//
+//nolint:cyclop // Creates a backup, injects a close failure, and verifies crash recovery.
+func TestTrackBackupCloseErrorKeepsRecoverableBackup(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "config.yml")
+	if err := os.WriteFile(existing, []byte("original"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalOpener := openJournalForAppend
+	t.Cleanup(func() { openJournalForAppend = originalOpener })
+	openJournalForAppend = func(baseDir, targetPath string, flag int, perm os.FileMode) (journalFile, error) {
+		f, err := originalOpener(baseDir, targetPath, flag, perm)
+		if err != nil {
+			return nil, err
+		}
+		return &closeFailFile{journalFile: f}, nil
+	}
+
+	if err := tx.Track(existing); err == nil {
+		t.Fatal("Track did not report the injected journal close error")
+	}
+	if _, ok := tx.backups[existing]; !ok {
+		t.Error("Track dropped the in-memory backup after a durable record")
+	}
+
+	journal, err := readTransactionJournal(tx.tempDir)
+	if err != nil {
+		t.Fatalf("reading journal after the close error: %v", err)
+	}
+	if len(journal.Entries) != 1 || journal.Entries[0].Op != journalOpBackup {
+		t.Fatalf("journal entries = %+v, want one durable backup record", journal.Entries)
+	}
+
+	// Simulate a crash after the close error. The original was modified as if a
+	// caller had proceeded with the write before the process died.
+	if err := os.WriteFile(existing, []byte("modified"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+	markJournalOwnerDead(t, tx.tempDir, 1<<30)
+
+	recovered, err := Recover(root, false)
+	if err != nil {
+		t.Fatalf("Recover failed after a durable backup close error: %v", err)
+	}
+	if recovered != 1 {
+		t.Errorf("Recover handled %d transactions, want 1", recovered)
+	}
+	content, err := os.ReadFile(existing) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "original" {
+		t.Errorf("recovered content = %q, want %q", content, "original")
+	}
+}
+
 // writeTestJournal writes a syntactically valid journal with the supplied
 // records and owner pid.
 func writeTestJournal(t *testing.T, dir string, pid int, records ...journalRecord) {

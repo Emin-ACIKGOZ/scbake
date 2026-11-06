@@ -125,29 +125,33 @@ func (m *Manager) backupFile(absPath string, info os.FileInfo) error {
 	}
 
 	// Journal the backup before the caller overwrites the original. If the
-	// journal write fails, remove the now-unreferenced backup and abort.
+	// journal record is not durable, remove the now-unreferenced backup and
+	// abort. A close error after a durable record must keep the backup: both
+	// rollback and crash recovery need it.
 	journalPath, err := m.journalPathFor(absPath)
 	if err != nil {
 		_ = os.Remove(backupPath)
 		return err
 	}
-	if err := m.appendJournal(journalRecord{
+	durable, err := m.appendJournal(journalRecord{
 		Op:     journalOpBackup,
 		Path:   journalPath,
 		Backup: filepath.Base(backupPath),
 		Mode:   uint32(info.Mode()),
-	}); err != nil {
+	})
+	if err != nil && !durable {
 		_ = os.Remove(backupPath)
 		return err
 	}
 
-	// Record metadata
+	// Record metadata. This runs for a durable record even when closing the
+	// journal reported an error, so rollback can still restore the file.
 	m.backups[absPath] = backupEntry{
 		tempPath: backupPath,
 		mode:     info.Mode(),
 	}
 
-	return nil
+	return err
 }
 
 // journalPathFor stores paths relative to the transaction root. The journal
@@ -170,10 +174,12 @@ func (m *Manager) trackCreated(absPath string) error {
 	if err != nil {
 		return err
 	}
-	if err := m.appendJournal(journalRecord{Op: journalOpCreate, Path: journalPath}); err != nil {
-		return err
+	durable, err := m.appendJournal(journalRecord{Op: journalOpCreate, Path: journalPath})
+	if durable {
+		// Keep the in-memory entry even when closing the journal failed: the
+		// durable record describes this path, so rollback must still remove it.
+		m.created = append(m.created, absPath)
+		m.createdSet[absPath] = struct{}{}
 	}
-	m.created = append(m.created, absPath)
-	m.createdSet[absPath] = struct{}{}
-	return nil
+	return err
 }
