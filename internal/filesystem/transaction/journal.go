@@ -251,24 +251,9 @@ func (m *Manager) appendJournal(record journalRecord) error {
 	if err != nil {
 		return fmt.Errorf("failed to open transaction journal: %w", err)
 	}
-	info, err := f.Stat()
-	if err != nil {
+	if err := m.validateJournalAppend(f, record, len(data)); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("failed to stat transaction journal: %w", err)
-	}
-	if journalRecordIsEntry(record.Op) && m.journalEntries >= maxJournalEntries {
-		_ = f.Close()
-		return fmt.Errorf(
-			"transaction journal %s has reached the maximum of %d entries",
-			m.journalPath, maxJournalEntries,
-		)
-	}
-	if info.Size()+int64(len(data)) > maxJournalFileBytes {
-		_ = f.Close()
-		return fmt.Errorf(
-			"transaction journal %s would exceed the maximum size of %d bytes",
-			m.journalPath, maxJournalFileBytes,
-		)
+		return err
 	}
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
@@ -283,6 +268,28 @@ func (m *Manager) appendJournal(record journalRecord) error {
 	}
 	if journalRecordIsEntry(record.Op) {
 		m.journalEntries++
+	}
+	return nil
+}
+
+// validateJournalAppend rejects a record that would exceed the reader's caps
+// before it is written, while rollback of the existing journal is still safe.
+func (m *Manager) validateJournalAppend(f *os.File, record journalRecord, size int) error {
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat transaction journal: %w", err)
+	}
+	if journalRecordIsEntry(record.Op) && m.journalEntries >= maxJournalEntries {
+		return fmt.Errorf(
+			"transaction journal %s has reached the maximum of %d entries",
+			m.journalPath, maxJournalEntries,
+		)
+	}
+	if info.Size()+int64(size) > maxJournalFileBytes {
+		return fmt.Errorf(
+			"transaction journal %s would exceed the maximum size of %d bytes",
+			m.journalPath, maxJournalFileBytes,
+		)
 	}
 	return nil
 }

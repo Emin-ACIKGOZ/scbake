@@ -1186,14 +1186,36 @@ func TestRecoverRemoveRootThroughSymlinkedRoot(t *testing.T) {
 // TestRecoverDiscardRefusesLiveMalformedBody verifies that a malformed body
 // does not bypass the liveness guard when the header still names a live owner.
 func TestRecoverDiscardRefusesLiveMalformedBody(t *testing.T) {
-	root := t.TempDir()
+	root, txDir, created := createLiveMalformedTransaction(t)
+
+	if _, err := Recover(root, true); err == nil ||
+		!strings.Contains(err.Error(), "still running") {
+		t.Fatalf("discard error = %v, want a live-owner refusal", err)
+	}
+	if _, err := discardTransactionDir(root, txDir); err == nil {
+		t.Fatal("discardTransactionDir removed a live transaction with a malformed body")
+	}
+	if _, err := os.Stat(filepath.Join(txDir, journalFileName)); err != nil {
+		t.Errorf("refused discard removed the journal: %v", err)
+	}
+	if _, err := os.Stat(created); err != nil {
+		t.Errorf("refused discard removed user-visible path %s: %v", created, err)
+	}
+}
+
+// createLiveMalformedTransaction builds a live transaction whose journal has a
+// valid header and an invalid body line.
+func createLiveMalformedTransaction(t *testing.T) (root, txDir, created string) {
+	t.Helper()
+
+	root = t.TempDir()
 	tx, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cleanupManagerMarker(t, tx)
 
-	created := filepath.Join(root, "created.txt")
+	created = filepath.Join(root, "created.txt")
 	if err := tx.Track(created); err != nil {
 		t.Fatal(err)
 	}
@@ -1201,7 +1223,7 @@ func TestRecoverDiscardRefusesLiveMalformedBody(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, err := os.OpenFile(filepath.Join(tx.tempDir, journalFileName), os.O_APPEND|os.O_WRONLY, fileutil.PrivateFilePerms) //nolint:gosec // test-controlled path
+	f, err := os.OpenFile(filepath.Join(tx.tempDir, journalFileName), os.O_APPEND|os.O_WRONLY, fileutil.PrivateFilePerms)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1212,20 +1234,7 @@ func TestRecoverDiscardRefusesLiveMalformedBody(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-
-	if _, err := Recover(root, true); err == nil ||
-		!strings.Contains(err.Error(), "still running") {
-		t.Fatalf("discard error = %v, want a live-owner refusal", err)
-	}
-	if _, err := discardTransactionDir(root, tx.tempDir); err == nil {
-		t.Fatal("discardTransactionDir removed a live transaction with a malformed body")
-	}
-	if _, err := os.Stat(filepath.Join(tx.tempDir, journalFileName)); err != nil {
-		t.Errorf("refused discard removed the journal: %v", err)
-	}
-	if _, err := os.Stat(created); err != nil {
-		t.Errorf("refused discard removed user-visible path %s: %v", created, err)
-	}
+	return root, tx.tempDir, created
 }
 
 // TestRecoverDiscardEmptyJournal verifies the explicit discard path works when
