@@ -87,6 +87,7 @@ func (h *mavenTestHelper) executeTasksWithTx(t *testing.T) *transaction.Manager 
 	if err != nil {
 		t.Fatalf("Failed to create transaction manager: %v", err)
 	}
+	t.Cleanup(func() { _ = tx.Rollback() })
 
 	tc := types.TaskContext{
 		Ctx:        context.Background(),

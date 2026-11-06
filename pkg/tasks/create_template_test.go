@@ -558,6 +558,7 @@ func TestWriteManagedFile_ManagedFilesScopedByProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transaction.New() failed: %v", err)
 	}
+	t.Cleanup(func() { _ = tx.Rollback() })
 
 	manifest := &types.Manifest{}
 	subA := types.TaskContext{TargetPath: filepath.Join(root, "services", "a"), Manifest: manifest, Tx: tx}
@@ -637,6 +638,7 @@ func TestWriteManagedFile_LegacyFlatKeyStillRecognized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transaction.New() failed: %v", err)
 	}
+	t.Cleanup(func() { _ = tx.Rollback() })
 
 	target := filepath.Join(root, "services", "a")
 	if err := os.MkdirAll(target, 0o750); err != nil {

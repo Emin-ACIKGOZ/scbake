@@ -145,6 +145,7 @@ func TestDetect_ScopedSubprojects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transaction.New: %v", err)
 	}
+	t.Cleanup(func() { _ = tx.Rollback() })
 
 	contentA := []byte("license for alice\n")
 	contentB := []byte("license for bob\n")
@@ -307,6 +308,7 @@ func TestDetect_AgreesWithApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transaction.New: %v", err)
 	}
+	t.Cleanup(func() { _ = tx.Rollback() })
 	content := []byte("shared\n")
 	m := &types.Manifest{}
 	tc := types.TaskContext{

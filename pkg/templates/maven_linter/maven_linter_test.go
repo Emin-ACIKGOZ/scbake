@@ -132,6 +132,7 @@ func (h *testExecutionHelper) executeTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create transaction manager: %v", err)
 	}
+	t.Cleanup(func() { _ = tx.Rollback() })
 
 	tc := types.TaskContext{
 		Ctx:        context.Background(),
