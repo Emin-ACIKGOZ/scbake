@@ -713,8 +713,8 @@ func buildPlan(rc RunContext, rootPath string) (*types.Plan, string, *manifestCh
 	return plan, commitMessage, changes, nil
 }
 
-// checkLangPrerequisites validates that required binaries are available for the language.
-func checkLangPrerequisites(langFlag string) error {
+// CheckLangPrerequisites validates that required binaries are available for the language.
+func CheckLangPrerequisites(langFlag string) error {
 	switch langFlag {
 	case "go":
 		return preflight.CheckBinaries("go")
@@ -729,10 +729,13 @@ func checkLangPrerequisites(langFlag string) error {
 // handleLangFlag processes the --lang flag, adding language tasks and project info.
 func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *manifestChanges) (string, error) {
 	// `update` only writes managed files, so language toolchains (go, npm,
-	// java) need not be installed.
+	// java) need not be installed. A dry run only warns, so the plan still prints.
 	if !rc.Update {
-		if err := checkLangPrerequisites(rc.LangFlag); err != nil {
-			return "", err
+		if err := CheckLangPrerequisites(rc.LangFlag); err != nil {
+			if !rc.DryRun {
+				return "", err
+			}
+			fmt.Fprintf(os.Stderr, "⚠️  %v\n", err)
 		}
 	}
 
