@@ -179,7 +179,7 @@ func TestMakefile_PerLanguageTestCommands(t *testing.T) {
 			name:       "svelte",
 			language:   "svelte",
 			path:       "web",
-			wantDef:    "MAKE_TEST_COMMAND_svelte := npm test",
+			wantDef:    "MAKE_TEST_COMMAND_svelte := npm test --if-present",
 			wantRecipe: "(cd web && $(MAKE_TEST_COMMAND_svelte))",
 		},
 		{

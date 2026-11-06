@@ -15,9 +15,10 @@ import (
 	"scbake/internal/types"
 )
 
-// fuzzTemplateFuncs mirrors the helpers the production renderer installs in
-// pkg/tasks. The Makefile template currently only calls quote, and the
-// implementation is kept byte-for-byte equivalent to tasks.templateFuncs.
+// fuzzTemplateFuncs intentionally mirrors only the custom helpers the
+// production renderer installs in pkg/tasks. tasks.templateFuncs is unexported,
+// and the Makefile template currently calls only quote; reusing the production
+// map would require adding an export solely for tests.
 var fuzzTemplateFuncs = template.FuncMap{
 	"quote": func(s string) string { return fmt.Sprintf("%q", s) },
 }
@@ -57,98 +58,148 @@ func FuzzMakefileTestTarget(f *testing.F) {
 	// Custom and empty languages must be skipped safely.
 	f.Add("cli", ".", "rust", "", false, 1)
 	f.Add("app", ".", "", "", false, 1)
-	// Explicit test_command, including one with spaces.
+	// Explicit test_command, including one with spaces. The empty-subshell
+	// text is user-authored and valid here, so the generated-recipe invariant
+	// must not reject it.
 	f.Add("backend", "services/backend", "go", "go test -race ./...", true, 1)
 	f.Add("web", "web", "svelte", "npm run test -- --coverage", true, 2)
+	f.Add("app", ".", "go", "(cd x && )", true, 1)
 	// Quoting hazards and a leading ./, which must render without an empty
 	// command.
 	f.Add("my \"quoted\" project", "path/with\"quote", "go", "", false, 1)
 	f.Add("app", "./services/backend", "go", "", false, 1)
 
 	f.Fuzz(func(t *testing.T, name, path, language, testCommand string, hasTestCommand bool, projectCount int) {
-		// Keep the corpus small: the fuzzer may synthesize any int.
-		count := projectCount
-		if count < 0 {
-			count = 0
-		}
-		if count > 3 {
-			count = 3
-		}
-
-		m := &types.Manifest{}
-		if hasTestCommand {
-			m.Metadata = map[string]string{"test_command": testCommand}
-		}
-		for i := 0; i < count; i++ {
-			pName, pPath := name, path
-			if i > 0 {
-				// Keep entries distinct so a loop bug cannot be hidden by
-				// duplicate projects.
-				pName = name + "-" + strconv.Itoa(i)
-				pPath = path + "/sub" + strconv.Itoa(i)
-			}
-			m.Projects = append(m.Projects, types.Project{
-				Name:     pName,
-				Path:     pPath,
-				Language: language,
-			})
-		}
+		count := clampFuzzProjectCount(projectCount)
+		m := fuzzManifest(name, path, language, testCommand, hasTestCommand, count)
+		input := fuzzInputs(name, path, language, testCommand, hasTestCommand, count)
 
 		out := renderFuzzedMakefile(t, m)
 		target := makefileTestTarget(t, out)
-		assertTestCommandsDefined(t, out)
 
-		// Invariant 2: no empty shell command or empty language suffix.
-		if emptySubshellRecipe.MatchString(out) {
-			t.Fatalf("rendered an empty subshell command for input %+v:\n%s", fuzzInputs(name, path, language, testCommand, hasTestCommand, count), out)
-		}
-		if emptyLanguageTestRef.MatchString(out) {
-			t.Fatalf("rendered $(MAKE_TEST_COMMAND_) with an empty language suffix for input %+v:\n%s", fuzzInputs(name, path, language, testCommand, hasTestCommand, count), out)
-		}
-
-		hasCommand := hasTestCommand && testCommand != ""
-
-		// Invariant 3: an explicit command wins and the per-language loop is
-		// absent. Remove the command text before looking for loop markers so
-		// data that merely looks like a marker does not create a false alarm.
-		if hasCommand {
-			if !strings.Contains(target, testCommand) {
-				t.Fatalf("test target ignored test_command %q for input %+v:\n%s", testCommand, fuzzInputs(name, path, language, testCommand, hasTestCommand, count), target)
-			}
-			structural := strings.ReplaceAll(target, testCommand, "")
-			if makeTestCommandRef.MatchString(structural) {
-				t.Fatalf("test target emitted a per-language MAKE_TEST_COMMAND loop despite test_command %q:\n%s", testCommand, target)
-			}
+		// An explicit non-empty command is user-authored text: it is rendered
+		// verbatim, and the generated-recipe invariants must not be applied to
+		// bytes the user supplied.
+		if hasTestCommand && testCommand != "" {
+			assertExplicitTestCommand(t, target, testCommand, input)
+			return
 		}
 
-		// Invariant 4: no projects + no command = neutral, non-Go test target.
-		if count == 0 && !hasCommand {
-			if strings.Contains(out, "go test ./...") {
-				t.Fatalf("no-project Makefile emitted the Go test default:\n%s", out)
-			}
-			if !strings.Contains(target, "No projects configured; nothing to test.") {
-				t.Fatalf("no-project test target is not the neutral message:\n%s", target)
-			}
-		}
-
-		// Invariant 5: per-language selection by exact supported language.
-		if count > 0 && !hasCommand {
-			switch language {
-			case "go", "svelte", "spring":
-				wantRecipe := fmt.Sprintf("(cd %s && $(MAKE_TEST_COMMAND_%s))", path, language)
-				if !strings.Contains(target, wantRecipe) {
-					t.Fatalf("test target missing %q for supported language %q:\n%s", wantRecipe, language, target)
-				}
-			default:
-				if makeTestCommandRef.MatchString(target) {
-					t.Fatalf("test target emitted a per-language command for unsupported language %q:\n%s", language, target)
-				}
-				if !strings.Contains(target, "No test command configured for") {
-					t.Fatalf("test target missing the neutral skip line for unsupported language %q:\n%s", language, target)
-				}
-			}
-		}
+		assertGeneratedTestTarget(t, out, target, language, path, count, input)
 	})
+}
+
+// clampFuzzProjectCount keeps the fuzz corpus small because the fuzzer may
+// synthesize any int.
+func clampFuzzProjectCount(projectCount int) int {
+	if projectCount < 0 {
+		return 0
+	}
+	if projectCount > 3 {
+		return 3
+	}
+	return projectCount
+}
+
+// fuzzManifest builds the manifest for one fuzz input.
+func fuzzManifest(name, path, language, testCommand string, hasTestCommand bool, count int) *types.Manifest {
+	m := &types.Manifest{}
+	if hasTestCommand {
+		m.Metadata = map[string]string{"test_command": testCommand}
+	}
+	for i := 0; i < count; i++ {
+		pName, pPath := name, path
+		if i > 0 {
+			// Keep entries distinct so a loop bug cannot be hidden by
+			// duplicate projects.
+			pName = name + "-" + strconv.Itoa(i)
+			pPath = path + "/sub" + strconv.Itoa(i)
+		}
+		m.Projects = append(m.Projects, types.Project{
+			Name:     pName,
+			Path:     pPath,
+			Language: language,
+		})
+	}
+	return m
+}
+
+// assertGeneratedTestTarget applies the #148 invariants to the template-authored
+// test target only. It is never called for an explicit test_command, whose text
+// may legitimately look like an empty subshell.
+func assertGeneratedTestTarget(t *testing.T, out, target, language, path string, count int, input string) {
+	t.Helper()
+
+	assertNoEmptyGeneratedRecipes(t, target, input)
+	assertTestCommandsDefined(t, out)
+
+	if count == 0 {
+		assertNeutralNoProject(t, out, target, input)
+		return
+	}
+	assertPerLanguageTestSelection(t, target, language, path, input)
+}
+
+// assertNoEmptyGeneratedRecipes checks the generated per-language branch for an
+// empty subshell command or an empty language suffix.
+func assertNoEmptyGeneratedRecipes(t *testing.T, target, input string) {
+	t.Helper()
+
+	if emptySubshellRecipe.MatchString(target) {
+		t.Fatalf("rendered an empty subshell command for input %+v:\n%s", input, target)
+	}
+	if emptyLanguageTestRef.MatchString(target) {
+		t.Fatalf("rendered $(MAKE_TEST_COMMAND_) with an empty language suffix for input %+v:\n%s", input, target)
+	}
+}
+
+// assertNeutralNoProject checks that an empty manifest gets the neutral,
+// non-Go test target.
+func assertNeutralNoProject(t *testing.T, out, target, input string) {
+	t.Helper()
+
+	if strings.Contains(out, "go test ./...") {
+		t.Fatalf("no-project Makefile emitted the Go test default for input %+v:\n%s", input, out)
+	}
+	if !strings.Contains(target, "No projects configured; nothing to test.") {
+		t.Fatalf("no-project test target is not the neutral message for input %+v:\n%s", input, target)
+	}
+}
+
+// assertPerLanguageTestSelection checks that supported languages emit their
+// per-language command while unsupported languages emit only a neutral skip.
+func assertPerLanguageTestSelection(t *testing.T, target, language, path, input string) {
+	t.Helper()
+
+	switch language {
+	case "go", "svelte", "spring":
+		wantRecipe := fmt.Sprintf("(cd %s && $(MAKE_TEST_COMMAND_%s))", path, language)
+		if !strings.Contains(target, wantRecipe) {
+			t.Fatalf("test target missing %q for supported language %q for input %+v:\n%s", wantRecipe, language, input, target)
+		}
+	default:
+		if makeTestCommandRef.MatchString(target) {
+			t.Fatalf("test target emitted a per-language command for unsupported language %q for input %+v:\n%s", language, input, target)
+		}
+		if !strings.Contains(target, "No test command configured for") {
+			t.Fatalf("test target missing the neutral skip line for unsupported language %q for input %+v:\n%s", language, input, target)
+		}
+	}
+}
+
+// assertExplicitTestCommand checks that a user-supplied test_command is rendered
+// verbatim and suppresses the generated per-language loop. The generated-recipe
+// invariants are deliberately skipped because the command is not generated.
+func assertExplicitTestCommand(t *testing.T, target, testCommand, input string) {
+	t.Helper()
+
+	if !strings.Contains(target, testCommand) {
+		t.Fatalf("test target ignored test_command %q for input %+v:\n%s", testCommand, input, target)
+	}
+	structural := strings.ReplaceAll(target, testCommand, "")
+	if makeTestCommandRef.MatchString(structural) {
+		t.Fatalf("test target emitted a per-language MAKE_TEST_COMMAND loop despite test_command %q for input %+v:\n%s", testCommand, input, target)
+	}
 }
 
 // renderFuzzedMakefile renders makefile.tpl entirely in memory using the same
