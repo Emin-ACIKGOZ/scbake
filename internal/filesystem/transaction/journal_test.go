@@ -50,6 +50,143 @@ func rewriteJournalOwner(t *testing.T, dir string, pid int, ownerStart string) {
 	}
 }
 
+// TestRunMarkerRejectsTempInsideProject verifies that a relative or absolute
+// TMPDIR inside the checkout cannot place the run marker in the project, where
+// `git add .` would commit it and a clone could replay the journal.
+func TestRunMarkerRejectsTempInsideProject(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("TMPDIR is not used on Windows")
+	}
+
+	cases := []struct {
+		name   string
+		tmpDir string
+		chdir  bool
+	}{
+		{name: "absolute", tmpDir: "tmp"},
+		{name: "relative", tmpDir: "tmp", chdir: true},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			inside := filepath.Join(root, "tmp")
+			if err := os.MkdirAll(inside, fileutil.DirPerms); err != nil {
+				t.Fatal(err)
+			}
+			if tt.chdir {
+				t.Chdir(root)
+				t.Setenv("TMPDIR", tt.tmpDir)
+			} else {
+				t.Setenv("TMPDIR", inside)
+			}
+
+			nonce, err := newJournalNonce()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if path, err := writeRunMarker(nonce, root); err == nil {
+				t.Fatalf("writeRunMarker wrote %s inside the project root", path)
+			}
+
+			err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if !info.IsDir() && strings.HasPrefix(info.Name(), runMarkerPrefix) {
+					t.Errorf("run marker leaked into the project at %s", path)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestJournalTrustedRejectsSharedTempSpoof verifies that a marker planted in
+// the shared temp root, where an older scbake version looked, is ignored. Only
+// the private per-user marker directory is trusted.
+func TestJournalTrustedRejectsSharedTempSpoof(t *testing.T) {
+	root := t.TempDir()
+	nonce, err := newJournalNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerDir, err := runMarkerDir(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privatePath := filepath.Join(markerDir, runMarkerPrefix+nonce+runMarkerSuffix)
+	sharedPath := filepath.Join(os.TempDir(), runMarkerPrefix+nonce+runMarkerSuffix)
+	if sharedPath == privatePath {
+		t.Skip("system temp directory is already the private marker directory")
+	}
+
+	if err := os.WriteFile(sharedPath, []byte(canonicalRoot(root)+"\n"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(sharedPath) })
+
+	if journalTrusted(&transactionJournal{Nonce: nonce}, root) {
+		t.Error("journalTrusted accepted a marker from the shared temp directory")
+	}
+}
+
+// TestJournalTrustedRejectsNonRegularMarker verifies that a directory at the
+// marker path is not treated as a marker file.
+func TestJournalTrustedRejectsNonRegularMarker(t *testing.T) {
+	root := t.TempDir()
+	nonce, err := newJournalNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerDir, err := runMarkerDir(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(markerDir, runMarkerPrefix+nonce+runMarkerSuffix)
+	if err := os.Mkdir(path, runMarkerDirPerms); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(path) })
+
+	if journalTrusted(&transactionJournal{Nonce: nonce}, root) {
+		t.Error("journalTrusted accepted a non-regular marker")
+	}
+}
+
+// TestJournalTrustedRejectsInsecureMarker verifies that a marker readable by
+// other local users is not trusted, even when its contents are correct.
+func TestJournalTrustedRejectsInsecureMarker(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX marker permissions are not enforced on Windows")
+	}
+
+	root := t.TempDir()
+	nonce, err := newJournalNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerDir, err := runMarkerDir(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(markerDir, runMarkerPrefix+nonce+runMarkerSuffix)
+	if err := os.WriteFile(path, []byte(canonicalRoot(root)+"\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	if journalTrusted(&transactionJournal{Nonce: nonce}, root) {
+		t.Error("journalTrusted accepted a world-writable marker")
+	}
+}
+
 // TestRecoverRestoresInterruptedTransaction simulates a SIGKILL after a backup
 // and a few creates, then verifies that recovery restores the original file and
 // removes the paths the interrupted run created.
@@ -509,7 +646,11 @@ func removeTestJournalMarker(t *testing.T, dir string) {
 	if !validJournalNonce(header.Nonce) {
 		t.Fatalf("test journal has invalid nonce %q", header.Nonce)
 	}
-	if err := os.Remove(runMarkerPath(header.Nonce)); err != nil {
+	path, err := runMarkerPath(header.Nonce, testRootForTxDir(dir))
+	if err != nil {
+		t.Fatalf("resolving test run marker: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
 		t.Fatalf("removing test run marker: %v", err)
 	}
 }

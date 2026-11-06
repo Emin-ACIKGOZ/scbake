@@ -40,6 +40,12 @@ const (
 	runMarkerPrefix = "scbake-tx-"
 	runMarkerSuffix = ".marker"
 
+	// runMarkerDirPrefix names the private per-user directory under the system
+	// temporary directory. Markers never live directly in the shared temp
+	// root, where another local user could pre-create or spoof them.
+	runMarkerDirPrefix = "scbake-markers-"
+	runMarkerDirPerms  = 0o700
+
 	maxRunMarkerBytes = 4096
 
 	// unverifiedLivenessWindow bounds how long a PID-only check may keep a
@@ -249,9 +255,93 @@ func validJournalNonce(nonce string) bool {
 	return err == nil
 }
 
-// runMarkerPath returns the local marker path for a journal nonce.
-func runMarkerPath(nonce string) string {
-	return filepath.Join(os.TempDir(), runMarkerPrefix+nonce+runMarkerSuffix)
+// runMarkerPath returns the local marker path for a journal nonce. The marker
+// lives in a private per-user directory, never under the project root, so it
+// cannot be committed and then replayed from a clone.
+func runMarkerPath(nonce, rootPath string) (string, error) {
+	dir, err := runMarkerDir(rootPath, false)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, runMarkerPrefix+nonce+runMarkerSuffix), nil
+}
+
+// runMarkerDir returns the private per-user directory that holds run markers.
+// It must stay outside the canonical project root: a relative TMPDIR such as
+// "tmp" would otherwise place the marker inside a project that has a tmp/
+// directory, where `git add .` would commit it. When create is true the
+// directory is created with mode 0700; otherwise it must already exist.
+func runMarkerDir(rootPath string, create bool) (string, error) {
+	base, err := absoluteTempDir()
+	if err != nil {
+		return "", err
+	}
+	project := canonicalRoot(rootPath)
+	if project == "" {
+		return "", fmt.Errorf("failed to resolve project root %s", rootPath)
+	}
+	if pathWithin(project, base) {
+		return "", fmt.Errorf(
+			"temporary directory %s is inside project root %s; set TMPDIR to a directory outside the project",
+			base, project,
+		)
+	}
+
+	dir := filepath.Join(base, runMarkerDirPrefix+currentUserToken())
+	if create {
+		if err := os.MkdirAll(dir, runMarkerDirPerms); err != nil {
+			return "", fmt.Errorf("failed to create run marker directory: %w", err)
+		}
+		// MkdirAll keeps the mode of an existing directory, so set it
+		// explicitly. Ownership is still verified below before it is trusted.
+		_ = os.Chmod(dir, runMarkerDirPerms)
+	}
+
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return "", err
+	}
+	if !markerDirTrusted(info) {
+		return "", fmt.Errorf("refusing untrusted run marker directory %s", dir)
+	}
+	return dir, nil
+}
+
+// absoluteTempDir resolves os.TempDir to an absolute, symlink-free path. A
+// relative TMPDIR is resolved against the current directory; callers reject it
+// when that lands inside the project.
+func absoluteTempDir() (string, error) {
+	tmp := os.TempDir()
+	if tmp == "" {
+		return "", errors.New("temporary directory is not configured")
+	}
+	abs, err := filepath.Abs(tmp)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve temporary directory %q: %w", tmp, err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve temporary directory %q: %w", abs, err)
+	}
+	return resolved, nil
+}
+
+// pathWithin reports whether target is base or lies below it.
+func pathWithin(base, target string) bool {
+	if base == "" || target == "" {
+		return false
+	}
+	base = filepath.Clean(base)
+	target = filepath.Clean(target)
+	if runtime.GOOS == "windows" {
+		base = strings.ToLower(base)
+		target = strings.ToLower(target)
+	}
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 // canonicalRoot resolves the project root so a marker stays valid when the
@@ -287,10 +377,14 @@ func writeRunMarker(nonce, rootPath string) (string, error) {
 	if canonical == "" {
 		return "", fmt.Errorf("failed to resolve project root %s", rootPath)
 	}
-	name := filepath.Base(runMarkerPath(nonce))
+	dir, err := runMarkerDir(rootPath, true)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, runMarkerPrefix+nonce+runMarkerSuffix)
 	f, err := fileutil.SafeOpenFile(
-		os.TempDir(),
-		name,
+		dir,
+		filepath.Base(path),
 		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
 		fileutil.PrivateFilePerms,
 	)
@@ -299,19 +393,19 @@ func writeRunMarker(nonce, rootPath string) (string, error) {
 	}
 	if _, err := f.WriteString(canonical + "\n"); err != nil {
 		_ = f.Close()
-		_ = os.Remove(runMarkerPath(nonce))
+		_ = os.Remove(path)
 		return "", err
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		_ = os.Remove(runMarkerPath(nonce))
+		_ = os.Remove(path)
 		return "", err
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(runMarkerPath(nonce))
+		_ = os.Remove(path)
 		return "", err
 	}
-	return runMarkerPath(nonce), nil
+	return path, nil
 }
 
 // journalTrusted reports whether a journal has a matching marker created by a
@@ -322,13 +416,28 @@ func journalTrusted(journal *transactionJournal, rootPath string) bool {
 	if !validJournalNonce(journal.Nonce) {
 		return false
 	}
-	name := filepath.Base(runMarkerPath(journal.Nonce))
-	f, err := fileutil.SafeOpenFile(os.TempDir(), name, os.O_RDONLY, 0)
+	path, err := runMarkerPath(journal.Nonce, rootPath)
+	if err != nil {
+		return false
+	}
+	// Lstat before opening: a FIFO at the marker path would otherwise block a
+	// read-only command such as `recover --dry-run` forever.
+	info, err := os.Lstat(path)
+	if err != nil || !markerFileTrusted(info) {
+		return false
+	}
+	f, err := fileutil.SafeOpenFile(filepath.Dir(path), filepath.Base(path), os.O_RDONLY, 0)
 	if err != nil {
 		return false
 	}
 	defer func() { _ = f.Close() }()
 
+	// Re-check the opened handle so a swap between Lstat and open cannot turn
+	// a regular marker into another file type.
+	opened, err := f.Stat()
+	if err != nil || !markerFileTrusted(opened) {
+		return false
+	}
 	data, err := io.ReadAll(io.LimitReader(f, maxRunMarkerBytes+1))
 	if err != nil || len(data) > maxRunMarkerBytes {
 		return false
@@ -361,21 +470,17 @@ func journalOwnerVerifiablyAlive(journal *transactionJournal) bool {
 	return processAlive(journal.PID, journal.OwnerStart)
 }
 
-// journalMarkerPath returns the marker path named by a journal, or an empty
-// string when the journal has no usable nonce.
-func journalMarkerPath(journal *transactionJournal) string {
-	if !validJournalNonce(journal.Nonce) {
-		return ""
-	}
-	return runMarkerPath(journal.Nonce)
-}
-
 // removeJournalMarker deletes the marker for a transaction recovered from its
 // journal.
-func removeJournalMarker(journal *transactionJournal) {
-	if path := journalMarkerPath(journal); path != "" {
-		_ = os.Remove(path)
+func removeJournalMarker(journal *transactionJournal, rootPath string) {
+	if !validJournalNonce(journal.Nonce) {
+		return
 	}
+	path, err := runMarkerPath(journal.Nonce, rootPath)
+	if err != nil {
+		return
+	}
+	_ = os.Remove(path)
 }
 
 // removeRunMarker deletes the local marker for a completed transaction.
@@ -404,13 +509,13 @@ func sweepStaleTransactions(rootPath string) {
 
 	cutoff := time.Now().Add(-staleTransactionThreshold)
 	for _, entry := range entries {
-		sweepTransactionEntry(tmpDir, entry, cutoff)
+		sweepTransactionEntry(rootPath, tmpDir, entry, cutoff)
 	}
 }
 
 // sweepTransactionEntry reclaims one transaction directory when it is provably
 // unrecoverable: committed with a dead owner, or journal-less and stale.
-func sweepTransactionEntry(tmpDir string, entry os.DirEntry, cutoff time.Time) {
+func sweepTransactionEntry(rootPath, tmpDir string, entry os.DirEntry, cutoff time.Time) {
 	// entry.IsDir() is false for symlink entries, so a tx-* symlink is
 	// skipped rather than followed.
 	if !entry.IsDir() || !strings.HasPrefix(entry.Name(), txDirPrefix) {
@@ -423,7 +528,7 @@ func sweepTransactionEntry(tmpDir string, entry os.DirEntry, cutoff time.Time) {
 	case err == nil:
 		if journal.Committed && !journalOwnerAlive(journal, time.Now().UTC()) {
 			_ = os.RemoveAll(dir)
-			removeJournalMarker(journal)
+			removeJournalMarker(journal, rootPath)
 		}
 		return
 	case !os.IsNotExist(err):
@@ -692,7 +797,7 @@ func discardTransactions(rootPath string) (int, error) {
 			return i, fmt.Errorf("failed to discard transaction %s: %w", dir, err)
 		}
 		if journalErr == nil {
-			removeJournalMarker(journal)
+			removeJournalMarker(journal, rootPath)
 		}
 	}
 
@@ -710,7 +815,7 @@ func recoverTransaction(rootPath, dir string) error {
 		if err := os.RemoveAll(dir); err != nil {
 			return fmt.Errorf("failed to clean committed transaction %s: %w", dir, err)
 		}
-		removeJournalMarker(journal)
+		removeJournalMarker(journal, rootPath)
 		return nil
 	}
 
@@ -731,7 +836,7 @@ func recoverTransaction(rootPath, dir string) error {
 			return fmt.Errorf("failed to remove bootstrapped project root %s: %w", rootPath, err)
 		}
 	}
-	removeJournalMarker(journal)
+	removeJournalMarker(journal, rootPath)
 	return nil
 }
 
