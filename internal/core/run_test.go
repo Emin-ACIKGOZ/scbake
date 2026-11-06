@@ -539,7 +539,7 @@ type manifestSnapshotTask struct {
 func (s *manifestSnapshotTask) Description() string { return "snapshot manifest" }
 func (s *manifestSnapshotTask) Priority() int       { return int(types.PrioVersionControl) }
 func (s *manifestSnapshotTask) Execute(types.TaskContext) error {
-	data, err := os.ReadFile(s.manifestPath) //nolint:gosec // test-controlled path
+	data, err := os.ReadFile(s.manifestPath)
 	if err != nil {
 		return err
 	}

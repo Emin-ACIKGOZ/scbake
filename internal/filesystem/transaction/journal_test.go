@@ -125,6 +125,8 @@ func TestRecoverRestoresInterruptedTransaction(t *testing.T) {
 // TestRecoverRequiresLocalRunMarker verifies that a journal without a matching
 // run marker, such as one checked out through Git, is not replayed unless the
 // caller explicitly opts in.
+//
+//nolint:cyclop // The test builds an interrupted transaction and checks both refusal and opt-in.
 func TestRecoverRequiresLocalRunMarker(t *testing.T) {
 	root := t.TempDir()
 	existing := filepath.Join(root, "config.yml")
@@ -253,6 +255,8 @@ func TestRecoverRefusesLiveTransaction(t *testing.T) {
 // TestRecoverDiscardWhenLivenessUnverified verifies that --discard can clear a
 // transaction whose owner PID appears alive but whose incarnation cannot be
 // verified. This is the escape hatch for PID-reuse false positives.
+//
+//nolint:cyclop // The test builds a transaction, checks its liveness, and verifies discard.
 func TestRecoverDiscardWhenLivenessUnverified(t *testing.T) {
 	root := t.TempDir()
 	tx, err := New(root)

@@ -361,6 +361,23 @@ func journalOwnerVerifiablyAlive(journal *transactionJournal) bool {
 	return processAlive(journal.PID, journal.OwnerStart)
 }
 
+// journalMarkerPath returns the marker path named by a journal, or an empty
+// string when the journal has no usable nonce.
+func journalMarkerPath(journal *transactionJournal) string {
+	if !validJournalNonce(journal.Nonce) {
+		return ""
+	}
+	return runMarkerPath(journal.Nonce)
+}
+
+// removeJournalMarker deletes the marker for a transaction recovered from its
+// journal.
+func removeJournalMarker(journal *transactionJournal) {
+	if path := journalMarkerPath(journal); path != "" {
+		_ = os.Remove(path)
+	}
+}
+
 // removeRunMarker deletes the local marker for a completed transaction.
 func (m *Manager) removeRunMarker() {
 	if m.markerPath == "" {
@@ -406,9 +423,7 @@ func sweepTransactionEntry(tmpDir string, entry os.DirEntry, cutoff time.Time) {
 	case err == nil:
 		if journal.Committed && !journalOwnerAlive(journal, time.Now().UTC()) {
 			_ = os.RemoveAll(dir)
-			if validJournalNonce(journal.Nonce) {
-				_ = os.Remove(runMarkerPath(journal.Nonce))
-			}
+			removeJournalMarker(journal)
 		}
 		return
 	case !os.IsNotExist(err):
@@ -676,8 +691,8 @@ func discardTransactions(rootPath string) (int, error) {
 		if err := os.RemoveAll(dir); err != nil {
 			return i, fmt.Errorf("failed to discard transaction %s: %w", dir, err)
 		}
-		if journalErr == nil && validJournalNonce(journal.Nonce) {
-			_ = os.Remove(runMarkerPath(journal.Nonce))
+		if journalErr == nil {
+			removeJournalMarker(journal)
 		}
 	}
 
@@ -691,17 +706,11 @@ func recoverTransaction(rootPath, dir string) error {
 	if err != nil {
 		return err
 	}
-	markerPath := ""
-	if validJournalNonce(journal.Nonce) {
-		markerPath = runMarkerPath(journal.Nonce)
-	}
 	if journal.Committed {
 		if err := os.RemoveAll(dir); err != nil {
 			return fmt.Errorf("failed to clean committed transaction %s: %w", dir, err)
 		}
-		if markerPath != "" {
-			_ = os.Remove(markerPath)
-		}
+		removeJournalMarker(journal)
 		return nil
 	}
 
@@ -722,9 +731,7 @@ func recoverTransaction(rootPath, dir string) error {
 			return fmt.Errorf("failed to remove bootstrapped project root %s: %w", rootPath, err)
 		}
 	}
-	if markerPath != "" {
-		_ = os.Remove(markerPath)
-	}
+	removeJournalMarker(journal)
 	return nil
 }
 
