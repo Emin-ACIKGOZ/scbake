@@ -13,4 +13,14 @@ updates:
     schedule:
       interval: "weekly"
   {{ end }}
+  {{ if eq .Language "spring" }}
+  - package-ecosystem: "maven"
+    directory: {{ .Path | quote }}
+    schedule:
+      interval: "weekly"
+  {{ end }}
 {{ end }}
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
