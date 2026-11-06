@@ -223,6 +223,17 @@ func checkFilePreconditions(tc types.TaskContext, output, target string) (string
 	return absPath, nil
 }
 
+// maybeAppendInternalStateIgnore adds the persistent .scbake entry only when
+// the managed output is the manifest-root .gitignore. The ledger key is
+// root-relative, so a subproject's target-relative ".gitignore" is keyed like
+// "sub/.gitignore" and must not inherit the root's state entry.
+func maybeAppendInternalStateIgnore(outputRelPath, ledgerKey string, content []byte) []byte {
+	if filepath.ToSlash(outputRelPath) != fileutil.GitIgnore || ledgerKey != fileutil.GitIgnore {
+		return content
+	}
+	return appendInternalStateIgnore(content)
+}
+
 // WriteManagedFile performs state-aware reconciliation, transaction tracking,
 // safe file writing, and manifest state updating for a generated file.
 func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte, perm os.FileMode) error {
@@ -232,17 +243,9 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 	}
 	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
 
-	// The persistent .scbake state belongs to the manifest root. When a
-	// template renders the root .gitignore, make the ignore entry part of that
-	// managed render before hashing so the ledger and base shadow match what is
-	// actually written, even if the template does not include it itself.
-	//
-	// The ledger key is root-relative, so a subproject's target-relative
-	// ".gitignore" is keyed like "sub/.gitignore" and must not inherit the
-	// root's state entry.
-	if filepath.ToSlash(outputRelPath) == fileutil.GitIgnore && ledgerKey == fileutil.GitIgnore {
-		content = appendInternalStateIgnore(content)
-	}
+	// Make the ignore entry part of the managed render before hashing so the
+	// ledger and base shadow match what is actually written.
+	content = maybeAppendInternalStateIgnore(outputRelPath, ledgerKey, content)
 
 	newHash := HashContent(content)
 
@@ -428,27 +431,43 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 		return nil
 	}
 
-	existing, err := fileutil.SafeReadFile(root, relPath)
+	existing, err := readRootGitignore(root, relPath)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			warnInternalStateIgnore(relPath, err)
-			return nil
-		}
-		existing = nil
+		warnInternalStateIgnore(relPath, err)
+		return nil
 	}
 	if gitignoreIgnoresInternalState(existing) {
 		return nil
 	}
 
-	if err := checkIgnoredFileWritable(root, relPath); err != nil {
-		warnInternalStateIgnore(relPath, err)
-		return nil
-	}
-	if err := trackAndWrite(tc, absPath, appendInternalStateIgnore(existing), fileutil.FilePerms); err != nil {
+	if err := applyInternalStateIgnore(tc, root, relPath, absPath, existing); err != nil {
 		warnInternalStateIgnore(relPath, err)
 		return nil
 	}
 	return nil
+}
+
+// readRootGitignore returns the root .gitignore content. A missing file is not
+// an error and yields nil content.
+func readRootGitignore(root, relPath string) ([]byte, error) {
+	existing, err := fileutil.SafeReadFile(root, relPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return existing, nil
+}
+
+// applyInternalStateIgnore appends the ignore entry through the transaction.
+// It checks writability first so an existing read-only file does not get a
+// backup that cannot be restored.
+func applyInternalStateIgnore(tc types.TaskContext, root, relPath, absPath string, existing []byte) error {
+	if err := checkIgnoredFileWritable(root, relPath); err != nil {
+		return err
+	}
+	return trackAndWrite(tc, absPath, appendInternalStateIgnore(existing), fileutil.FilePerms)
 }
 
 // checkIgnoredFileWritable fails early when an existing ignore file cannot be
@@ -480,7 +499,7 @@ func appendInternalStateIgnore(content []byte) []byte {
 		return content
 	}
 
-	out := make([]byte, 0, len(content)+len(internalStateIgnoreEntry)+2)
+	var out []byte
 	out = append(out, content...)
 	if len(out) > 0 && out[len(out)-1] != '\n' {
 		out = append(out, '\n')
