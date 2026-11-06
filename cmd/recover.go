@@ -51,7 +51,7 @@ interrupted 'new' removes the bootstrap project directory as a whole.`,
 				return err
 			}
 			for _, tx := range pending {
-				if tx.Alive {
+				if tx.Alive && !(recoverDiscardFlag && !tx.LivenessVerifiable) {
 					return fmt.Errorf("transaction in %s is still running (pid %d)", tx.Dir, tx.PID)
 				}
 				action := "recover"

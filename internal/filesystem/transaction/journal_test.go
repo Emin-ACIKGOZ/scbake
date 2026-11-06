@@ -233,11 +233,105 @@ func TestRecoverRefusesLiveTransaction(t *testing.T) {
 	if _, err := Recover(root, false); err == nil {
 		t.Fatal("Recover touched a transaction owned by a live process")
 	}
-	if _, err := Recover(root, true); err == nil {
-		t.Fatal("Recover --discard touched a transaction owned by a live process")
+	// Discard is refused only when the platform can prove the live PID is the
+	// recorded incarnation. Where it cannot, --discard is the explicit escape
+	// hatch and is covered by TestRecoverDiscardWhenLivenessUnverified.
+	journal, err := readTransactionJournal(tx.tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journalOwnerVerifiablyAlive(journal) {
+		if _, err := Recover(root, true); err == nil {
+			t.Fatal("Recover --discard touched a transaction owned by a live process")
+		}
 	}
 	if _, err := os.Stat(created); err != nil {
 		t.Errorf("live transaction path was modified: %v", err)
+	}
+}
+
+// TestRecoverDiscardWhenLivenessUnverified verifies that --discard can clear a
+// transaction whose owner PID appears alive but whose incarnation cannot be
+// verified. This is the escape hatch for PID-reuse false positives.
+func TestRecoverDiscardWhenLivenessUnverified(t *testing.T) {
+	root := t.TempDir()
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created := filepath.Join(root, "created.txt")
+	if err := tx.Track(created); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(created, []byte("data"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+	// Name a live PID without an incarnation token. On Linux this falls back to
+	// kill(pid, 0), which reports alive; the other platforms behave the same.
+	rewriteJournalOwner(t, tx.tempDir, os.Getpid(), "")
+
+	pending, err := ListPending(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || !pending[0].Alive {
+		t.Fatalf("pending = %+v, want one Alive transaction", pending)
+	}
+
+	recovered, err := RecoverWithOptions(root, RecoverOptions{Discard: true})
+	if err != nil {
+		t.Fatalf("discard refused an unverifiable liveness check: %v", err)
+	}
+	if recovered != 1 {
+		t.Errorf("discard handled %d transactions, want 1", recovered)
+	}
+	if _, err := os.Stat(tx.tempDir); !os.IsNotExist(err) {
+		t.Errorf("discard left transaction directory %s", tx.tempDir)
+	}
+	if _, err := os.Stat(created); err != nil {
+		t.Errorf("discard removed user-visible path %s: %v", created, err)
+	}
+}
+
+// TestUnverifiableLivenessExpires verifies that a PID match without an
+// incarnation token stops blocking recovery once the transaction is older than
+// the bounded window, covering PID reuse on macOS and Windows.
+func TestUnverifiableLivenessExpires(t *testing.T) {
+	root := t.TempDir()
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created := filepath.Join(root, "created.txt")
+	if err := tx.Track(created); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	rewriteJournalOwner(t, tx.tempDir, os.Getpid(), "")
+	setTestJournalStarted(t, tx.tempDir, time.Now().Add(-2*unverifiedLivenessWindow))
+
+	pending, err := ListPending(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Alive {
+		t.Fatalf("pending = %+v, want one non-Alive transaction", pending)
+	}
+
+	recovered, err := Recover(root, false)
+	if err != nil {
+		t.Fatalf("Recover did not expire an unverifiable PID: %v", err)
+	}
+	if recovered != 1 {
+		t.Errorf("Recover handled %d transactions, want 1", recovered)
+	}
+	if _, err := os.Stat(created); !os.IsNotExist(err) {
+		t.Errorf("recovery left created path %s", created)
 	}
 }
 
@@ -385,6 +479,14 @@ func writeTestJournalHeader(t *testing.T, dir string, header journalRecord) {
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), fileutil.PrivateFilePerms); err != nil { //nolint:gosec // test-controlled path
 		t.Fatalf("rewriting journal: %v", err)
 	}
+}
+
+// setTestJournalStarted sets the header start time in a test journal.
+func setTestJournalStarted(t *testing.T, dir string, started time.Time) {
+	t.Helper()
+	header := readTestJournalHeader(t, dir)
+	header.Started = started
+	writeTestJournalHeader(t, dir, header)
 }
 
 // setTestJournalRemoveRoot sets the remove_root flag in a test journal header.
@@ -628,12 +730,10 @@ func TestRecoverThroughSymlinkedRoot(t *testing.T) {
 }
 
 // TestRecoverIgnoresRecycledPID verifies that a journal owned by a PID that now
-// belongs to an unrelated process is still recoverable.
+// belongs to an unrelated process is still recoverable. Linux detects the
+// different incarnation token; macOS and Windows rely on the bounded age for a
+// PID they cannot verify, so the scenario ages the journal as well.
 func TestRecoverIgnoresRecycledPID(t *testing.T) {
-	if processStartToken(os.Getpid()) == "" {
-		t.Skip("process start tokens are unavailable on this platform")
-	}
-
 	root := t.TempDir()
 	created := filepath.Join(root, "created.txt")
 	tx, err := New(root)
@@ -650,6 +750,7 @@ func TestRecoverIgnoresRecycledPID(t *testing.T) {
 	// The header now names this live process but with a different start time,
 	// exactly what PID reuse looks like to recovery.
 	rewriteJournalOwner(t, tx.tempDir, os.Getpid(), "1")
+	setTestJournalStarted(t, tx.tempDir, time.Now().Add(-2*unverifiedLivenessWindow))
 
 	recovered, err := Recover(root, false)
 	if err != nil {

@@ -5,11 +5,18 @@
 
 package transaction
 
-import "syscall"
+import (
+	"errors"
+	"syscall"
+)
 
 const (
 	processQueryLimitedInformation = 0x1000
 	stillActiveExitCode            = 259
+
+	// processStartTokensAvailable is false because Windows does not expose a
+	// portable start-time token here; liveness is bounded by age instead.
+	processStartTokensAvailable = false
 )
 
 // processAlive reports whether pid currently exists. Windows does not expose a
@@ -20,18 +27,24 @@ func processAlive(pid int, _ string) bool {
 	}
 	handle, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
 	if err != nil {
-		return false
+		// Access denied means the process exists but cannot be queried; a
+		// missing process reports an invalid parameter. Treat the former as
+		// alive so recovery never rolls back a running transaction, and the
+		// latter as dead so a stale PID does not block forever.
+		return errors.Is(err, syscall.ERROR_ACCESS_DENIED)
 	}
 	defer func() { _ = syscall.CloseHandle(handle) }()
 
 	var exitCode uint32
 	if err := syscall.GetExitCodeProcess(handle, &exitCode); err != nil {
-		return false
+		// The handle was valid, so the process exists even if its exit code is
+		// unavailable. Stay conservative rather than treating it as dead.
+		return true
 	}
 	return exitCode == stillActiveExitCode
 }
 
-// processStartToken is unavailable on Windows; PID-only liveness is used.
+// processStartToken is unavailable on Windows; age-bounded PID liveness is used.
 func processStartToken(int) string {
 	return ""
 }

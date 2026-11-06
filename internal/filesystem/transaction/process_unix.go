@@ -9,10 +9,15 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 )
+
+// processStartTokensAvailable reports whether processStartToken returns a
+// comparable incarnation token. Only Linux exposes /proc/<pid>/stat here.
+const processStartTokensAvailable = runtime.GOOS == "linux"
 
 // processAlive reports whether pid currently exists and, when ownerStart is
 // available, whether it is the same process incarnation. The start-time check

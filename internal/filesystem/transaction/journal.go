@@ -41,6 +41,12 @@ const (
 	runMarkerSuffix = ".marker"
 
 	maxRunMarkerBytes = 4096
+
+	// unverifiedLivenessWindow bounds how long a PID-only check may keep a
+	// transaction alive when the platform cannot provide a process start token.
+	// The apply timeout is 30 minutes, so an hour-old transaction idled by a
+	// recycled PID is treated as dead.
+	unverifiedLivenessWindow = staleTransactionThreshold
 )
 
 // journalRecord is one JSON line in a transaction journal. The first line
@@ -84,6 +90,9 @@ type PendingTransaction struct {
 	OwnerStart string
 	Alive      bool
 	Trusted    bool
+	// LivenessVerifiable reports whether Alive came from a process start-token
+	// comparison rather than a PID-only fallback.
+	LivenessVerifiable bool
 }
 
 // RecoverOptions controls how Recover handles pending transactions.
@@ -327,6 +336,31 @@ func journalTrusted(journal *transactionJournal, rootPath string) bool {
 	return sameRoot(strings.TrimSpace(string(data)), canonicalRoot(rootPath))
 }
 
+// journalOwnerAlive reports whether the recorded owner is still running. When
+// the platform cannot compare a process start token, a PID match is only
+// trusted for a bounded age so PID reuse cannot block recovery forever.
+func journalOwnerAlive(journal *transactionJournal, now time.Time) bool {
+	if journal.PID <= 0 {
+		return false
+	}
+	if !processStartTokensAvailable || journal.OwnerStart == "" {
+		if journal.Started.IsZero() || now.Sub(journal.Started) > unverifiedLivenessWindow {
+			return false
+		}
+	}
+	return processAlive(journal.PID, journal.OwnerStart)
+}
+
+// journalOwnerVerifiablyAlive reports a live owner only when the platform can
+// prove the PID is the same process incarnation. Callers use it to decide
+// whether an explicit --discard should still be refused.
+func journalOwnerVerifiablyAlive(journal *transactionJournal) bool {
+	if !processStartTokensAvailable || journal.OwnerStart == "" {
+		return false
+	}
+	return processAlive(journal.PID, journal.OwnerStart)
+}
+
 // removeRunMarker deletes the local marker for a completed transaction.
 func (m *Manager) removeRunMarker() {
 	if m.markerPath == "" {
@@ -370,8 +404,11 @@ func sweepTransactionEntry(tmpDir string, entry os.DirEntry, cutoff time.Time) {
 	journal, err := readTransactionJournal(dir)
 	switch {
 	case err == nil:
-		if journal.Committed && !processAlive(journal.PID, journal.OwnerStart) {
+		if journal.Committed && !journalOwnerAlive(journal, time.Now().UTC()) {
 			_ = os.RemoveAll(dir)
+			if validJournalNonce(journal.Nonce) {
+				_ = os.Remove(runMarkerPath(journal.Nonce))
+			}
 		}
 		return
 	case !os.IsNotExist(err):
@@ -533,11 +570,12 @@ func ListPending(rootPath string) ([]PendingTransaction, error) {
 		}
 
 		pending = append(pending, PendingTransaction{
-			Dir:        dir,
-			PID:        journal.PID,
-			OwnerStart: journal.OwnerStart,
-			Alive:      processAlive(journal.PID, journal.OwnerStart),
-			Trusted:    journalTrusted(journal, rootPath),
+			Dir:                dir,
+			PID:                journal.PID,
+			OwnerStart:         journal.OwnerStart,
+			Alive:              journalOwnerAlive(journal, time.Now().UTC()),
+			Trusted:            journalTrusted(journal, rootPath),
+			LivenessVerifiable: processStartTokensAvailable && journal.OwnerStart != "",
 		})
 	}
 
@@ -624,15 +662,22 @@ func discardTransactions(rootPath string) (int, error) {
 	}
 
 	for _, dir := range dirs {
+		// Only a verifiable incarnation blocks an explicit discard. When the
+		// platform cannot prove the PID belongs to the recorded owner, --discard
+		// is the escape hatch for a stuck PID-reuse false positive.
 		if journal, err := readTransactionJournal(dir); err == nil &&
-			!journal.Committed && processAlive(journal.PID, journal.OwnerStart) {
+			!journal.Committed && journalOwnerVerifiablyAlive(journal) {
 			return 0, fmt.Errorf("transaction in %s is still running (pid %d)", dir, journal.PID)
 		}
 	}
 
 	for i, dir := range dirs {
+		journal, journalErr := readTransactionJournal(dir)
 		if err := os.RemoveAll(dir); err != nil {
 			return i, fmt.Errorf("failed to discard transaction %s: %w", dir, err)
+		}
+		if journalErr == nil && validJournalNonce(journal.Nonce) {
+			_ = os.Remove(runMarkerPath(journal.Nonce))
 		}
 	}
 
