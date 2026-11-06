@@ -8,6 +8,7 @@ package transaction
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -51,5 +52,33 @@ func TestJournalTrustedRejectsFIFOMarker(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("journalTrusted blocked while opening a FIFO marker")
+	}
+}
+
+// TestReadJournalRejectsFIFO verifies that a FIFO at the journal path is
+// rejected before it is opened, so a read-only command cannot block on it.
+func TestReadJournalRejectsFIFO(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".scbake", "tmp", txDirPrefix+"fifo")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, journalFileName), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := readTransactionJournal(dir)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("readTransactionJournal error = %v, want a non-regular-file refusal", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("readTransactionJournal blocked while opening a FIFO")
 	}
 }

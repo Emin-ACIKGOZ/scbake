@@ -554,6 +554,86 @@ func TestJournalRejectsMalformedTransaction(t *testing.T) {
 	}
 }
 
+// TestJournalRejectsOversizedFile verifies that a force-added or corrupted
+// journal larger than the size cap fails closed before it is parsed.
+func TestJournalRejectsOversizedFile(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir, txDirPrefix+"oversized")
+	writeTestJournal(t, dir, 1<<30, journalRecord{Op: journalOpCreate, Path: "created.txt"})
+
+	path := filepath.Join(dir, journalFileName)
+	if err := os.Truncate(path, maxJournalFileBytes+1); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := readTransactionJournal(dir); err == nil ||
+		!strings.Contains(err.Error(), "too large") {
+		t.Fatalf("readTransactionJournal error = %v, want an oversized-journal refusal", err)
+	}
+}
+
+// TestJournalRejectsOverlongLine verifies that a single unbounded journal line
+// cannot be accumulated in memory.
+func TestJournalRejectsOverlongLine(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir, txDirPrefix+"longline")
+	writeTestJournal(t, dir, 1<<30, journalRecord{Op: journalOpCreate, Path: "created.txt"})
+
+	path := filepath.Join(dir, journalFileName)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, fileutil.PrivateFilePerms) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(strings.Repeat("a", maxJournalLineBytes+1)); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := readTransactionJournal(dir); err == nil ||
+		!strings.Contains(err.Error(), "line longer than") {
+		t.Fatalf("readTransactionJournal error = %v, want an overlong-line refusal", err)
+	}
+}
+
+// TestJournalRejectsTooManyEntries verifies that an untrusted journal cannot
+// make recovery accumulate an unbounded number of entries.
+func TestJournalRejectsTooManyEntries(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir, txDirPrefix+"entries")
+
+	records := make([]journalRecord, maxJournalEntries+1)
+	for i := range records {
+		records[i] = journalRecord{Op: journalOpCreate, Path: "created.txt"}
+	}
+	writeTestJournal(t, dir, 1<<30, records...)
+
+	if _, err := readTransactionJournal(dir); err == nil ||
+		!strings.Contains(err.Error(), "more than") {
+		t.Fatalf("readTransactionJournal error = %v, want an entry-count refusal", err)
+	}
+}
+
+// TestJournalRejectsNonRegularFile verifies that a directory at the journal path
+// is refused instead of being read as a journal.
+func TestJournalRejectsNonRegularFile(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir, txDirPrefix+"nonregular")
+	if err := os.MkdirAll(dir, fileutil.DirPerms); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, journalFileName), fileutil.DirPerms); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := readTransactionJournal(dir); err == nil ||
+		!strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("readTransactionJournal error = %v, want a non-regular-file refusal", err)
+	}
+}
+
 // writeTestJournal writes a syntactically valid journal with the supplied
 // records and owner pid. It also writes the local run marker that makes the
 // journal trusted; tests that need an untrusted journal remove the marker.

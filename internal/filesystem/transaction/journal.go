@@ -48,6 +48,14 @@ const (
 
 	maxRunMarkerBytes = 4096
 
+	// Journal files are untrusted after they have been copied between
+	// checkouts. Bound the total size, individual line length, and entry count
+	// so a force-added or corrupted journal cannot exhaust memory, and require
+	// the journal to be a regular file so a FIFO cannot block a read.
+	maxJournalFileBytes = 8 << 20
+	maxJournalLineBytes = 64 << 10
+	maxJournalEntries   = 100_000
+
 	// unverifiedLivenessWindow bounds how long a PID-only match counts as proof
 	// that the owner is alive. Beyond it the liveness is unknown, not dead: the
 	// process may be suspended or simply running longer than the apply timeout.
@@ -578,10 +586,10 @@ func sweepTransactionEntry(rootPath, tmpDir string, entry os.DirEntry, cutoff ti
 	_ = os.RemoveAll(dir)
 }
 
-// readTransactionJournal parses one journal file. It fails closed on malformed
-// lines so recovery never guesses at a path.
+// readTransactionJournal parses one journal file. It fails closed on malformed,
+// oversized, or non-regular input so recovery never guesses at a path.
 func readTransactionJournal(dir string) (*transactionJournal, error) {
-	f, err := fileutil.SafeOpenFile(dir, journalFileName, os.O_RDONLY, 0)
+	f, err := openTransactionJournal(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -608,10 +616,58 @@ func readTransactionJournal(dir string) (*transactionJournal, error) {
 	return journal, nil
 }
 
+// openTransactionJournal opens a journal only after confirming it is a regular
+// file of bounded size. Lstat runs before the open so a FIFO cannot block a
+// read-only command; the handle is re-checked afterwards to catch a swap.
+func openTransactionJournal(dir string) (*os.File, error) {
+	path := filepath.Join(dir, journalFileName)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("transaction journal %s is not a regular file", path)
+	}
+	if info.Size() > maxJournalFileBytes {
+		return nil, fmt.Errorf(
+			"transaction journal %s is too large (%d bytes, limit %d)",
+			path, info.Size(), maxJournalFileBytes,
+		)
+	}
+
+	f, err := fileutil.SafeOpenFile(dir, journalFileName, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("failed to stat transaction journal %s: %w", path, err)
+	}
+	if !opened.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, fmt.Errorf("transaction journal %s is not a regular file", path)
+	}
+	if opened.Size() > maxJournalFileBytes {
+		_ = f.Close()
+		return nil, fmt.Errorf(
+			"transaction journal %s is too large (%d bytes, limit %d)",
+			path, opened.Size(), maxJournalFileBytes,
+		)
+	}
+	return f, nil
+}
+
 // readLine consumes one physical line. It reports done when the reader reached
 // EOF. A torn final record is ignored only when it is unterminated and invalid
 // JSON: the mutation it describes never started because the append failed.
 func (j *transactionJournal) readLine(rawLine string, readErr error, dir string, first *bool) (bool, error) {
+	if len(rawLine) > maxJournalLineBytes {
+		return false, fmt.Errorf(
+			"transaction journal %s has a line longer than %d bytes",
+			dir, maxJournalLineBytes,
+		)
+	}
 	terminated := strings.HasSuffix(rawLine, "\n")
 	line := bytes.TrimSpace([]byte(rawLine))
 
@@ -667,6 +723,12 @@ func (j *transactionJournal) readEntry(line []byte, dir string) error {
 
 	switch record.Op {
 	case journalOpCreate, journalOpBackup:
+		if len(j.Entries) >= maxJournalEntries {
+			return fmt.Errorf(
+				"transaction journal %s has more than %d entries",
+				dir, maxJournalEntries,
+			)
+		}
 		j.Entries = append(j.Entries, record)
 	case journalOpCommitted:
 		j.Committed = true
