@@ -325,7 +325,7 @@ Discovery is bounded by the nearest Git root: a manifest at or below that root w
 - **Fleet-wide Governance**: Run `scbake apply --with makefile` at the root to generate a unified build system that orchestrates all sub-projects.
 - **Non-Git Monorepos**: If the central manifest lives in a tree without a Git root, pass `--allow-ancestor-search` to `apply`, `update`, `drift`, or `list` so an ancestor manifest can be adopted. The flag never crosses a `.git` root. It is not a security boundary: a principal that can write an ancestor directory can also plant a `.git` marker there.
 
-**Note:** `--allow-ancestor-search` is an explicit opt-in for non-Git monorepos. Without it, applying to a marker-less subproject creates a nested manifest in that subproject instead of updating the central one. `update`, `drift`, and `list` also need the flag in a non-Git monorepo; without it, `drift` evaluates the local (possibly absent) manifest and can report no drift.
+**Note:** `--allow-ancestor-search` is an explicit opt-in for non-Git monorepos. Without it, applying to a marker-less subproject creates a nested manifest in that subproject instead of updating the central one. `update`, `drift`, and `list` also need the flag in a non-Git monorepo; without it, `drift` finds no local manifest and fails instead of evaluating the central one.
 
 
 ## Supported Language Packs

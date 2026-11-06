@@ -145,7 +145,7 @@ func TestMarkerlessListProjectsFlagPlumbing(t *testing.T) {
 }
 
 // TestMarkerlessDriftFlagPlumbing proves `drift` forwards the flag: without it
-// the local (possibly absent) manifest hides the recorded drift.
+// the absent local manifest is an error instead of hiding the recorded drift.
 func TestMarkerlessDriftFlagPlumbing(t *testing.T) {
 	monoDir := setupMarkerlessMonorepo(t, "[managed_files]\n\"sub/Makefile\" = \"0000000000000000000000000000000000000000000000000000000000000000\"\n")
 	subDir := makeSubdir(t, monoDir, "sub")
@@ -154,10 +154,10 @@ func TestMarkerlessDriftFlagPlumbing(t *testing.T) {
 	}
 	t.Chdir(subDir)
 
-	if out, err := runCLI("drift"); err != nil {
-		t.Fatalf("default drift failed: %v\nOutput: %s", err, out)
-	} else if !strings.Contains(out, "No drift detected.") {
-		t.Errorf("default drift evaluated the ancestor manifest: %s", out)
+	if out, err := runCLI("drift"); err == nil {
+		t.Fatalf("default drift without a manifest should fail:\n%s", out)
+	} else if !strings.Contains(out, "no scbake.toml found") {
+		t.Errorf("default drift did not report the missing local manifest: %s", out)
 	}
 
 	out, err := runCLI("drift", "--allow-ancestor-search")

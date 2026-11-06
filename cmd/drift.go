@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"scbake/internal/core"
@@ -15,6 +16,7 @@ import (
 	"scbake/internal/manifest"
 	"scbake/internal/types"
 	"scbake/internal/ui"
+	"scbake/internal/util/fileutil"
 
 	"github.com/spf13/cobra"
 )
@@ -35,6 +37,7 @@ var driftCmd = &cobra.Command{
 working tree and lists any file that was modified or deleted since scbake wrote
 it. Detection always scans every managed file in the manifest, regardless of
 <path>, and exits non-zero when drift is found, so it can gate a CI pipeline.
+A missing scbake.toml is an error rather than a clean result.
 
 With --repair, the recorded templates are re-applied through the same
 reconciliation used by 'update', restoring generated content while preserving
@@ -64,6 +67,17 @@ edits it does not clear drift; use 'overwrite' to force restoration.`,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to load manifest: %w", err)
+		}
+
+		// LoadWithOptions deliberately returns an empty manifest when the file
+		// is absent. For drift that would report a missing project as clean, so
+		// fail closed at the discovered root instead.
+		manifestPath := filepath.Join(rootPath, fileutil.ManifestFileName)
+		if _, statErr := os.Stat(manifestPath); statErr != nil {
+			if os.IsNotExist(statErr) {
+				return fmt.Errorf("no %s found at %s", fileutil.ManifestFileName, rootPath)
+			}
+			return fmt.Errorf("failed to inspect %s: %w", manifestPath, statErr)
 		}
 
 		// An interrupted run leaves a journal that a plain drift scan cannot
