@@ -1028,19 +1028,28 @@ func discardTransactions(ctx context.Context, rootPath string) (int, error) {
 	if err := checkDiscardableTransactions(ctx, dirs); err != nil {
 		return 0, err
 	}
-	discarded, err := discardTransactionDirs(ctx, rootPath, dirs)
+	discarded, needsSweep, err := discardTransactionDirs(ctx, rootPath, dirs)
 	if err != nil {
 		return discarded, err
 	}
-	// Every transaction directory is gone now, so any marker that records this
-	// root is orphaned and safe to remove.
-	removeRootMarkers(rootPath)
+	// Only an unidentifiable journal needs a broad marker sweep. Removing
+	// markers for every transaction would delete the marker of a concurrent run.
+	if needsSweep {
+		removeRootMarkers(rootPath)
+	}
 	return discarded, nil
 }
 
-// checkDiscardableTransactions refuses only a transaction whose live owner
-// incarnation can be verified. Where liveness cannot be proven, --discard is
-// the explicit escape hatch for a stuck PID-reuse false positive.
+// hasTransactionJournal reports whether dir contains a regular journal file, so
+// an unrelated user directory named tx-* is never removed by discard.
+func hasTransactionJournal(dir string) bool {
+	info, err := os.Lstat(filepath.Join(dir, journalFileName))
+	return err == nil && info.Mode().IsRegular()
+}
+
+// checkDiscardableTransactions refuses a transaction whose owner is alive.
+// Where liveness cannot be proven (an aged PID match), --discard remains the
+// explicit escape hatch for a stuck PID-reuse false positive.
 func checkDiscardableTransactions(ctx context.Context, dirs []string) error {
 	for _, dir := range dirs {
 		if err := ctx.Err(); err != nil {
@@ -1058,21 +1067,32 @@ func checkDiscardableTransactions(ctx context.Context, dirs []string) error {
 	return nil
 }
 
-// discardTransactionDirs removes the transaction directories in order.
-func discardTransactionDirs(ctx context.Context, rootPath string, dirs []string) (int, error) {
-	for i, dir := range dirs {
+// discardTransactionDirs removes the identified transaction directories in
+// order. It reports whether an unidentifiable journal needs a marker sweep.
+func discardTransactionDirs(ctx context.Context, rootPath string, dirs []string) (int, bool, error) {
+	discarded := 0
+	needsSweep := false
+	for _, dir := range dirs {
 		if err := ctx.Err(); err != nil {
-			return i, err
+			return discarded, needsSweep, err
 		}
-		if err := discardTransactionDir(rootPath, dir); err != nil {
-			return i, err
+		if !hasTransactionJournal(dir) {
+			continue
 		}
+		sweep, err := discardTransactionDir(rootPath, dir)
+		if err != nil {
+			return discarded, needsSweep, err
+		}
+		needsSweep = needsSweep || sweep
+		discarded++
 	}
-	return len(dirs), nil
+	return discarded, needsSweep, nil
 }
 
-// discardTransactionDir removes one transaction directory and its marker.
-func discardTransactionDir(rootPath, dir string) error {
+// discardTransactionDir removes one transaction directory and its marker. It
+// reports whether the journal header was unreadable, which requires a broader
+// orphan-marker sweep because no nonce can be associated with the directory.
+func discardTransactionDir(rootPath, dir string) (bool, error) {
 	journal, journalErr := readTransactionJournal(dir)
 	var header *transactionJournal
 	if journalErr != nil {
@@ -1081,7 +1101,7 @@ func discardTransactionDir(rootPath, dir string) error {
 		header, _ = readTransactionJournalHeader(dir)
 	}
 	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("failed to discard transaction %s: %w", dir, err)
+		return false, fmt.Errorf("failed to discard transaction %s: %w", dir, err)
 	}
 	switch {
 	case journalErr == nil:
@@ -1089,7 +1109,7 @@ func discardTransactionDir(rootPath, dir string) error {
 	case header != nil:
 		removeJournalMarker(header, rootPath)
 	}
-	return nil
+	return journalErr != nil && header == nil, nil
 }
 
 // removeRootMarkers deletes local run markers whose recorded root matches

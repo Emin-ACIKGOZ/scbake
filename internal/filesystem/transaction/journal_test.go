@@ -955,6 +955,147 @@ func TestRecoverPreservesJournalOnRestoreFailure(t *testing.T) {
 	}
 }
 
+// TestRecoverDiscardRejectsInRootTmpSymlink verifies that a .scbake/tmp
+// symlink pointing at the project root or an in-root subtree cannot make
+// discard delete unrelated tx-* user directories.
+func TestRecoverDiscardRejectsInRootTmpSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	cases := []struct {
+		name       string
+		target     string
+		victimRoot func(string) string
+	}{
+		{
+			name:   "project root",
+			target: "..",
+			victimRoot: func(root string) string {
+				return root
+			},
+		},
+		{
+			name:   "in-root subtree",
+			target: "../victim",
+			victimRoot: func(root string) string {
+				return filepath.Join(root, "victim")
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			victim := filepath.Join(tt.victimRoot(root), txDirPrefix+"important")
+			keep := filepath.Join(victim, "keep.txt")
+			if err := os.MkdirAll(victim, fileutil.DirPerms); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(keep, []byte("keep"), fileutil.FilePerms); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(root, fileutil.InternalDir), fileutil.DirPerms); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(tt.target, filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir)); err != nil {
+				t.Fatal(err)
+			}
+
+			recovered, err := Recover(root, true)
+			if err != nil {
+				t.Fatalf("discard failed: %v", err)
+			}
+			if recovered != 0 {
+				t.Errorf("discard handled %d transactions, want 0", recovered)
+			}
+			if _, err := os.Stat(keep); err != nil {
+				t.Errorf("discard deleted unrelated tx-* directory: %v", err)
+			}
+		})
+	}
+}
+
+// TestRecoverDiscardKeepsUnidentifiedTransactionDirectory verifies that a tx-*
+// directory without a journal is never removed, even inside the real tmp dir.
+func TestRecoverDiscardKeepsUnidentifiedTransactionDirectory(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir, txDirPrefix+"important")
+	keep := filepath.Join(dir, "keep.txt")
+	if err := os.MkdirAll(dir, fileutil.DirPerms); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keep, []byte("keep"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := Recover(root, true)
+	if err != nil {
+		t.Fatalf("discard failed: %v", err)
+	}
+	if recovered != 0 {
+		t.Errorf("discard handled %d transactions, want 0", recovered)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("discard deleted a tx-* directory without a journal: %v", err)
+	}
+}
+
+// TestRecoverDiscardKeepsMarkersWhenNothingDiscarded verifies that a no-op
+// discard does not delete markers belonging to other live or starting runs.
+func TestRecoverDiscardKeepsMarkersWhenNothingDiscarded(t *testing.T) {
+	root := t.TempDir()
+	nonce, err := newJournalNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerPath, err := writeRunMarker(nonce, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(markerPath) })
+
+	recovered, err := Recover(root, true)
+	if err != nil {
+		t.Fatalf("discard failed: %v", err)
+	}
+	if recovered != 0 {
+		t.Errorf("discard handled %d transactions, want 0", recovered)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("no-op discard removed an unrelated run marker: %v", err)
+	}
+}
+
+// TestRecoverDiscardKeepsConcurrentRunMarker verifies that discarding one
+// transaction does not sweep the marker of a concurrent run for the same root.
+func TestRecoverDiscardKeepsConcurrentRunMarker(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir, txDirPrefix+"existing")
+	writeTestJournal(t, dir, 1<<30, journalRecord{Op: journalOpCreate, Path: "created.txt"})
+
+	nonce, err := newJournalNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	concurrentMarker, err := writeRunMarker(nonce, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(concurrentMarker) })
+
+	recovered, err := Recover(root, true)
+	if err != nil {
+		t.Fatalf("discard failed: %v", err)
+	}
+	if recovered != 1 {
+		t.Errorf("discard handled %d transactions, want 1", recovered)
+	}
+	if _, err := os.Stat(concurrentMarker); err != nil {
+		t.Errorf("discard removed a concurrent run marker: %v", err)
+	}
+}
+
 // TestRecoverDiscardEmptyJournal verifies the explicit discard path works when
 // the journal cannot be parsed.
 func TestRecoverDiscardEmptyJournal(t *testing.T) {

@@ -486,6 +486,63 @@ func TestNew_SweepDoesNotFollowSymlinkedTmpDir(t *testing.T) {
 	}
 }
 
+// TestNew_SweepRejectsInRootSymlinkedTmpDir verifies the startup sweep also
+// refuses a .scbake/tmp symlink that resolves to the root or an in-root
+// subtree, not only one that escapes the root.
+func TestNew_SweepRejectsInRootSymlinkedTmpDir(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	cases := []struct {
+		name       string
+		target     string
+		victimRoot func(string) string
+	}{
+		{
+			name:   "project root",
+			target: "..",
+			victimRoot: func(root string) string {
+				return root
+			},
+		},
+		{
+			name:   "in-root subtree",
+			target: "../victim",
+			victimRoot: func(root string) string {
+				return filepath.Join(root, "victim")
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			victim := filepath.Join(tt.victimRoot(root), txDirPrefix+"victim")
+			if err := os.MkdirAll(victim, fileutil.DirPerms); err != nil {
+				t.Fatalf("MkdirAll failed: %v", err)
+			}
+			old := time.Now().Add(-2 * staleTransactionThreshold)
+			if err := os.Chtimes(victim, old, old); err != nil {
+				t.Fatalf("Chtimes failed: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Join(root, fileutil.InternalDir), fileutil.DirPerms); err != nil {
+				t.Fatalf("MkdirAll failed: %v", err)
+			}
+			if err := os.Symlink(tt.target, filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir)); err != nil {
+				t.Fatalf("Symlink failed: %v", err)
+			}
+
+			if _, err := New(root); err != nil {
+				t.Fatalf("New failed: %v", err)
+			}
+			if _, err := os.Stat(victim); err != nil {
+				t.Errorf("sweep deleted an in-root tx-* directory through .scbake/tmp: %v", err)
+			}
+		})
+	}
+}
+
 // TestTrack_RejectsSymlinkEscapingRoot is a regression test for SCB-001: Track
 // must not accept a path reached through a symlink that escapes the root.
 func TestTrack_RejectsSymlinkEscapingRoot(t *testing.T) {

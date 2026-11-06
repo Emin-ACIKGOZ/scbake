@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"scbake/internal/util/fileutil"
-	"strings"
 	"sync"
 	"time"
 )
@@ -125,21 +124,26 @@ func NewWithOptions(rootPath string, opts Options) (*Manager, error) {
 	return manager, nil
 }
 
-// resolvedTmpDir returns the symlink-resolved <root>/.scbake/tmp directory, but
-// only when it lies inside the resolved root. ok is false when the directory is
-// missing or resolves outside the root (for example a symlinked .scbake/tmp);
-// the manager must never delete paths outside its root.
+// resolvedTmpDir returns the canonical <root>/.scbake/tmp directory, but only
+// when it is that exact directory. A .scbake/tmp that is a symlink, resolves to
+// the project root, or points anywhere else inside the root is rejected: the
+// manager must never treat unrelated tx-* directories as transactions.
 func resolvedTmpDir(rootPath string) (string, bool) {
 	resolvedRoot, err := filepath.EvalSymlinks(rootPath)
 	if err != nil {
 		return "", false
 	}
-	resolvedTmp, err := filepath.EvalSymlinks(filepath.Join(rootPath, fileutil.InternalDir, fileutil.TmpDir))
+	tmpPath := filepath.Join(rootPath, fileutil.InternalDir, fileutil.TmpDir)
+	info, err := os.Lstat(tmpPath)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", false
+	}
+	resolvedTmp, err := filepath.EvalSymlinks(tmpPath)
 	if err != nil {
 		return "", false
 	}
-	rel, err := filepath.Rel(resolvedRoot, resolvedTmp)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	want := filepath.Join(resolvedRoot, fileutil.InternalDir, fileutil.TmpDir)
+	if !sameRoot(resolvedTmp, want) {
 		return "", false
 	}
 	return resolvedTmp, true
