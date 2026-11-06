@@ -940,9 +940,11 @@ func RecoverWithOptions(rootPath string, opts RecoverOptions) (int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	absRoot, err := filepath.Abs(rootPath)
-	if err != nil {
-		return 0, fmt.Errorf("failed to resolve root path: %w", err)
+	// Resolve the root once so dry-run disclosure and RemoveRoot both name the
+	// real project directory, not an alias symlink.
+	absRoot := canonicalRoot(rootPath)
+	if absRoot == "" {
+		return 0, fmt.Errorf("failed to resolve root path %s", rootPath)
 	}
 
 	if opts.Discard {

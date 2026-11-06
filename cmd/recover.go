@@ -50,6 +50,12 @@ bootstrap project directory as a whole.`,
 		if err != nil {
 			return fmt.Errorf("finding project root: %w", err)
 		}
+		// Resolve the root once so the dry-run disclosure and RemoveRoot both
+		// name the real project directory, not an alias symlink.
+		rootPath, err = filepath.EvalSymlinks(rootPath)
+		if err != nil {
+			return fmt.Errorf("resolving project root: %w", err)
+		}
 
 		if dryRun {
 			pending, err := transaction.ListPendingContext(ctx, rootPath)

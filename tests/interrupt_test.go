@@ -369,6 +369,42 @@ func TestRecoverDryRunShowsRootRemoval(t *testing.T) {
 	}
 }
 
+// TestRecoverDryRunShowsCanonicalRootForSymlink verifies that remove_root
+// disclosure names the real project directory when recover is invoked through
+// an alias symlink.
+func TestRecoverDryRunShowsCanonicalRootForSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	work := t.TempDir()
+	realProject := filepath.Join(work, "real")
+	dir := filepath.Join(realProject, ".scbake", "tmp", "tx-new")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	header := fmt.Sprintf(
+		`{"version":1,"pid":%d,"started":%q,"remove_root":true}`,
+		1<<30,
+		time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+	)
+	if err := os.WriteFile(filepath.Join(dir, "journal.jsonl"), []byte(header+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(work, "alias")
+	if err := os.Symlink(realProject, alias); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := runInDir(t, work, "recover", "--dry-run", "--force", "alias")
+	if err != nil {
+		t.Fatalf("recover --dry-run failed: %v\nOutput: %s", err, output)
+	}
+	if !strings.Contains(output, "entire project root "+realProject) {
+		t.Errorf("recover --dry-run did not name the canonical root: %q", output)
+	}
+}
+
 // writePendingTransactions creates count pending transaction directories, each
 // with entries unique created paths, so recovery has deterministic work to do.
 func writePendingTransactions(t *testing.T, project string, count, entries int) {
