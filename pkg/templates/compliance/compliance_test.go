@@ -282,6 +282,167 @@ func renderDependabot(t *testing.T, m *types.Manifest) string {
 	return string(out)
 }
 
+// dependabotEntry is one parsed item of the generated `updates` list.
+type dependabotEntry struct {
+	ecosystem string
+	directory string
+}
+
+// parseDependabotEntries extracts the entries under `updates:` from a generated
+// dependabot.yml. It intentionally uses line parsing instead of a YAML
+// dependency and fails when the updates section is missing or empty.
+func parseDependabotEntries(t *testing.T, out string) []dependabotEntry {
+	t.Helper()
+
+	entries := parseDependabotEntryLines(dependabotUpdateLines(t, out))
+	if len(entries) == 0 {
+		t.Fatalf("dependabot.yml has an empty `updates` list:\n%s", out)
+	}
+	return entries
+}
+
+// dependabotUpdateLines returns the lines following the top-level `updates:` key.
+func dependabotUpdateLines(t *testing.T, out string) []string {
+	t.Helper()
+
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "updates:" {
+			return lines[i+1:]
+		}
+	}
+	t.Fatalf("dependabot.yml has no `updates:` section:\n%s", out)
+	return nil
+}
+
+// parseDependabotEntryLines parses `- package-ecosystem:` items and their
+// following `directory:` value.
+func parseDependabotEntryLines(lines []string) []dependabotEntry {
+	var entries []dependabotEntry
+	var current *dependabotEntry
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "- package-ecosystem:"):
+			if current != nil {
+				entries = append(entries, *current)
+			}
+			current = &dependabotEntry{
+				ecosystem: unquoteYAMLValue(strings.TrimSpace(strings.TrimPrefix(trimmed, "- package-ecosystem:"))),
+			}
+		case strings.HasPrefix(trimmed, "directory:") && current != nil:
+			current.directory = unquoteYAMLValue(strings.TrimSpace(strings.TrimPrefix(trimmed, "directory:")))
+		}
+	}
+	if current != nil {
+		entries = append(entries, *current)
+	}
+	return entries
+}
+
+// unquoteYAMLValue strips the double quotes the template applies to scalars.
+func unquoteYAMLValue(v string) string {
+	return strings.Trim(v, `"`)
+}
+
+// countDependabotEcosystems groups entries by ecosystem and returns the
+// github-actions subset separately.
+func countDependabotEcosystems(entries []dependabotEntry) (map[string]int, []dependabotEntry) {
+	counts := make(map[string]int, len(entries))
+	var githubActions []dependabotEntry
+	for _, entry := range entries {
+		counts[entry.ecosystem]++
+		if entry.ecosystem == "github-actions" {
+			githubActions = append(githubActions, entry)
+		}
+	}
+	return counts, githubActions
+}
+
+// assertDependabotUpdateCounts verifies per-ecosystem counts, the total number
+// of entries, and the single github-actions entry.
+func assertDependabotUpdateCounts(t *testing.T, out string, entries []dependabotEntry, want map[string]int) {
+	t.Helper()
+
+	counts, githubActions := countDependabotEcosystems(entries)
+
+	wantTotal := 1 // github-actions is always present exactly once.
+	for ecosystem, n := range want {
+		if got := counts[ecosystem]; got != n {
+			t.Errorf("%s entries = %d, want %d:\n%s", ecosystem, got, n, out)
+		}
+		wantTotal += n
+	}
+	if len(entries) != wantTotal {
+		t.Errorf("total updates entries = %d, want %d:\n%s", len(entries), wantTotal, out)
+	}
+	if len(githubActions) != 1 {
+		t.Fatalf("github-actions entries = %d, want exactly 1:\n%s", len(githubActions), out)
+	}
+	if githubActions[0].directory != "/" {
+		t.Errorf("github-actions directory = %q, want %q:\n%s", githubActions[0].directory, "/", out)
+	}
+}
+
+// TestDependabot_EcosystemCoverage is a regression test for issue #153: the
+// generated updates list must never be null/empty, must include one
+// github-actions entry with `directory: "/"`, and must map languages to
+// gomod/npm/maven as appropriate.
+func TestDependabot_EcosystemCoverage(t *testing.T) {
+	tests := []struct {
+		name     string
+		projects []types.Project
+		want     map[string]int
+	}{
+		{
+			name: "no projects",
+			want: map[string]int{"gomod": 0, "npm": 0, "maven": 0},
+		},
+		{
+			name:     "go",
+			projects: []types.Project{{Name: "api", Path: "services/api", Language: "go"}},
+			want:     map[string]int{"gomod": 1, "npm": 0, "maven": 0},
+		},
+		{
+			name:     "svelte",
+			projects: []types.Project{{Name: "web", Path: "web", Language: "svelte"}},
+			want:     map[string]int{"gomod": 0, "npm": 1, "maven": 0},
+		},
+		{
+			name:     "spring",
+			projects: []types.Project{{Name: "service", Path: "service", Language: "spring"}},
+			want:     map[string]int{"gomod": 0, "npm": 0, "maven": 1},
+		},
+		{
+			name: "mixed",
+			projects: []types.Project{
+				{Name: "api", Path: "services/api", Language: "go"},
+				{Name: "web", Path: "web", Language: "svelte"},
+				{Name: "service", Path: "service", Language: "spring"},
+			},
+			want: map[string]int{"gomod": 1, "npm": 1, "maven": 1},
+		},
+		{
+			// Regression for the review finding: these substrings belong to a
+			// quoted directory value, not to the top-level updates key.
+			name: "path containing updates null",
+			projects: []types.Project{
+				{Name: "api", Path: "services/updates: null", Language: "go"},
+				{Name: "web", Path: "web/updates: []", Language: "svelte"},
+			},
+			want: map[string]int{"gomod": 1, "npm": 1, "maven": 0},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := renderDependabot(t, &types.Manifest{Projects: tt.projects})
+			entries := parseDependabotEntries(t, out)
+			assertDependabotUpdateCounts(t, out, entries, tt.want)
+		})
+	}
+}
+
 // TestDependabot_BenignProjectRendersUnchanged pins the benign rendering.
 func TestDependabot_BenignProjectRendersUnchanged(t *testing.T) {
 	m := &types.Manifest{
