@@ -727,7 +727,9 @@ func CheckLangPrerequisites(langFlag string) error {
 	case "svelte":
 		return preflight.CheckBinaries("npm")
 	case "spring":
-		return preflight.CheckBinaries("curl", "unzip", "java")
+		// Scaffolding only downloads and unpacks the starter archive. Java is
+		// needed later to build the generated project, not to create it.
+		return preflight.CheckBinaries("curl", "unzip")
 	}
 	return nil
 }

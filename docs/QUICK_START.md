@@ -103,8 +103,10 @@ git log  # Already has initial commit!
 | Language | Use case | Requires |
 |----------|----------|----------|
 | **go** | Backend, CLI, services | `go` binary |
-| **spring** | Java backends, services | `curl`, `unzip`, `java` |
+| **spring** | Java backends, services | `curl`, `unzip` |
 | **svelte** | Frontends, web apps | `npm` |
+
+**Note:** Spring scaffolding only requires `curl` and `unzip`. Java is required later to build the generated project, not to create it.
 
 ## Available Templates
 
