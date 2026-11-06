@@ -13,6 +13,7 @@ import (
 	"scbake/internal/types"
 	"scbake/internal/ui"
 	"scbake/internal/util/fileutil"
+	"strings"
 	"testing"
 )
 
@@ -524,6 +525,63 @@ func TestBuildTaskContextInheritsCancellation(t *testing.T) {
 
 	if !errors.Is(tc.Ctx.Err(), context.Canceled) {
 		t.Errorf("task context error = %v, want context.Canceled", tc.Ctx.Err())
+	}
+}
+
+// manifestSnapshotTask records whether the manifest on disk already contains
+// the pending change when the version-control band starts.
+type manifestSnapshotTask struct {
+	t            *testing.T
+	manifestPath string
+	want         string
+}
+
+func (s *manifestSnapshotTask) Description() string { return "snapshot manifest" }
+func (s *manifestSnapshotTask) Priority() int       { return int(types.PrioVersionControl) }
+func (s *manifestSnapshotTask) Execute(types.TaskContext) error {
+	data, err := os.ReadFile(s.manifestPath) //nolint:gosec // test-controlled path
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(string(data), s.want) {
+		s.t.Errorf("manifest at version-control time = %q, want it to contain %q", data, s.want)
+	}
+	return nil
+}
+
+// TestExecuteAndFinalizePersistsManifestBeforeVersionControl verifies that the
+// finalized manifest is written before Git-style tasks run, so their initial
+// commit captures the complete project instead of leaving a dirty tree.
+func TestExecuteAndFinalizePersistsManifestBeforeVersionControl(t *testing.T) {
+	rootDir := t.TempDir()
+	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
+	if err := os.WriteFile(manifestPath, nil, fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := transaction.New(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	plan := &types.Plan{Tasks: []types.Task{
+		&MockTask{Name: "low priority", Prio: int(types.PrioLangSetup)},
+		&manifestSnapshotTask{t: t, manifestPath: manifestPath, want: "snapshot-project"},
+	}}
+
+	m, rootPath, err := manifest.Load(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := &manifestChanges{
+		Projects: []types.Project{{Name: "snapshot-project", Path: "."}},
+	}
+	tc := types.TaskContext{Ctx: context.Background(), TargetPath: rootDir, Manifest: m, Tx: tx}
+	reporter := ui.NewPlainReporter(3, false)
+
+	if err := executeAndFinalize(reporter, plan, tc, m, changes, rootPath, tx); err != nil {
+		t.Fatalf("executeAndFinalize failed: %v", err)
 	}
 }
 

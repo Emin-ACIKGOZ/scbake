@@ -316,18 +316,20 @@ func executeAndFinalize(
 	tx *transaction.Manager,
 ) error {
 	reporter.Step("🚀", "Executing plan...")
-	if err := Execute(plan, tc, reporter); err != nil {
-		return err
-	}
+	// Persist the manifest before the version-control band so the initial Git
+	// commit captures the final manifest instead of leaving the repository
+	// dirty. Version-control tasks are explicitly last, so nothing after them
+	// changes tracked files.
+	if err := executePlan(plan, tc, reporter, int(types.PrioVersionControl), func() error {
+		// A signal can arrive after the last task returns. Do not persist or
+		// commit a run that was canceled while it still had work left.
+		if err := contextError(tc.Ctx); err != nil {
+			return fmt.Errorf("execution interrupted before updating manifest: %w", err)
+		}
 
-	// A signal can arrive after the last task returns. Do not persist or commit
-	// a run that was canceled while it still had work left to finalize.
-	if err := contextError(tc.Ctx); err != nil {
-		return fmt.Errorf("execution interrupted before updating manifest: %w", err)
-	}
-
-	reporter.Step("✍️", "Updating manifest...")
-	if err := persistManifestState(m, tc, changes, rootPath, tx); err != nil {
+		reporter.Step("✍️", "Updating manifest...")
+		return persistManifestState(m, tc, changes, rootPath, tx)
+	}); err != nil {
 		return err
 	}
 
