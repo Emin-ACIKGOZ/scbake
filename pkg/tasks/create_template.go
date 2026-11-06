@@ -224,11 +224,12 @@ func checkFilePreconditions(tc types.TaskContext, output, target string) (string
 }
 
 // maybeAppendInternalStateIgnore adds the persistent .scbake entry only when
-// the managed output is the manifest-root .gitignore. The ledger key is
-// root-relative, so a subproject's target-relative ".gitignore" is keyed like
-// "sub/.gitignore" and must not inherit the root's state entry.
-func maybeAppendInternalStateIgnore(outputRelPath, ledgerKey string, content []byte) []byte {
-	if filepath.ToSlash(outputRelPath) != fileutil.GitIgnore || ledgerKey != fileutil.GitIgnore {
+// the managed output's ledger key is the manifest-root .gitignore. The key is
+// root-relative, so equivalent paths normalize to ".gitignore", while a
+// subproject's ".gitignore" is keyed like "sub/.gitignore" and must not
+// inherit the root's state entry.
+func maybeAppendInternalStateIgnore(ledgerKey string, content []byte) []byte {
+	if ledgerKey != fileutil.GitIgnore {
 		return content
 	}
 	return appendInternalStateIgnore(content)
@@ -245,7 +246,7 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 
 	// Make the ignore entry part of the managed render before hashing so the
 	// ledger and base shadow match what is actually written.
-	content = maybeAppendInternalStateIgnore(outputRelPath, ledgerKey, content)
+	content = maybeAppendInternalStateIgnore(ledgerKey, content)
 
 	newHash := HashContent(content)
 
@@ -417,14 +418,17 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 		return nil
 	}
 
+	relPath := fileutil.GitIgnore
+
 	// A managed root .gitignore already carries the entry in its render (see
 	// WriteManagedFile). Mutating it out-of-band here would leave the recorded
 	// hash and base shadow stale, turning scbake's own append into user drift.
-	if tc.Manifest != nil && tc.Manifest.ManagedFiles[fileutil.GitIgnore] != "" {
+	// Verify it still provides the guarantee, but leave repair to apply/update.
+	if tc.Manifest != nil && tc.Manifest.ManagedFiles[relPath] != "" {
+		checkManagedGitignore(root, relPath)
 		return nil
 	}
 
-	relPath := fileutil.GitIgnore
 	absPath, err := fileutil.SafePath(root, relPath)
 	if err != nil {
 		warnInternalStateIgnore(relPath, err)
@@ -440,11 +444,33 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 		return nil
 	}
 
-	if err := applyInternalStateIgnore(tc, root, relPath, absPath, existing); err != nil {
-		warnInternalStateIgnore(relPath, err)
-		return nil
+	return applyInternalStateIgnore(tc, root, relPath, absPath, existing)
+}
+
+// checkManagedGitignore warns when a managed root .gitignore no longer exists or
+// no longer ignores the internal state directory. It never mutates the file:
+// the managed render owns the ledger and base shadow, so the fix is a normal
+// apply/update that regenerates it.
+func checkManagedGitignore(root, relPath string) {
+	existing, err := readRootGitignore(root, relPath)
+	if err != nil {
+		warnManagedGitignoreStale(relPath, "cannot be read: "+err.Error())
+		return
 	}
-	return nil
+	if gitignoreIgnoresInternalState(existing) {
+		return
+	}
+	warnManagedGitignoreStale(relPath, "is missing or does not ignore "+fileutil.InternalDir+"/")
+}
+
+// warnManagedGitignoreStale reports a managed .gitignore that no longer
+// provides the internal-state ignore guarantee.
+func warnManagedGitignoreStale(relPath, detail string) {
+	fmt.Fprintf(
+		os.Stderr,
+		"⚠️  Managed %s %s; regenerate it with 'scbake apply' or 'scbake update'.\n",
+		relPath, detail,
+	)
 }
 
 // readRootGitignore returns the root .gitignore content. A missing file is not
@@ -462,10 +488,13 @@ func readRootGitignore(root, relPath string) ([]byte, error) {
 
 // applyInternalStateIgnore appends the ignore entry through the transaction.
 // It checks writability first so an existing read-only file does not get a
-// backup that cannot be restored.
+// backup that cannot be restored. Pre-write failures are best-effort and only
+// warn; write failures propagate so the caller's transaction rolls back the
+// possibly truncated file.
 func applyInternalStateIgnore(tc types.TaskContext, root, relPath, absPath string, existing []byte) error {
 	if err := checkIgnoredFileWritable(root, relPath); err != nil {
-		return err
+		warnInternalStateIgnore(relPath, err)
+		return nil
 	}
 	return trackAndWrite(tc, absPath, appendInternalStateIgnore(existing), fileutil.FilePerms)
 }
