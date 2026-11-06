@@ -102,7 +102,7 @@ func TestRunNew_ChecksToolsBeforeCreatingDirectory(t *testing.T) {
 	newLangFlag = "go"
 
 	created := false
-	if err := runNew(project, &created); err == nil {
+	if err := runNew(context.Background(), project, &created); err == nil {
 		t.Fatalf("runNew(%q) = nil, want an error for missing go", project)
 	}
 	if created {
@@ -132,7 +132,7 @@ func TestRunNew_DryRunWarnsOnMissingTool(t *testing.T) {
 	var stderr string
 	stdout := captureStdout(t, func() {
 		stderr = captureStderr(t, func() {
-			runErr = runNew(project, &created)
+			runErr = runNew(context.Background(), project, &created)
 		})
 	})
 	if runErr != nil {
