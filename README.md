@@ -273,11 +273,12 @@ scbake recover [--discard] [--force] [<path>]
 | `--discard` | Delete the transaction without restoring backups | `false` |
 | `--force`   | Replay a journal that has no local run marker    | `false` |
 
-Recovery refuses to touch a transaction whose process is still running. On
-platforms that cannot prove the PID belongs to the recorded process incarnation
-(macOS and Windows), a PID match only counts as alive for an hour. After that
-the owner's state is unknown, not dead: recovery refuses to replay the journal
-until `--force` or `--discard` is passed explicitly, because a suspended or
+Recovery refuses to touch a transaction whose process is still running, even
+with `--discard`. On platforms that cannot prove the PID belongs to the
+recorded process incarnation (macOS and Windows), a PID match only counts as
+alive for an hour. After that the owner's state is unknown, not dead: recovery
+refuses to replay the journal until `--force` is passed explicitly, while
+`--discard` remains available to clear the transaction. A suspended or
 long-running process may still be writing its files. Each local run also writes
 a marker outside the project, so a journal copied through Git or another
 checkout is not replayed automatically; use `--force` only after inspecting that

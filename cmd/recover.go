@@ -60,7 +60,7 @@ bootstrap project directory as a whole.`,
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				if tx.Alive && (!recoverDiscardFlag || tx.LivenessVerifiable) {
+				if tx.Alive {
 					return fmt.Errorf("transaction in %s is still running (pid %d)", tx.Dir, tx.PID)
 				}
 				if tx.LivenessUnknown && !recoverDiscardFlag && !force {

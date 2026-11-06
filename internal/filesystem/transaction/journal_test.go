@@ -399,34 +399,26 @@ func TestRecoverRefusesLiveTransaction(t *testing.T) {
 	if _, err := Recover(root, false); err == nil {
 		t.Fatal("Recover touched a transaction owned by a live process")
 	}
-	// Discard is refused only when the platform can prove the live PID is the
-	// recorded incarnation. Where it cannot, --discard is the explicit escape
-	// hatch and is covered by TestRecoverDiscardWhenLivenessUnverified.
-	journal, err := readTransactionJournal(tx.tempDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if journalOwnerVerifiablyAlive(journal) {
-		if _, err := Recover(root, true); err == nil {
-			t.Fatal("Recover --discard touched a transaction owned by a live process")
-		}
+	if _, err := Recover(root, true); err == nil {
+		t.Fatal("Recover --discard touched a transaction owned by a live process")
 	}
 	if _, err := os.Stat(created); err != nil {
 		t.Errorf("live transaction path was modified: %v", err)
 	}
 }
 
-// TestRecoverDiscardWhenLivenessUnverified verifies that --discard can clear a
-// transaction whose owner PID appears alive but whose incarnation cannot be
-// verified. This is the escape hatch for PID-reuse false positives.
+// TestRecoverDiscardRefusesLiveThenAllowsUnknown verifies that --discard
+// refuses a transaction whose owner is alive even when its incarnation cannot
+// be verified, and remains available once the owner's state becomes unknown.
 //
-//nolint:cyclop // The test builds a transaction, checks its liveness, and verifies discard.
-func TestRecoverDiscardWhenLivenessUnverified(t *testing.T) {
+//nolint:cyclop // The test checks the refusal, the unknown state, and the discard escape hatch.
+func TestRecoverDiscardRefusesLiveThenAllowsUnknown(t *testing.T) {
 	root := t.TempDir()
 	tx, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	cleanupManagerMarker(t, tx)
 
 	created := filepath.Join(root, "created.txt")
 	if err := tx.Track(created); err != nil {
@@ -446,10 +438,26 @@ func TestRecoverDiscardWhenLivenessUnverified(t *testing.T) {
 	if len(pending) != 1 || !pending[0].Alive {
 		t.Fatalf("pending = %+v, want one Alive transaction", pending)
 	}
+	if _, err := RecoverWithOptions(root, RecoverOptions{Discard: true}); err == nil {
+		t.Fatal("discard removed a transaction with a live owner")
+	}
+	if _, err := os.Stat(created); err != nil {
+		t.Errorf("refused discard removed user-visible path %s: %v", created, err)
+	}
 
+	// Once the PID-only evidence is too old, liveness is unknown and the
+	// explicit discard escape hatch applies.
+	setTestJournalStarted(t, tx.tempDir, time.Now().Add(-2*unverifiedLivenessWindow))
+	pending, err = ListPending(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Alive || !pending[0].LivenessUnknown {
+		t.Fatalf("pending = %+v, want one unknown-liveness transaction", pending)
+	}
 	recovered, err := RecoverWithOptions(root, RecoverOptions{Discard: true})
 	if err != nil {
-		t.Fatalf("discard refused an unverifiable liveness check: %v", err)
+		t.Fatalf("discard refused an unknown-liveness transaction: %v", err)
 	}
 	if recovered != 1 {
 		t.Errorf("discard handled %d transactions, want 1", recovered)

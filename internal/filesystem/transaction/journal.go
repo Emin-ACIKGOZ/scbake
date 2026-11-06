@@ -124,9 +124,6 @@ type PendingTransaction struct {
 	// RemoveRoot reports that replaying this journal removes the whole project
 	// root, not just tracked paths.
 	RemoveRoot bool
-	// LivenessVerifiable reports whether Alive came from a process start-token
-	// comparison rather than a PID-only fallback.
-	LivenessVerifiable bool
 }
 
 // RecoverOptions controls how Recover handles pending transactions.
@@ -559,16 +556,6 @@ func journalOwnerLiveness(journal *transactionJournal, now time.Time) journalLiv
 	return journalAlive
 }
 
-// journalOwnerVerifiablyAlive reports a live owner only when the platform can
-// prove the PID is the same process incarnation. Callers use it to decide
-// whether an explicit --discard should still be refused.
-func journalOwnerVerifiablyAlive(journal *transactionJournal) bool {
-	if !processStartTokensAvailable || journal.OwnerStart == "" {
-		return false
-	}
-	return processAlive(journal.PID, journal.OwnerStart)
-}
-
 // removeJournalMarker deletes the marker for a transaction recovered from its
 // journal.
 func removeJournalMarker(journal *transactionJournal, rootPath string) {
@@ -906,14 +893,13 @@ func ListPendingContext(ctx context.Context, rootPath string) ([]PendingTransact
 
 		liveness := journalOwnerLiveness(journal, time.Now().UTC())
 		pending = append(pending, PendingTransaction{
-			Dir:                dir,
-			PID:                journal.PID,
-			OwnerStart:         journal.OwnerStart,
-			Alive:              liveness == journalAlive,
-			LivenessUnknown:    liveness == journalUnknown,
-			Trusted:            journalTrusted(journal, rootPath),
-			RemoveRoot:         journal.RemoveRoot,
-			LivenessVerifiable: processStartTokensAvailable && journal.OwnerStart != "",
+			Dir:             dir,
+			PID:             journal.PID,
+			OwnerStart:      journal.OwnerStart,
+			Alive:           liveness == journalAlive,
+			LivenessUnknown: liveness == journalUnknown,
+			Trusted:         journalTrusted(journal, rootPath),
+			RemoveRoot:      journal.RemoveRoot,
 		})
 	}
 
@@ -1061,7 +1047,10 @@ func checkDiscardableTransactions(ctx context.Context, dirs []string) error {
 			return err
 		}
 		journal, err := readTransactionJournal(dir)
-		if err != nil || journal.Committed || !journalOwnerVerifiablyAlive(journal) {
+		if err != nil || journal.Committed {
+			continue
+		}
+		if journalOwnerLiveness(journal, time.Now().UTC()) != journalAlive {
 			continue
 		}
 		return fmt.Errorf("transaction in %s is still running (pid %d)", dir, journal.PID)
