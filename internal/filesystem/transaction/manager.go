@@ -148,11 +148,13 @@ func (m *Manager) Commit() error {
 	if m.committed {
 		return nil
 	}
-	m.committed = true
 
 	// If tempDir was never created, there is nothing to clean up.
 	if m.tempDir != "" {
-		// Remove the temp directory and all backed-up files.
+		// Remove the temp directory and all backed-up files. On failure the
+		// transaction stays uncommitted so a trailing Rollback can still restore
+		// the tracked files; the caller sees the error and must not treat the
+		// changes as permanent.
 		if err := os.RemoveAll(m.tempDir); err != nil {
 			return fmt.Errorf("failed to cleanup transaction temp dir: %w", err)
 		}
@@ -161,7 +163,9 @@ func (m *Manager) Commit() error {
 		m.cleanupStructure()
 	}
 
-	// Reset internal state so a trailing Rollback cannot undo committed changes.
+	// Mark committed only after cleanup succeeded, then reset internal state so a
+	// trailing Rollback cannot undo committed changes.
+	m.committed = true
 	m.resetState()
 
 	return nil
