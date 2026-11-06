@@ -77,11 +77,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest now points at macOS 26 (Tahoe), where the Go linker
-        # emits Mach-O test binaries without the LC_UUID load command, so dyld
-        # aborts them at launch. This is not a race-detector issue. Pin to
-        # macos-14 (macOS 14) until the toolchain/runner image is fixed. See #12.
-        os: [ubuntu-latest, macos-14, windows-latest]
+        # Pin the macOS image explicitly. macos-14 was retired on 2026-11-02.
+        # macos-26 is the current stable arm64 image. Go 1.24+ emits LC_UUID
+        # by default, so the macOS 26 dyld issue from #12 does not affect the
+        # Go 1.26/1.27 matrix.
+        os: [ubuntu-latest, macos-26, windows-latest]
         go-version: ["1.26.x", "1.27.x"]
 
     steps:
