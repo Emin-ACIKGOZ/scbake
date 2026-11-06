@@ -131,3 +131,28 @@ func TestMakefile_ProjectNameCannotInject(t *testing.T) {
 		t.Errorf("expected the name to be rendered as an escaped scalar:\n%s", out)
 	}
 }
+
+// TestMakefile_TestTargetRunsEachProject is a regression guard: without a
+// test_command override, the test target must run each project's test command
+// (like build, clean and lint) instead of a single root `go test ./...`.
+func TestMakefile_TestTargetRunsEachProject(t *testing.T) {
+	m := &types.Manifest{
+		Projects: []types.Project{
+			{Name: "backend", Path: "backend", Language: "go"},
+			{Name: "api", Path: "api", Language: "go"},
+		},
+	}
+	out := renderMakefile(t, m)
+
+	for _, want := range []string{
+		"(cd backend && $(MAKE_TEST_COMMAND_go))",
+		"(cd api && $(MAKE_TEST_COMMAND_go))",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("test target missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "\n\tgo test ./...") {
+		t.Errorf("test target still runs a root go test ./...:\n%s", out)
+	}
+}

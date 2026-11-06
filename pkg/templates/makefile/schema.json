@@ -10,7 +10,6 @@
     "test_command": {
       "type": "string",
       "required": false,
-      "default": "go test ./...",
       "description": "Command to run tests"
     }
   }
