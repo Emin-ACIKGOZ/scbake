@@ -556,7 +556,8 @@ func TestRecoverDiscardRemovesTransaction(t *testing.T) {
 }
 
 // TestJournalRejectsMalformedTransaction verifies recovery fails closed on a
-// corrupted journal instead of deleting unknown paths.
+// corrupted journal instead of deleting unknown paths, and that an explicit
+// discard still removes its run marker.
 func TestJournalRejectsMalformedTransaction(t *testing.T) {
 	root := t.TempDir()
 	tx, err := New(root)
@@ -567,9 +568,21 @@ func TestJournalRejectsMalformedTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	markJournalOwnerDead(t, tx.tempDir, 1<<30)
+	markerPath := tx.markerPath
+	if markerPath == "" {
+		t.Fatal("transaction did not create a run marker")
+	}
 
 	path := filepath.Join(tx.tempDir, journalFileName)
-	if err := os.WriteFile(path, []byte("not json\n"), fileutil.PrivateFilePerms); err != nil {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, fileutil.PrivateFilePerms) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("not json\n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -582,11 +595,17 @@ func TestJournalRejectsMalformedTransaction(t *testing.T) {
 	if _, err := os.Stat(tx.tempDir); err != nil {
 		t.Errorf("malformed journal directory was removed: %v", err)
 	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("refused recovery removed the run marker: %v", err)
+	}
 	if _, err := Recover(root, true); err != nil {
 		t.Fatalf("discard failed for a malformed journal: %v", err)
 	}
 	if _, err := os.Stat(tx.tempDir); !os.IsNotExist(err) {
 		t.Errorf("discard left a malformed journal directory: %v", err)
+	}
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Errorf("discard left the run marker for a malformed journal: %v", err)
 	}
 }
 

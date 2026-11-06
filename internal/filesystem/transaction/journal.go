@@ -662,6 +662,42 @@ func openTransactionJournal(dir string) (*os.File, error) {
 	return f, nil
 }
 
+// readTransactionJournalHeader parses just the header line. Discard uses it to
+// remove the run marker even when the rest of the journal is malformed, without
+// trusting or replaying any body entries.
+func readTransactionJournalHeader(dir string) (*transactionJournal, error) {
+	f, err := openTransactionJournal(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	reader := bufio.NewReader(f)
+	for {
+		rawLine, readErr := reader.ReadString('\n')
+		if len(rawLine) > maxJournalLineBytes {
+			return nil, fmt.Errorf(
+				"transaction journal %s has a line longer than %d bytes",
+				dir, maxJournalLineBytes,
+			)
+		}
+		line := bytes.TrimSpace([]byte(rawLine))
+		if len(line) > 0 {
+			journal := &transactionJournal{}
+			if err := journal.readHeader(line, dir); err != nil {
+				return nil, err
+			}
+			return journal, nil
+		}
+		if readErr == io.EOF {
+			return nil, fmt.Errorf("transaction journal %s is empty", dir)
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("failed to read transaction journal %s: %w", dir, readErr)
+		}
+	}
+}
+
 // readLine consumes one physical line. It reports done when the reader reached
 // EOF. A torn final record is ignored only when it is unterminated and invalid
 // JSON: the mutation it describes never started because the append failed.
@@ -930,11 +966,20 @@ func discardTransactions(ctx context.Context, rootPath string) (int, error) {
 			return i, err
 		}
 		journal, journalErr := readTransactionJournal(dir)
+		var header *transactionJournal
+		if journalErr != nil {
+			// The body may be malformed while the header still names the run
+			// marker. Read it independently so --discard does not leak markers.
+			header, _ = readTransactionJournalHeader(dir)
+		}
 		if err := os.RemoveAll(dir); err != nil {
 			return i, fmt.Errorf("failed to discard transaction %s: %w", dir, err)
 		}
-		if journalErr == nil {
+		switch {
+		case journalErr == nil:
 			removeJournalMarker(journal, rootPath)
+		case header != nil:
+			removeJournalMarker(header, rootPath)
 		}
 	}
 
