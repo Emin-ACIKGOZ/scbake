@@ -328,17 +328,28 @@ func runMarkerDir(rootPath string, create bool) (string, error) {
 
 	dir := filepath.Join(base, runMarkerDirPrefix+currentUserToken())
 	if create {
-		if err := os.MkdirAll(dir, runMarkerDirPerms); err != nil {
+		// Use Mkdir rather than MkdirAll: base is an existing resolved
+		// directory, and Mkdir refuses to traverse a symlink planted at dir.
+		if err := os.Mkdir(dir, runMarkerDirPerms); err != nil && !os.IsExist(err) {
 			return "", fmt.Errorf("failed to create run marker directory: %w", err)
 		}
-		// MkdirAll keeps the mode of an existing directory, so set it
-		// explicitly. Ownership is still verified below before it is trusted.
-		_ = os.Chmod(dir, runMarkerDirPerms)
 	}
 
 	info, err := os.Lstat(dir)
 	if err != nil {
 		return "", err
+	}
+	if !markerDirTrusted(info) {
+		// Repair the mode only after confirming the entry is a real directory
+		// owned by this user. Never chmod a symlink or another user's path.
+		if info.IsDir() && info.Mode()&os.ModeSymlink == 0 && markerOwnerTrusted(info) {
+			if err := os.Chmod(dir, runMarkerDirPerms); err != nil {
+				return "", fmt.Errorf("failed to secure run marker directory: %w", err)
+			}
+			if info, err = os.Lstat(dir); err != nil {
+				return "", err
+			}
+		}
 	}
 	if !markerDirTrusted(info) {
 		return "", fmt.Errorf("refusing untrusted run marker directory %s", dir)

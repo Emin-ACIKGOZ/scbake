@@ -55,6 +55,37 @@ func TestJournalTrustedRejectsFIFOMarker(t *testing.T) {
 	}
 }
 
+// TestRunMarkerDirRejectsSymlink verifies that a symlink planted at the marker
+// directory path is rejected without chmodding its target.
+func TestRunMarkerDirRejectsSymlink(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("TMPDIR", base)
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(base, runMarkerDirPrefix+currentUserToken())
+	if err := os.Symlink(target, dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runMarkerDir(root, true); err == nil {
+		t.Fatal("runMarkerDir accepted a symlinked marker directory")
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("marker directory symlink changed target mode to %o, want 755", info.Mode().Perm())
+	}
+}
+
 // TestReadJournalRejectsFIFO verifies that a FIFO at the journal path is
 // rejected before it is opened, so a read-only command cannot block on it.
 func TestReadJournalRejectsFIFO(t *testing.T) {
