@@ -44,12 +44,6 @@ directory as a whole.`,
 		if err != nil {
 			return fmt.Errorf("finding project root: %w", err)
 		}
-		// Resolve the root once so dry-run disclosure and RemoveRoot both name
-		// the real project directory, not an alias symlink.
-		rootPath, err = transaction.CanonicalRoot(rootPath)
-		if err != nil {
-			return fmt.Errorf("resolving project root: %w", err)
-		}
 
 		if dryRun {
 			pending, err := transaction.ListPendingContext(ctx, rootPath)
