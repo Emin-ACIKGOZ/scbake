@@ -5,8 +5,10 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"text/template"
 
 	"scbake/internal/manifest"
 	"scbake/internal/types"
@@ -67,5 +69,56 @@ func TestArchitectureManifestExample(t *testing.T) {
 		if !tc.present {
 			t.Errorf("example should show at least one %s", tc.name)
 		}
+	}
+}
+
+// TestRustHandlerExampleTemplates keeps the documented Rust handler templates
+// renderable. It executes them against a real manifest so an invalid pipeline
+// (like the `index .Projects 0 | .Name` form fixed in issue #167) fails here
+// instead of at `scbake new` time.
+func TestRustHandlerExampleTemplates(t *testing.T) {
+	const templateDir = "docs/examples/rust-handler/templates"
+
+	manifest := &types.Manifest{
+		Projects: []types.Project{{
+			Name:     "my-app",
+			Path:     ".",
+			Language: "rust",
+		}},
+	}
+	projectName := manifest.Projects[0].Name
+
+	for _, tc := range []struct {
+		file string
+		want string
+	}{
+		{"Cargo.toml.tpl", `name = "` + projectName + `"`},
+		{"main.rs.tpl", "Hello from " + projectName},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			path := filepath.Join(templateDir, tc.file)
+			raw, err := os.ReadFile(path) //nolint:gosec // test reads fixed repository documentation paths
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+
+			tpl, err := template.New(tc.file).Parse(string(raw))
+			if err != nil {
+				t.Fatalf("parse %s: %v", path, err)
+			}
+
+			var out strings.Builder
+			if err := tpl.Execute(&out, manifest); err != nil {
+				t.Fatalf("render %s: %v; the documented template must execute against a real manifest", path, err)
+			}
+
+			got := out.String()
+			if !strings.Contains(got, projectName) {
+				t.Errorf("rendered %s does not contain project name %q:\n%s", path, projectName, got)
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("rendered %s does not contain %q:\n%s", path, tc.want, got)
+			}
+		})
 	}
 }
