@@ -121,6 +121,9 @@ type PendingTransaction struct {
 	Alive           bool
 	LivenessUnknown bool
 	Trusted         bool
+	// RemoveRoot reports that replaying this journal removes the whole project
+	// root, not just tracked paths.
+	RemoveRoot bool
 	// LivenessVerifiable reports whether Alive came from a process start-token
 	// comparison rather than a PID-only fallback.
 	LivenessVerifiable bool
@@ -846,6 +849,7 @@ func ListPendingContext(ctx context.Context, rootPath string) ([]PendingTransact
 			Alive:              liveness == journalAlive,
 			LivenessUnknown:    liveness == journalUnknown,
 			Trusted:            journalTrusted(journal, rootPath),
+			RemoveRoot:         journal.RemoveRoot,
 			LivenessVerifiable: processStartTokensAvailable && journal.OwnerStart != "",
 		})
 	}
@@ -911,15 +915,23 @@ func RecoverWithOptions(rootPath string, opts RecoverOptions) (int, error) {
 			return 0, fmt.Errorf("transaction in %s is still running (pid %d)", p.Dir, p.PID)
 		}
 		if p.LivenessUnknown && !opts.Force {
+			detail := ""
+			if p.RemoveRoot {
+				detail = " and replaying it would remove the entire project root"
+			}
 			return 0, fmt.Errorf(
-				"transaction in %s may still be running (pid %d); its liveness cannot be verified: rerun with --force to replay it or --discard to remove it",
-				p.Dir, p.PID,
+				"transaction in %s may still be running (pid %d); its liveness cannot be verified%s: rerun with --force to replay it or --discard to remove it",
+				p.Dir, p.PID, detail,
 			)
 		}
 		if !p.Trusted && !opts.Force {
+			detail := ""
+			if p.RemoveRoot {
+				detail = "; replaying it would remove the entire project root"
+			}
 			return 0, fmt.Errorf(
-				"transaction in %s has no local run marker; it may belong to another checkout: rerun with --force to replay it or --discard to remove it",
-				p.Dir,
+				"transaction in %s has no local run marker; it may belong to another checkout%s: rerun with --force to replay it or --discard to remove it",
+				p.Dir, detail,
 			)
 		}
 	}

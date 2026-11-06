@@ -334,8 +334,9 @@ func TestRecoverDoesNotRemoveRootWithoutLocalMarker(t *testing.T) {
 	removeTestJournalMarker(t, dir)
 
 	if _, err := Recover(root, false); err == nil ||
-		!strings.Contains(err.Error(), "no local run marker") {
-		t.Fatalf("Recover error = %v, want a missing-marker refusal", err)
+		!strings.Contains(err.Error(), "no local run marker") ||
+		!strings.Contains(err.Error(), "entire project root") {
+		t.Fatalf("Recover error = %v, want a missing-marker refusal that names root removal", err)
 	}
 	if _, err := os.Stat(keep); err != nil {
 		t.Errorf("untrusted recovery deleted project content: %v", err)

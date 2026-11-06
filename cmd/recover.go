@@ -24,8 +24,10 @@ run created.
 Recovery refuses to touch a transaction whose process is still running. A
 journal without a matching local run marker may have arrived through a
 checkout or a copy; pass --force to replay it anyway, or --discard to delete
-the transaction directory without restoring its backups. Recovering an
-interrupted 'new' removes the bootstrap project directory as a whole.`,
+the transaction directory without restoring its backups. Inspect an untrusted
+journal before using --force: replaying one that marks remove_root deletes the
+entire project directory. Recovering an interrupted 'new' removes the
+bootstrap project directory as a whole.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -62,19 +64,34 @@ interrupted 'new' removes the bootstrap project directory as a whole.`,
 					return fmt.Errorf("transaction in %s is still running (pid %d)", tx.Dir, tx.PID)
 				}
 				if tx.LivenessUnknown && !recoverDiscardFlag && !force {
+					detail := ""
+					if tx.RemoveRoot {
+						detail = " and replaying it would remove the entire project root"
+					}
 					return fmt.Errorf(
-						"transaction in %s may still be running (pid %d); its liveness cannot be verified: rerun with --force to replay it or --discard to remove it",
-						tx.Dir, tx.PID,
+						"transaction in %s may still be running (pid %d); its liveness cannot be verified%s: rerun with --force to replay it or --discard to remove it",
+						tx.Dir, tx.PID, detail,
 					)
 				}
 				action := "recover"
 				if recoverDiscardFlag {
 					action = "discard"
 				} else if !tx.Trusted && !force {
+					detail := ""
+					if tx.RemoveRoot {
+						detail = "; replaying it would remove the entire project root"
+					}
 					return fmt.Errorf(
-						"transaction in %s has no local run marker; rerun with --force to replay it or --discard to remove it",
-						tx.Dir,
+						"transaction in %s has no local run marker%s; rerun with --force to replay it or --discard to remove it",
+						tx.Dir, detail,
 					)
+				}
+				if action == "recover" && tx.RemoveRoot {
+					fmt.Printf(
+						"Would recover transaction in %s (pid %d) and remove the entire project root %s.\n",
+						tx.Dir, tx.PID, rootPath,
+					)
+					continue
 				}
 				fmt.Printf("Would %s transaction in %s (pid %d).\n", action, tx.Dir, tx.PID)
 			}

@@ -342,6 +342,33 @@ func TestRecoverTerminatesOnSignal(t *testing.T) {
 	}
 }
 
+// TestRecoverDryRunShowsRootRemoval verifies that a dry run calls out a
+// remove_root journal explicitly, because replaying an untrusted one with
+// --force deletes the whole checkout.
+func TestRecoverDryRunShowsRootRemoval(t *testing.T) {
+	project := t.TempDir()
+	dir := filepath.Join(project, ".scbake", "tmp", "tx-new")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	header := fmt.Sprintf(
+		`{"version":1,"pid":%d,"started":%q,"remove_root":true}`,
+		1<<30,
+		time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+	)
+	if err := os.WriteFile(filepath.Join(dir, "journal.jsonl"), []byte(header+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := runInDir(t, project, "recover", "--dry-run", "--force")
+	if err != nil {
+		t.Fatalf("recover --dry-run failed: %v\nOutput: %s", err, output)
+	}
+	if !strings.Contains(output, "entire project root") {
+		t.Errorf("recover --dry-run did not disclose root removal: %q", output)
+	}
+}
+
 // writePendingTransactions creates count pending transaction directories, each
 // with entries unique created paths, so recovery has deterministic work to do.
 func writePendingTransactions(t *testing.T, project string, count, entries int) {

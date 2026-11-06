@@ -281,10 +281,12 @@ until `--force` or `--discard` is passed explicitly, because a suspended or
 long-running process may still be writing its files. Each local run also writes
 a marker outside the project, so a journal copied through Git or another
 checkout is not replayed automatically; use `--force` only after inspecting that
-journal yourself. Use `--discard` only when the backups are known to be
-unusable; it deletes the transaction directory without restoring files. An
-interrupted `new` is removed as a whole after a successful recovery, matching
-the command's handled-error cleanup.
+journal yourself. A `remove_root` journal deletes the whole bootstrap directory
+when replayed, so `recover --dry-run` calls that out explicitly and `--force` on
+an untrusted journal can remove the checkout. Use `--discard` only when the
+backups are known to be unusable; it deletes the transaction directory without
+restoring files. An interrupted `new` is removed as a whole after a successful
+recovery, matching the command's handled-error cleanup.
 
 
 ### `template registry`: Manage Remote Registries
