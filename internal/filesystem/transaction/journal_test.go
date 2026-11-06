@@ -435,10 +435,13 @@ func TestRecoverDiscardWhenLivenessUnverified(t *testing.T) {
 	}
 }
 
-// TestUnverifiableLivenessExpires verifies that a PID match without an
-// incarnation token stops blocking recovery once the transaction is older than
-// the bounded window, covering PID reuse on macOS and Windows.
-func TestUnverifiableLivenessExpires(t *testing.T) {
+// TestUnverifiableLivenessExpiresToUnknown verifies that an aged PID match
+// without an incarnation token is treated as unknown, not dead. A live process
+// may be suspended or simply outlive the apply timeout, so recovery must not
+// replay its journal without an explicit --force (or --discard).
+//
+//nolint:cyclop // The test checks the refusal, the unknown state, and the opt-in path.
+func TestUnverifiableLivenessExpiresToUnknown(t *testing.T) {
 	root := t.TempDir()
 	tx, err := New(root)
 	if err != nil {
@@ -460,13 +463,21 @@ func TestUnverifiableLivenessExpires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 || pending[0].Alive {
-		t.Fatalf("pending = %+v, want one non-Alive transaction", pending)
+	if len(pending) != 1 || pending[0].Alive || !pending[0].LivenessUnknown {
+		t.Fatalf("pending = %+v, want one unknown-liveness transaction", pending)
 	}
 
-	recovered, err := Recover(root, false)
+	if _, err := Recover(root, false); err == nil ||
+		!strings.Contains(err.Error(), "liveness cannot be verified") {
+		t.Fatalf("Recover error = %v, want an unverified-liveness refusal", err)
+	}
+	if _, err := os.Stat(created); err != nil {
+		t.Errorf("refused recovery removed created path %s: %v", created, err)
+	}
+
+	recovered, err := RecoverWithOptions(root, RecoverOptions{Force: true})
 	if err != nil {
-		t.Fatalf("Recover did not expire an unverifiable PID: %v", err)
+		t.Fatalf("RecoverWithOptions --force failed: %v", err)
 	}
 	if recovered != 1 {
 		t.Errorf("Recover handled %d transactions, want 1", recovered)
@@ -899,7 +910,15 @@ func TestRecoverIgnoresRecycledPID(t *testing.T) {
 
 	recovered, err := Recover(root, false)
 	if err != nil {
-		t.Fatalf("Recover treated a recycled PID as the live owner: %v", err)
+		// Windows cannot compare a start token here, so an aged PID match is
+		// unknown rather than provably dead and requires the explicit opt-in.
+		if !strings.Contains(err.Error(), "liveness cannot be verified") {
+			t.Fatalf("Recover treated a recycled PID as the live owner: %v", err)
+		}
+		recovered, err = RecoverWithOptions(root, RecoverOptions{Force: true})
+	}
+	if err != nil {
+		t.Fatalf("Recover failed after an explicit opt-in: %v", err)
 	}
 	if recovered != 1 {
 		t.Errorf("Recover handled %d transactions, want 1", recovered)

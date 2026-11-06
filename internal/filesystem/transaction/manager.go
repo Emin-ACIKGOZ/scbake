@@ -105,7 +105,7 @@ func NewWithOptions(rootPath string, opts Options) (*Manager, error) {
 		if tx.Alive {
 			continue
 		}
-		return nil, &IncompleteTransactionError{Dir: tx.Dir, PID: tx.PID}
+		return nil, &IncompleteTransactionError{Dir: tx.Dir, PID: tx.PID, LivenessUnknown: tx.LivenessUnknown}
 	}
 
 	manager := &Manager{

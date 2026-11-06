@@ -275,14 +275,16 @@ scbake recover [--discard] [--force] [<path>]
 
 Recovery refuses to touch a transaction whose process is still running. On
 platforms that cannot prove the PID belongs to the recorded process incarnation
-(macOS and Windows), a PID match only blocks recovery until the transaction is
-an hour old, and `--discard` remains available when liveness cannot be verified.
-Each local run also writes a marker outside the project, so a journal copied
-through Git or another checkout is not replayed automatically; use `--force`
-only after inspecting that journal yourself. Use `--discard` only when the
-backups are known to be unusable; it deletes the transaction directory without
-restoring files. An interrupted `new` is removed as a whole after a successful
-recovery, matching the command's handled-error cleanup.
+(macOS and Windows), a PID match only counts as alive for an hour. After that
+the owner's state is unknown, not dead: recovery refuses to replay the journal
+until `--force` or `--discard` is passed explicitly, because a suspended or
+long-running process may still be writing its files. Each local run also writes
+a marker outside the project, so a journal copied through Git or another
+checkout is not replayed automatically; use `--force` only after inspecting that
+journal yourself. Use `--discard` only when the backups are known to be
+unusable; it deletes the transaction directory without restoring files. An
+interrupted `new` is removed as a whole after a successful recovery, matching
+the command's handled-error cleanup.
 
 
 ### `template registry`: Manage Remote Registries

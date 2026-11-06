@@ -121,10 +121,12 @@ created paths. A matching run marker outside the project proves the journal was
 started on this machine; recovery refuses a journal without one unless
 `--force` is passed, so a journal that reached a checkout through Git is not
 replayed automatically. Where the platform cannot compare a process start
-token, a PID match only counts as alive for a bounded hour so PID reuse cannot
-block recovery indefinitely. This protects against process crashes; it is not a
-power-loss durability guarantee. External commands are tracked only when their
-outputs are predicted.
+token, a PID match only counts as alive for a bounded hour. After that the
+owner's state is unknown, not dead: recovery requires an explicit `--force` or
+`--discard` before replaying the journal, because the process may be suspended
+or still running past the apply timeout. This protects against process crashes;
+it is not a power-loss durability guarantee. External commands are tracked only
+when their outputs are predicted.
 
 ---
 

@@ -54,6 +54,12 @@ interrupted 'new' removes the bootstrap project directory as a whole.`,
 				if tx.Alive && (!recoverDiscardFlag || tx.LivenessVerifiable) {
 					return fmt.Errorf("transaction in %s is still running (pid %d)", tx.Dir, tx.PID)
 				}
+				if tx.LivenessUnknown && !recoverDiscardFlag && !force {
+					return fmt.Errorf(
+						"transaction in %s may still be running (pid %d); its liveness cannot be verified: rerun with --force to replay it or --discard to remove it",
+						tx.Dir, tx.PID,
+					)
+				}
 				action := "recover"
 				if recoverDiscardFlag {
 					action = "discard"

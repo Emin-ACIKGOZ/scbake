@@ -48,11 +48,23 @@ const (
 
 	maxRunMarkerBytes = 4096
 
-	// unverifiedLivenessWindow bounds how long a PID-only check may keep a
-	// transaction alive when the platform cannot provide a process start token.
-	// The apply timeout is 30 minutes, so an hour-old transaction idled by a
-	// recycled PID is treated as dead.
+	// unverifiedLivenessWindow bounds how long a PID-only match counts as proof
+	// that the owner is alive. Beyond it the liveness is unknown, not dead: the
+	// process may be suspended or simply running longer than the apply timeout.
+	// Recovery requires an explicit --force or --discard before touching such a
+	// transaction.
 	unverifiedLivenessWindow = staleTransactionThreshold
+)
+
+// journalLiveness is the result of checking whether a journal's owner is still
+// running. Unknown means the PID exists but its incarnation could not be
+// verified and the journal is too old to use age as evidence either way.
+type journalLiveness int
+
+const (
+	journalDead journalLiveness = iota
+	journalAlive
+	journalUnknown
 )
 
 // journalRecord is one JSON line in a transaction journal. The first line
@@ -87,15 +99,19 @@ type transactionJournal struct {
 }
 
 // PendingTransaction is a transaction directory with an uncommitted journal.
-// Alive reports whether the process that created it is still running. Trusted
-// reports whether the journal has a matching local run marker; a journal copied
-// through Git has none and must not be replayed without explicit opt-in.
+// Alive reports whether the process that created it is still running.
+// LivenessUnknown reports that the owner's PID exists but its incarnation and
+// age cannot prove it alive or dead; replaying such a journal needs explicit
+// opt-in. Trusted reports whether the journal has a matching local run marker; a
+// journal copied through Git has none and must not be replayed without explicit
+// opt-in.
 type PendingTransaction struct {
-	Dir        string
-	PID        int
-	OwnerStart string
-	Alive      bool
-	Trusted    bool
+	Dir             string
+	PID             int
+	OwnerStart      string
+	Alive           bool
+	LivenessUnknown bool
+	Trusted         bool
 	// LivenessVerifiable reports whether Alive came from a process start-token
 	// comparison rather than a PID-only fallback.
 	LivenessVerifiable bool
@@ -114,13 +130,21 @@ type RecoverOptions struct {
 // it began mutating the filesystem and has not been rolled back or committed.
 var ErrIncompleteTransaction = errors.New("incomplete transaction")
 
-// IncompleteTransactionError describes a transaction left by a dead process.
+// IncompleteTransactionError describes a transaction left by a process that is
+// no longer running, or whose liveness cannot be determined.
 type IncompleteTransactionError struct {
-	Dir string
-	PID int
+	Dir             string
+	PID             int
+	LivenessUnknown bool
 }
 
 func (e *IncompleteTransactionError) Error() string {
+	if e.LivenessUnknown {
+		return fmt.Sprintf(
+			"incomplete transaction in %s (pid %d); its owner cannot be verified, so run 'scbake recover --force' to roll it back or 'scbake recover --discard' to discard it",
+			e.Dir, e.PID,
+		)
+	}
 	return fmt.Sprintf(
 		"incomplete transaction in %s (pid %d); run 'scbake recover' to roll it back or 'scbake recover --discard' to discard it",
 		e.Dir, e.PID,
@@ -445,19 +469,30 @@ func journalTrusted(journal *transactionJournal, rootPath string) bool {
 	return sameRoot(strings.TrimSpace(string(data)), canonicalRoot(rootPath))
 }
 
-// journalOwnerAlive reports whether the recorded owner is still running. When
-// the platform cannot compare a process start token, a PID match is only
-// trusted for a bounded age so PID reuse cannot block recovery forever.
-func journalOwnerAlive(journal *transactionJournal, now time.Time) bool {
+// journalOwnerLiveness classifies the recorded owner. When the platform cannot
+// compare a process start token, a PID match is trusted only for a bounded age
+// so PID reuse cannot block recovery forever. An older PID match is unknown,
+// not dead: a live transaction may be suspended or simply outlive the apply
+// timeout, and replaying its journal would restore over files it still writes.
+func journalOwnerLiveness(journal *transactionJournal, now time.Time) journalLiveness {
 	if journal.PID <= 0 {
-		return false
+		return journalDead
 	}
-	if !processStartTokensAvailable || journal.OwnerStart == "" {
-		if journal.Started.IsZero() || now.Sub(journal.Started) > unverifiedLivenessWindow {
-			return false
-		}
+	if !processAlive(journal.PID, journal.OwnerStart) {
+		return journalDead
 	}
-	return processAlive(journal.PID, journal.OwnerStart)
+	if processStartTokensAvailable && journal.OwnerStart != "" {
+		return journalAlive
+	}
+	if journal.Started.IsZero() || now.Sub(journal.Started) > unverifiedLivenessWindow {
+		return journalUnknown
+	}
+	return journalAlive
+}
+
+// journalOwnerAlive reports whether the recorded owner is provably alive.
+func journalOwnerAlive(journal *transactionJournal, now time.Time) bool {
+	return journalOwnerLiveness(journal, now) == journalAlive
 }
 
 // journalOwnerVerifiablyAlive reports a live owner only when the platform can
@@ -526,7 +561,7 @@ func sweepTransactionEntry(rootPath, tmpDir string, entry os.DirEntry, cutoff ti
 	journal, err := readTransactionJournal(dir)
 	switch {
 	case err == nil:
-		if journal.Committed && !journalOwnerAlive(journal, time.Now().UTC()) {
+		if journal.Committed && journalOwnerLiveness(journal, time.Now().UTC()) == journalDead {
 			_ = os.RemoveAll(dir)
 			removeJournalMarker(journal, rootPath)
 		}
@@ -689,11 +724,13 @@ func ListPending(rootPath string) ([]PendingTransaction, error) {
 			continue
 		}
 
+		liveness := journalOwnerLiveness(journal, time.Now().UTC())
 		pending = append(pending, PendingTransaction{
 			Dir:                dir,
 			PID:                journal.PID,
 			OwnerStart:         journal.OwnerStart,
-			Alive:              journalOwnerAlive(journal, time.Now().UTC()),
+			Alive:              liveness == journalAlive,
+			LivenessUnknown:    liveness == journalUnknown,
 			Trusted:            journalTrusted(journal, rootPath),
 			LivenessVerifiable: processStartTokensAvailable && journal.OwnerStart != "",
 		})
@@ -717,7 +754,7 @@ func CheckPending(rootPath string) error {
 	if p.Alive {
 		return fmt.Errorf("transaction in %s is still running (pid %d)", p.Dir, p.PID)
 	}
-	return &IncompleteTransactionError{Dir: p.Dir, PID: p.PID}
+	return &IncompleteTransactionError{Dir: p.Dir, PID: p.PID, LivenessUnknown: p.LivenessUnknown}
 }
 
 // Recover rolls back every pending transaction under root. When discard is
@@ -751,6 +788,12 @@ func RecoverWithOptions(rootPath string, opts RecoverOptions) (int, error) {
 	for _, p := range pending {
 		if p.Alive {
 			return 0, fmt.Errorf("transaction in %s is still running (pid %d)", p.Dir, p.PID)
+		}
+		if p.LivenessUnknown && !opts.Force {
+			return 0, fmt.Errorf(
+				"transaction in %s may still be running (pid %d); its liveness cannot be verified: rerun with --force to replay it or --discard to remove it",
+				p.Dir, p.PID,
+			)
 		}
 		if !p.Trusted && !opts.Force {
 			return 0, fmt.Errorf(
