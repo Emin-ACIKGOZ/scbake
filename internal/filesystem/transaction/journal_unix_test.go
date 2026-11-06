@@ -86,6 +86,40 @@ func TestRunMarkerDirRejectsSymlink(t *testing.T) {
 	}
 }
 
+// TestJournalTrustedRepairsWidenedMarkerDir verifies that reading an existing
+// private marker directory repairs an overly broad mode instead of refusing
+// the marker, preserving the behavior from before the lint refactor.
+func TestJournalTrustedRepairsWidenedMarkerDir(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("TMPDIR", base)
+	root := t.TempDir()
+	nonce, err := newJournalNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerPath, err := writeRunMarker(nonce, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(markerPath) })
+
+	markerDir := filepath.Dir(markerPath)
+	if err := os.Chmod(markerDir, 0o755); err != nil { // #nosec G302 -- test verifies a widened marker directory is repaired
+		t.Fatal(err)
+	}
+
+	if !journalTrusted(&transactionJournal{Nonce: nonce}, root) {
+		t.Fatal("journalTrusted refused a widened marker directory instead of repairing it")
+	}
+	info, err := os.Stat(markerDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != runMarkerDirPerms {
+		t.Errorf("marker directory mode = %o, want %o", info.Mode().Perm(), runMarkerDirPerms)
+	}
+}
+
 // TestReadJournalRejectsFIFO verifies that a FIFO at the journal path is
 // rejected before it is opened, so a read-only command cannot block on it.
 func TestReadJournalRejectsFIFO(t *testing.T) {

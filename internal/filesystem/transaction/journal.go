@@ -313,12 +313,13 @@ func runMarkerDir(rootPath string, create bool) (string, error) {
 		return "", err
 	}
 	if create {
-		if err := prepareMarkerDir(dir); err != nil {
-			return "", err
+		// Use Mkdir rather than MkdirAll: the temp base already exists, and
+		// Mkdir refuses to traverse a symlink planted at dir.
+		if err := os.Mkdir(dir, runMarkerDirPerms); err != nil && !os.IsExist(err) {
+			return "", fmt.Errorf("failed to create run marker directory: %w", err)
 		}
-		return dir, nil
 	}
-	if err := verifyMarkerDir(dir); err != nil {
+	if err := ensureTrustedMarkerDir(dir); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -344,15 +345,9 @@ func runMarkerDirPath(rootPath string) (string, error) {
 	return filepath.Join(base, runMarkerDirPrefix+currentUserToken()), nil
 }
 
-// prepareMarkerDir creates the marker directory if needed and verifies that it
-// is a private directory owned by the current user.
-func prepareMarkerDir(dir string) error {
-	// Use Mkdir rather than MkdirAll: the temp base already exists, and Mkdir
-	// refuses to traverse a symlink planted at dir.
-	if err := os.Mkdir(dir, runMarkerDirPerms); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("failed to create run marker directory: %w", err)
-	}
-
+// ensureTrustedMarkerDir verifies that dir is a private directory owned by the
+// current user, repairing an overly broad mode on reads as well as creates.
+func ensureTrustedMarkerDir(dir string) error {
 	info, err := os.Lstat(dir)
 	if err != nil {
 		return err
@@ -381,18 +376,6 @@ func repairMarkerDirMode(dir string, info os.FileInfo) error {
 	}
 	if err := os.Chmod(dir, runMarkerDirPerms); err != nil {
 		return fmt.Errorf("failed to secure run marker directory: %w", err)
-	}
-	return nil
-}
-
-// verifyMarkerDir checks an existing marker directory without modifying it.
-func verifyMarkerDir(dir string) error {
-	info, err := os.Lstat(dir)
-	if err != nil {
-		return err
-	}
-	if !markerDirTrusted(info) {
-		return fmt.Errorf("refusing untrusted run marker directory %s", dir)
 	}
 	return nil
 }
