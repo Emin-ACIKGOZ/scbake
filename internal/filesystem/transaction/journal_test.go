@@ -217,6 +217,78 @@ func TestJournalRejectsMalformedTransaction(t *testing.T) {
 	}
 }
 
+// closeFailFile closes the underlying journal file successfully, then reports
+// an injected error to simulate a Close failure after a successful Sync.
+type closeFailFile struct{ journalFile }
+
+func (f *closeFailFile) Close() error {
+	if err := f.journalFile.Close(); err != nil {
+		return err
+	}
+	return errors.New("injected journal close failure")
+}
+
+// TestCommitRemainsCommittedAfterJournalCloseError verifies that a committed
+// record which was written and fsynced is treated as durable even when the
+// subsequent Close fails. Commit must return the error, but deferred rollback
+// must not undo the run or its backups.
+//
+//nolint:cyclop // Sets up a backup, injects a close failure, and checks both durability and rollback.
+func TestCommitRemainsCommittedAfterJournalCloseError(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "config.yml")
+	if err := os.WriteFile(existing, []byte("original"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Track(existing); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(existing, []byte("committed"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	originalOpener := openJournalForAppend
+	t.Cleanup(func() { openJournalForAppend = originalOpener })
+	openJournalForAppend = func(baseDir, targetPath string, flag int, perm os.FileMode) (journalFile, error) {
+		f, err := originalOpener(baseDir, targetPath, flag, perm)
+		if err != nil {
+			return nil, err
+		}
+		return &closeFailFile{journalFile: f}, nil
+	}
+
+	if err := tx.Commit(); err == nil {
+		t.Fatal("Commit did not report the injected journal close error")
+	}
+	if !tx.committed {
+		t.Error("Commit did not treat the fsynced committed record as durable")
+	}
+
+	journal, err := readTransactionJournal(tx.tempDir)
+	if err != nil {
+		t.Fatalf("reading committed journal: %v", err)
+	}
+	if !journal.Committed {
+		t.Error("committed record was not durable on disk")
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback after committed close error failed: %v", err)
+	}
+	content, err := os.ReadFile(existing) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "committed" {
+		t.Errorf("Rollback undid a durably committed run: content = %q", content)
+	}
+}
+
 // writeTestJournal writes a syntactically valid journal with the supplied
 // records and owner pid.
 func writeTestJournal(t *testing.T, dir string, pid int, records ...journalRecord) {

@@ -137,38 +137,64 @@ func (m *Manager) startJournal() error {
 	return nil
 }
 
-// appendJournal writes and fsyncs one durable record before the caller mutates
-// the path it describes. The journal is closed again before returning.
+// journalFile is the subset of *os.File needed to append a durable journal
+// record. It is an interface only so tests can inject a Close failure that
+// happens after a successful Sync.
+type journalFile interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
+
+// openJournalForAppend opens the journal for appending. It is a variable only
+// so tests can wrap the file and simulate a Close error after Sync.
+var openJournalForAppend = func(baseDir, targetPath string, flag int, perm os.FileMode) (journalFile, error) {
+	return fileutil.SafeOpenFile(baseDir, targetPath, flag, perm)
+}
+
+// appendJournal writes and fsyncs one durable record. It reports any close
+// error after the record is durable.
 func (m *Manager) appendJournal(record journalRecord) error {
+	_, err := m.appendJournalRecord(record)
+	return err
+}
+
+// appendJournalRecord writes and fsyncs one durable record before the caller
+// mutates the path it describes. durable reports whether the record reached
+// disk, independent of a later Close error. Callers that treat the record as a
+// point of no return must honor durable even when err is non-nil.
+func (m *Manager) appendJournalRecord(record journalRecord) (durable bool, err error) {
 	if err := m.startJournal(); err != nil {
-		return err
+		return false, err
 	}
 
-	f, err := fileutil.SafeOpenFile(
+	f, err := openJournalForAppend(
 		m.tempDir,
 		journalFileName,
 		os.O_WRONLY|os.O_APPEND,
 		fileutil.PrivateFilePerms,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to open transaction journal: %w", err)
+		return false, fmt.Errorf("failed to open transaction journal: %w", err)
 	}
 	if err := writeJournalRecord(f, record); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("failed to append transaction journal: %w", err)
+		return false, fmt.Errorf("failed to append transaction journal: %w", err)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("failed to sync transaction journal: %w", err)
+		return false, fmt.Errorf("failed to sync transaction journal: %w", err)
 	}
+	// Sync is the durability point. A Close error after it must not make the
+	// caller treat the record as unwritten.
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("failed to close transaction journal: %w", err)
+		return true, fmt.Errorf("failed to close transaction journal: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // writeJournalRecord writes one JSON object followed by a newline.
-func writeJournalRecord(f *os.File, record journalRecord) error {
+func writeJournalRecord(f io.Writer, record journalRecord) error {
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err

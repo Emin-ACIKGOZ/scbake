@@ -162,13 +162,15 @@ func (m *Manager) Commit() error {
 	// dies after this point, a later run knows the transaction succeeded and can
 	// reclaim the directory instead of treating it as interrupted.
 	if m.tempDir != "" {
-		if err := m.appendJournal(journalRecord{Op: journalOpCommitted}); err != nil {
+		durable, err := m.appendJournalRecord(journalRecord{Op: journalOpCommitted})
+		if durable {
+			// The committed record is on disk. A later Close error must be
+			// returned to the caller but must not re-enable deferred rollback.
+			m.committed = true
+		}
+		if err != nil {
 			return err
 		}
-		// The committed record is the durable point of no return. Set this
-		// before closing the handle so a close error cannot trigger a rollback
-		// of a run that is already committed.
-		m.committed = true
 	}
 	m.committed = true
 
