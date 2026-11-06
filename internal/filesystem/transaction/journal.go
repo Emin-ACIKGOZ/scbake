@@ -6,6 +6,7 @@ package transaction
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -354,7 +355,10 @@ func (j *transactionJournal) readEntry(line []byte, dir string) error {
 // listTransactionDirs returns every tx-* directory under the resolved
 // .scbake/tmp. The names are only a starting point; callers must still validate
 // the journal inside each directory.
-func listTransactionDirs(rootPath string) ([]string, error) {
+func listTransactionDirs(ctx context.Context, rootPath string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	tmpDir, ok := resolvedTmpDir(rootPath)
 	if !ok {
 		return nil, nil
@@ -370,10 +374,16 @@ func listTransactionDirs(rootPath string) ([]string, error) {
 
 	dirs := make([]string, 0, len(entries))
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), txDirPrefix) {
 			continue
 		}
 		dirs = append(dirs, filepath.Join(tmpDir, entry.Name()))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return dirs, nil
 }
@@ -381,13 +391,23 @@ func listTransactionDirs(rootPath string) ([]string, error) {
 // ListPending returns every uncommitted transaction journal under root. A
 // malformed journal is an error rather than a silently ignored transaction.
 func ListPending(rootPath string) ([]PendingTransaction, error) {
-	dirs, err := listTransactionDirs(rootPath)
+	return ListPendingContext(context.Background(), rootPath)
+}
+
+// ListPendingContext is ListPending with cancellation support. It checks the
+// context before reading the directory, between transaction directories, and
+// before returning.
+func ListPendingContext(ctx context.Context, rootPath string) ([]PendingTransaction, error) {
+	dirs, err := listTransactionDirs(ctx, rootPath)
 	if err != nil {
 		return nil, err
 	}
 
 	pending := make([]PendingTransaction, 0, len(dirs))
 	for _, dir := range dirs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		journal, err := readTransactionJournal(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -407,6 +427,9 @@ func ListPending(rootPath string) ([]PendingTransaction, error) {
 		})
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return pending, nil
 }
 
@@ -432,22 +455,42 @@ func CheckPending(rootPath string) error {
 // true it removes the transaction directories without restoring their backups.
 // Recovery refuses to touch a transaction whose owner process is still alive.
 func Recover(rootPath string, discard bool) (int, error) {
+	return RecoverContext(context.Background(), rootPath, discard)
+}
+
+// RecoverContext is Recover with cancellation support. It checks the context
+// before, after, and between transaction directories, and the rollback itself
+// checks between journal entries. On cancellation it returns recovered and the
+// context error so the caller can map an interruption to the right exit status.
+func RecoverContext(ctx context.Context, rootPath string, discard bool) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	absRoot, err := filepath.Abs(rootPath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to resolve root path: %w", err)
 	}
 
 	if discard {
-		return discardTransactions(absRoot)
+		return discardTransactions(ctx, absRoot)
 	}
 
-	pending, err := ListPending(absRoot)
+	return recoverPendingTransactions(ctx, absRoot)
+}
+
+// recoverPendingTransactions refuses live transactions, then recovers each dead
+// one while checking the context between directories.
+func recoverPendingTransactions(ctx context.Context, rootPath string) (int, error) {
+	pending, err := ListPendingContext(ctx, rootPath)
 	if err != nil {
 		return 0, err
 	}
 
 	// Check liveness before mutating anything so a live run cannot be touched.
 	for _, p := range pending {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if p.Alive {
 			return 0, fmt.Errorf("transaction in %s is still running (pid %d)", p.Dir, p.PID)
 		}
@@ -455,12 +498,18 @@ func Recover(rootPath string, discard bool) (int, error) {
 
 	recovered := 0
 	for _, p := range pending {
-		if err := recoverTransaction(absRoot, p.Dir); err != nil {
+		if err := ctx.Err(); err != nil {
+			return recovered, err
+		}
+		if err := recoverTransaction(ctx, rootPath, p.Dir); err != nil {
 			return recovered, err
 		}
 		recovered++
 	}
 
+	if err := ctx.Err(); err != nil {
+		return recovered, err
+	}
 	return recovered, nil
 }
 
@@ -468,60 +517,105 @@ func Recover(rootPath string, discard bool) (int, error) {
 // journal. An explicit --discard must work for empty or malformed journals,
 // otherwise the transaction cannot be cleared. A readable journal that names a
 // live owner is still refused.
-func discardTransactions(rootPath string) (int, error) {
-	dirs, err := listTransactionDirs(rootPath)
+func discardTransactions(ctx context.Context, rootPath string) (int, error) {
+	dirs, err := listTransactionDirs(ctx, rootPath)
 	if err != nil {
 		return 0, err
 	}
-
-	for _, dir := range dirs {
-		if journal, err := readTransactionJournal(dir); err == nil &&
-			!journal.Committed && processAlive(journal.PID, journal.OwnerStart) {
-			return 0, fmt.Errorf("transaction in %s is still running (pid %d)", dir, journal.PID)
-		}
+	if err := refuseLiveTransactions(ctx, dirs); err != nil {
+		return 0, err
 	}
 
 	for i, dir := range dirs {
+		if err := ctx.Err(); err != nil {
+			return i, err
+		}
 		if err := os.RemoveAll(dir); err != nil {
 			return i, fmt.Errorf("failed to discard transaction %s: %w", dir, err)
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return len(dirs), err
+	}
 	return len(dirs), nil
+}
+
+// refuseLiveTransactions fails when any readable journal names a live owner.
+func refuseLiveTransactions(ctx context.Context, dirs []string) error {
+	for _, dir := range dirs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if journal, err := readTransactionJournal(dir); err == nil &&
+			!journal.Committed && processAlive(journal.PID, journal.OwnerStart) {
+			return fmt.Errorf("transaction in %s is still running (pid %d)", dir, journal.PID)
+		}
+	}
+	return nil
 }
 
 // recoverTransaction replays the journal in reverse, then removes the
 // transaction directory.
-func recoverTransaction(rootPath, dir string) error {
+func recoverTransaction(ctx context.Context, rootPath, dir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	journal, err := readTransactionJournal(dir)
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if journal.Committed {
-		if err := os.RemoveAll(dir); err != nil {
-			return fmt.Errorf("failed to clean committed transaction %s: %w", dir, err)
-		}
-		return nil
+		return cleanCommittedTransaction(ctx, dir)
 	}
 
 	manager, err := managerFromJournal(rootPath, dir, journal)
 	if err != nil {
 		return err
 	}
-	if err := manager.Rollback(); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := manager.RollbackContext(ctx); err != nil {
 		return fmt.Errorf("failed to recover transaction %s: %w", dir, err)
 	}
-
-	// `new` creates the project directory and bootstrap manifest before the
-	// transaction starts. Its journal marks that root, so a successful recovery
-	// removes the whole half-created project, matching the command's own
-	// handled-error cleanup.
-	if journal.RemoveRoot {
-		if err := os.RemoveAll(rootPath); err != nil {
-			return fmt.Errorf("failed to remove bootstrapped project root %s: %w", rootPath, err)
-		}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return nil
+
+	return removeBootstrappedRoot(ctx, rootPath, journal.RemoveRoot)
+}
+
+// cleanCommittedTransaction removes a transaction whose committed record is
+// already durable.
+func cleanCommittedTransaction(ctx context.Context, dir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("failed to clean committed transaction %s: %w", dir, err)
+	}
+	return ctx.Err()
+}
+
+// removeBootstrappedRoot removes the project directory for an interrupted
+// `new`. `new` creates the project directory and bootstrap manifest before the
+// transaction starts, so recovery removes the whole half-created project,
+// matching the command's own handled-error cleanup.
+func removeBootstrappedRoot(ctx context.Context, rootPath string, remove bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !remove {
+		return nil
+	}
+	if err := os.RemoveAll(rootPath); err != nil {
+		return fmt.Errorf("failed to remove bootstrapped project root %s: %w", rootPath, err)
+	}
+	return ctx.Err()
 }
 
 // managerFromJournal reconstructs rollback state without trusting any path

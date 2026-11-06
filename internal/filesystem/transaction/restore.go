@@ -4,6 +4,7 @@
 package transaction
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"scbake/internal/util/fileutil"
@@ -17,6 +18,14 @@ import (
 // After a successful Commit the rollback is disabled: the transaction's
 // changes are permanent and Rollback is a no-op.
 func (m *Manager) Rollback() error {
+	return m.RollbackContext(context.Background())
+}
+
+// RollbackContext is Rollback with cancellation support. It checks the context
+// before the rollback, between created-path and backup entries, and before the
+// final temp-directory cleanup. On cancellation it leaves the journal and
+// remaining backups in place so recovery can be retried.
+func (m *Manager) RollbackContext(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -24,14 +33,25 @@ func (m *Manager) Rollback() error {
 		return nil
 	}
 
-	errs := m.deleteCreatedPaths()
-	errs = append(errs, m.restoreBackups()...)
-	if len(errs) == 0 {
-		errs = append(errs, m.cleanupTempDir()...)
+	errs := m.deleteCreatedPaths(ctx)
+	ctxErr := ctx.Err()
+	if ctxErr == nil {
+		errs = append(errs, m.restoreBackups(ctx)...)
+		ctxErr = ctx.Err()
+		if ctxErr == nil && len(errs) == 0 {
+			errs = append(errs, m.cleanupTempDir()...)
+			ctxErr = ctx.Err()
+		}
 	}
 	// On failure, keep the journal and backups: the directory is the only way
 	// to retry recovery after the user fixes the cause.
 
+	if ctxErr != nil {
+		if len(errs) > 0 {
+			return fmt.Errorf("rollback canceled with errors: %v: %w", errs, ctxErr)
+		}
+		return fmt.Errorf("rollback canceled: %w", ctxErr)
+	}
 	if len(errs) > 0 {
 		return fmt.Errorf("rollback completed with errors: %v", errs)
 	}
@@ -44,9 +64,12 @@ func (m *Manager) Rollback() error {
 // entry must still resolve inside the root: a symlink swapped in after tracking
 // must never redirect RemoveAll outside the project. It returns the accumulated
 // errors instead of stopping at the first failure.
-func (m *Manager) deleteCreatedPaths() []error {
+func (m *Manager) deleteCreatedPaths(ctx context.Context) []error {
 	var errs []error
 	for i := len(m.created) - 1; i >= 0; i-- {
+		if err := ctx.Err(); err != nil {
+			return errs
+		}
 		path := m.created[i]
 
 		if _, err := fileutil.SafePath(m.rootPath, path); err != nil {
@@ -69,9 +92,12 @@ func (m *Manager) deleteCreatedPaths() []error {
 // restoreBackups restores every backed-up file, re-validating containment first
 // so a path swapped for an escaping symlink after tracking cannot redirect the
 // write. The current content at each original path is overwritten.
-func (m *Manager) restoreBackups() []error {
+func (m *Manager) restoreBackups(ctx context.Context) []error {
 	var errs []error
 	for originalPath, backup := range m.backups {
+		if err := ctx.Err(); err != nil {
+			return errs
+		}
 		if _, err := fileutil.SafePath(m.rootPath, originalPath); err != nil {
 			errs = append(errs, fmt.Errorf("refusing to restore %s: %w", originalPath, err))
 			continue

@@ -60,11 +60,8 @@ func Execute() {
 	err := rootCmd.Execute()
 	stopSignals()
 
-	if err != nil {
-		if sig := receivedSignal(); sig != nil {
-			os.Exit(exitCodeForSignal(sig))
-		}
-		os.Exit(fileutil.ExitError)
+	if code := commandExitCode(err, receivedSignal()); code != fileutil.ExitSuccess {
+		os.Exit(code)
 	}
 }
 

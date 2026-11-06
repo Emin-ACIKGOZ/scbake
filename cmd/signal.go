@@ -89,3 +89,16 @@ func exitCodeForSignal(sig os.Signal) int {
 		return fileutil.ExitError
 	}
 }
+
+// commandExitCode maps a finished command and any received signal to a process
+// exit status. A received signal always wins, even when the command completed
+// successfully, so an interruption can never result in exit 0.
+func commandExitCode(err error, sig os.Signal) int {
+	if sig != nil {
+		return exitCodeForSignal(sig)
+	}
+	if err != nil {
+		return fileutil.ExitError
+	}
+	return fileutil.ExitSuccess
+}

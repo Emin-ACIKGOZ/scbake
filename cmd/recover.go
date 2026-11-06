@@ -26,7 +26,8 @@ Recovery refuses to touch a transaction whose process is still running. Use
 its backups. Recovering an interrupted 'new' removes the bootstrap project
 directory as a whole.`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
 		targetPath := "."
 		if len(args) > 0 {
 			targetPath = args[0]
@@ -45,7 +46,7 @@ directory as a whole.`,
 		}
 
 		if dryRun {
-			pending, err := transaction.ListPending(rootPath)
+			pending, err := transaction.ListPendingContext(ctx, rootPath)
 			if err != nil {
 				return err
 			}
@@ -65,7 +66,7 @@ directory as a whole.`,
 			return nil
 		}
 
-		recovered, err := transaction.Recover(rootPath, recoverDiscardFlag)
+		recovered, err := transaction.RecoverContext(ctx, rootPath, recoverDiscardFlag)
 		if err != nil {
 			return err
 		}

@@ -4,6 +4,7 @@
 package transaction
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -119,6 +120,119 @@ func TestRecoverRestoresInterruptedTransaction(t *testing.T) {
 	}
 	if _, err := os.Stat(tx.tempDir); !os.IsNotExist(err) {
 		t.Errorf("recovery left transaction directory %s", tx.tempDir)
+	}
+}
+
+// TestRecoverContextCanceledBeforeRecovery verifies that a canceled context is
+// returned instead of reporting an empty recovery or touching the transaction.
+//
+//nolint:cyclop // Covers list, recover, and discard cancellation paths.
+func TestRecoverContextCanceledBeforeRecovery(t *testing.T) {
+	root := t.TempDir()
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := filepath.Join(root, "created.txt")
+	if err := tx.Track(created); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+	markJournalOwnerDead(t, tx.tempDir, 1<<30)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := ListPendingContext(ctx, root); !errors.Is(err, context.Canceled) {
+		t.Errorf("ListPendingContext error = %v, want context.Canceled", err)
+	}
+	recovered, err := RecoverContext(ctx, root, false)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("RecoverContext error = %v, want context.Canceled", err)
+	}
+	if recovered != 0 {
+		t.Errorf("RecoverContext reported %d recoveries with a canceled context", recovered)
+	}
+	if _, err := os.Stat(created); err != nil {
+		t.Errorf("canceled recovery touched a created path: %v", err)
+	}
+	if _, err := os.Stat(tx.tempDir); err != nil {
+		t.Errorf("canceled recovery removed the transaction directory: %v", err)
+	}
+
+	recovered, err = RecoverContext(ctx, root, true)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("discard RecoverContext error = %v, want context.Canceled", err)
+	}
+	if recovered != 0 {
+		t.Errorf("discard RecoverContext reported %d discards with a canceled context", recovered)
+	}
+	if _, err := os.Stat(tx.tempDir); err != nil {
+		t.Errorf("canceled discard removed the transaction directory: %v", err)
+	}
+}
+
+// cancelWhenGoneContext reports context.Canceled as soon as path disappears.
+// It lets a test stop recovery deterministically between journal entries
+// without racing a timer.
+type cancelWhenGoneContext struct {
+	context.Context
+	path     string
+	canceled bool
+}
+
+func (c *cancelWhenGoneContext) Err() error {
+	if c.canceled {
+		return context.Canceled
+	}
+	if _, err := os.Stat(c.path); os.IsNotExist(err) {
+		c.canceled = true
+		return context.Canceled
+	}
+	return nil
+}
+
+// TestRecoverContextStopsBetweenEntries verifies that cancellation between
+// journal entries preserves the remaining paths and the transaction directory
+// for a retry, and surfaces the context error.
+func TestRecoverContextStopsBetweenEntries(t *testing.T) {
+	root := t.TempDir()
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := filepath.Join(root, "first.txt")
+	second := filepath.Join(root, "second.txt")
+	for _, path := range []string{first, second} {
+		if err := tx.Track(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("partial"), fileutil.FilePerms); err != nil {
+			t.Fatal(err)
+		}
+	}
+	markJournalOwnerDead(t, tx.tempDir, 1<<30)
+
+	// Created paths are deleted in LIFO order, so second disappears first and
+	// the next context check cancels before first is touched.
+	ctx := &cancelWhenGoneContext{Context: context.Background(), path: second}
+	recovered, err := RecoverContext(ctx, root, false)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("RecoverContext error = %v, want context.Canceled", err)
+	}
+	if recovered != 0 {
+		t.Errorf("RecoverContext reported %d recoveries before cancellation", recovered)
+	}
+	if _, err := os.Stat(second); !os.IsNotExist(err) {
+		t.Errorf("recovery did not process the first entry: %v", err)
+	}
+	if _, err := os.Stat(first); err != nil {
+		t.Errorf("recovery continued after cancellation and removed %s: %v", first, err)
+	}
+	if _, err := os.Stat(tx.tempDir); err != nil {
+		t.Errorf("canceled recovery removed the transaction directory: %v", err)
 	}
 }
 

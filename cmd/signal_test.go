@@ -4,11 +4,35 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"scbake/internal/util/fileutil"
 	"syscall"
 	"testing"
 )
+
+func TestCommandExitCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		sig  os.Signal
+		want int
+	}{
+		{"success", nil, nil, fileutil.ExitSuccess},
+		{"failure", errors.New("boom"), nil, fileutil.ExitError},
+		{"SIGINT wins over success", nil, os.Interrupt, fileutil.ExitInterrupted},
+		{"SIGTERM wins over success", nil, syscall.SIGTERM, fileutil.ExitTerminated},
+		{"signal wins over failure", errors.New("boom"), os.Interrupt, fileutil.ExitInterrupted},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := commandExitCode(tt.err, tt.sig); got != tt.want {
+				t.Errorf("commandExitCode(%v, %v) = %d, want %d", tt.err, tt.sig, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestExitCodeForSignal(t *testing.T) {
 	tests := []struct {
