@@ -806,6 +806,54 @@ func TestRecoverThroughSymlinkedRoot(t *testing.T) {
 	}
 }
 
+// TestRecoverRemoveRootThroughSymlinkedRoot verifies that recovering a
+// remove_root transaction through an alias removes the real project directory,
+// not just the alias symlink.
+//
+//nolint:cyclop // Builds an interrupted new, an alias, and asserts both root and journal removal.
+func TestRecoverRemoveRootThroughSymlinkedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	parent := t.TempDir()
+	realRoot := filepath.Join(parent, "real")
+	if err := os.Mkdir(realRoot, fileutil.DirPerms); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := NewWithOptions(realRoot, Options{RemoveRootOnRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := filepath.Join(realRoot, "partial.txt")
+	if err := tx.Track(created); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+	markJournalOwnerDead(t, tx.tempDir, 1<<30)
+
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(realRoot, alias); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := Recover(alias, false)
+	if err != nil {
+		t.Fatalf("Recover through symlink failed: %v", err)
+	}
+	if recovered != 1 {
+		t.Errorf("Recover handled %d transactions, want 1", recovered)
+	}
+	if _, err := os.Lstat(realRoot); !os.IsNotExist(err) {
+		t.Errorf("recovery through a symlink left the real project root: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(realRoot, fileutil.InternalDir)); !os.IsNotExist(err) {
+		t.Errorf("recovery through a symlink left the real transaction journal: %v", err)
+	}
+}
+
 // TestRecoverIgnoresRecycledPID verifies that a journal owned by a PID that now
 // belongs to an unrelated process is still recoverable.
 func TestRecoverIgnoresRecycledPID(t *testing.T) {

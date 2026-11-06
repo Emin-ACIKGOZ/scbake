@@ -485,7 +485,7 @@ func RecoverContext(ctx context.Context, rootPath string, discard bool) (int, er
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	absRoot, err := filepath.Abs(rootPath)
+	absRoot, err := CanonicalRoot(rootPath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to resolve root path: %w", err)
 	}
@@ -495,6 +495,26 @@ func RecoverContext(ctx context.Context, rootPath string, discard bool) (int, er
 	}
 
 	return recoverPendingTransactions(ctx, absRoot)
+}
+
+// CanonicalRoot returns rootPath as an absolute, symlink-resolved path so
+// recovery and its disclosure target the real project directory rather than an
+// alias. Symlink chains and relative paths are resolved. A path that does not
+// exist yet (or is a dangling alias) is returned in absolute cleaned form so
+// callers can still report that no transaction exists there.
+func CanonicalRoot(rootPath string) (string, error) {
+	absRoot, err := filepath.Abs(rootPath)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return filepath.Clean(absRoot), nil
+		}
+		return "", err
+	}
+	return resolved, nil
 }
 
 // recoverPendingTransactions refuses live transactions, then recovers each dead
