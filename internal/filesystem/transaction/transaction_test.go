@@ -486,6 +486,97 @@ func TestNew_SweepDoesNotFollowSymlinkedTmpDir(t *testing.T) {
 	}
 }
 
+// TestNew_RejectsSymlinkedTmpParent verifies creation uses the same exactness
+// rule as discovery: a symlinked .scbake/tmp leaf or .scbake parent is refused
+// before a journal can be written somewhere recovery will not inspect.
+func TestNew_RejectsSymlinkedTmpParent(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, root string) string
+	}{
+		{
+			name: "tmp leaf",
+			setup: func(t *testing.T, root string) string {
+				t.Helper()
+				store := filepath.Join(root, "store")
+				if err := os.MkdirAll(filepath.Join(root, fileutil.InternalDir), fileutil.DirPerms); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(store, fileutil.DirPerms); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("../store", filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir)); err != nil {
+					t.Fatal(err)
+				}
+				return store
+			},
+		},
+		{
+			name: "scbake parent",
+			setup: func(t *testing.T, root string) string {
+				t.Helper()
+				store := filepath.Join(root, "state")
+				if err := os.MkdirAll(store, fileutil.DirPerms); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("state", filepath.Join(root, fileutil.InternalDir)); err != nil {
+					t.Fatal(err)
+				}
+				return store
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			target := tt.setup(t, root)
+
+			if _, err := NewWithOptions(root, Options{RemoveRootOnRecovery: true}); err == nil {
+				t.Fatal("NewWithOptions accepted a symlinked transaction temp path")
+			}
+			tx, err := New(root)
+			if err == nil {
+				err = tx.Track(filepath.Join(root, "created.txt"))
+				cleanupManagerMarker(t, tx)
+			}
+			if err == nil {
+				t.Fatal("Track accepted a symlinked transaction temp path")
+			}
+
+			pending, listErr := ListPending(root)
+			if listErr != nil {
+				t.Fatalf("ListPending failed: %v", listErr)
+			}
+			if len(pending) != 0 {
+				t.Errorf("ListPending found %d transactions behind a refused temp path", len(pending))
+			}
+			if recovered, recoverErr := Recover(root, false); recoverErr != nil || recovered != 0 {
+				t.Errorf("Recover = (%d, %v), want (0, nil)", recovered, recoverErr)
+			}
+			assertNoTransactionDir(t, target)
+		})
+	}
+}
+
+// assertNoTransactionDir fails when target contains a tx-* directory.
+func assertNoTransactionDir(t *testing.T, target string) {
+	t.Helper()
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), txDirPrefix) {
+			t.Errorf("transaction directory %s was created under refused temp path %s", entry.Name(), target)
+		}
+	}
+}
+
 // TestNew_SweepRejectsInRootSymlinkedTmpDir verifies the startup sweep also
 // refuses a .scbake/tmp symlink that resolves to the root or an in-root
 // subtree, not only one that escapes the root.

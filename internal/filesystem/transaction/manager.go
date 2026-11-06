@@ -124,18 +124,51 @@ func NewWithOptions(rootPath string, opts Options) (*Manager, error) {
 	return manager, nil
 }
 
+// validateTmpParent rejects a symlinked or non-directory .scbake parent or
+// .scbake/tmp leaf. Creation and discovery share this rule so a transaction is
+// never written to a path that recovery will refuse to inspect.
+func validateTmpParent(rootPath string) error {
+	internal := filepath.Join(rootPath, fileutil.InternalDir)
+	if err := validateRealDir(internal, fileutil.InternalDir); err != nil {
+		return err
+	}
+	return validateRealDir(filepath.Join(internal, fileutil.TmpDir), fileutil.TmpDir)
+}
+
+// validateRealDir requires an existing path to be a real directory, not a
+// symlink. A missing path is left for the caller to create.
+func validateRealDir(path, label string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s must not be a symlink", label)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s must be a directory", label)
+	}
+	return nil
+}
+
 // resolvedTmpDir returns the canonical <root>/.scbake/tmp directory, but only
 // when it is that exact directory. A .scbake/tmp that is a symlink, resolves to
 // the project root, or points anywhere else inside the root is rejected: the
 // manager must never treat unrelated tx-* directories as transactions.
 func resolvedTmpDir(rootPath string) (string, bool) {
+	if err := validateTmpParent(rootPath); err != nil {
+		return "", false
+	}
 	resolvedRoot, err := filepath.EvalSymlinks(rootPath)
 	if err != nil {
 		return "", false
 	}
 	tmpPath := filepath.Join(rootPath, fileutil.InternalDir, fileutil.TmpDir)
 	info, err := os.Lstat(tmpPath)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	if err != nil || !info.IsDir() {
 		return "", false
 	}
 	resolvedTmp, err := filepath.EvalSymlinks(tmpPath)
@@ -208,6 +241,13 @@ func (m *Manager) ensureTempDir() error {
 	}
 
 	tmpParent := filepath.Join(m.rootPath, fileutil.InternalDir, fileutil.TmpDir)
+
+	// Refuse a symlinked .scbake parent or tmp leaf before creating anything.
+	// Discovery applies the same rule, so a transaction cannot be written to a
+	// path that recovery later refuses to inspect.
+	if err := validateTmpParent(m.rootPath); err != nil {
+		return fmt.Errorf("refusing to create transaction temp dir: %w", err)
+	}
 
 	// Refuse to create the transaction directory through a symlink that escapes
 	// the root (e.g. a symlinked .scbake/tmp), before anything is written.
