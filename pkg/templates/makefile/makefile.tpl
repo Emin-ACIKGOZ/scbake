@@ -31,8 +31,12 @@ test:
 	{{ index .Metadata "test_command" }}
 	{{- else if .Projects }}
 	{{- range .Projects }}
+	{{- if or (eq .Language "go") (eq .Language "svelte") (eq .Language "spring") }}
 	@echo {{ printf "Testing %s (%s)..." .Name .Language | quote }}
 	(cd {{.Path}} && $(MAKE_TEST_COMMAND_{{.Language}}))
+	{{- else }}
+	@echo {{ printf "No test command configured for %s (%s); skipping." .Name .Language | quote }}
+	{{- end }}
 	{{- end }}
 	{{- else }}
 	@echo "No projects configured; nothing to test."
@@ -61,6 +65,7 @@ lint-fix:
 	@echo {{ printf "Fixing %s..." .Name | quote }}
 	(cd {{.Path}} && $(MAKE_LINT_FIX_COMMAND_{{.Language}}))
 {{- end }}
+{{- if .Projects }}
 
 # -----------------------------------------------------------
 #  Language Specific Command Definitions (Internal Use)
@@ -87,3 +92,4 @@ MAKE_CLEAN_COMMAND_spring := ./mvnw clean
 MAKE_TEST_COMMAND_spring := ./mvnw test
 MAKE_LINT_COMMAND_spring := ./mvnw checkstyle:check
 MAKE_LINT_FIX_COMMAND_spring := echo "Fix command not applicable for Maven Checkstyle"
+{{- end }}
