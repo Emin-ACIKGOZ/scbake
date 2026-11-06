@@ -10,7 +10,7 @@ help:
 	@echo "Available commands (Targets dynamically generated from scbake.toml):"
 	@echo "------------------------------------------------------------------"
 	@echo "  build         : Builds all tracked projects."
-	@echo "  test          : Runs tests using configured test command."
+	@echo "  test          : Runs per-project language tests, or test_command override; skips unsupported/no-project cases."
 	@echo "  clean         : Cleans all tracked projects."
 	@echo "  lint          : Runs linting/formatting on all tracked projects."
 	@echo "  lint-fix      : Runs linting/formatting with auto-fix on all tracked projects."
@@ -82,7 +82,8 @@ MAKE_LINT_FIX_COMMAND_go := golangci-lint run --fix --timeout=5m ./...
 # Svelte/Node Commands (Uses ESLint/Prettier setup assumed to be present)
 MAKE_BUILD_COMMAND_svelte := npm run build
 MAKE_CLEAN_COMMAND_svelte := rm -rf dist node_modules
-MAKE_TEST_COMMAND_svelte := npm test
+# create-vite does not install a test script; --if-present keeps make test green without one.
+MAKE_TEST_COMMAND_svelte := npm test --if-present
 MAKE_LINT_COMMAND_svelte := npm run lint
 MAKE_LINT_FIX_COMMAND_svelte := npm run lint -- --fix
 
