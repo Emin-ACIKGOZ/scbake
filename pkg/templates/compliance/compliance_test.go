@@ -282,6 +282,147 @@ func renderDependabot(t *testing.T, m *types.Manifest) string {
 	return string(out)
 }
 
+// dependabotEntry is one parsed item of the generated `updates` list.
+type dependabotEntry struct {
+	ecosystem string
+	directory string
+}
+
+// parseDependabotEntries extracts the entries under `updates:` from a generated
+// dependabot.yml. It intentionally uses line parsing instead of a YAML
+// dependency and fails when the updates list is null, empty, or missing.
+func parseDependabotEntries(t *testing.T, out string) []dependabotEntry {
+	t.Helper()
+
+	if strings.Contains(out, "updates: null") {
+		t.Fatalf("dependabot.yml emits `updates: null`:\n%s", out)
+	}
+	if strings.Contains(out, "updates: []") {
+		t.Fatalf("dependabot.yml emits an empty `updates` list:\n%s", out)
+	}
+
+	lines := strings.Split(out, "\n")
+	updatesIdx := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "updates:" {
+			updatesIdx = i
+			break
+		}
+	}
+	if updatesIdx < 0 {
+		t.Fatalf("dependabot.yml has no `updates:` section:\n%s", out)
+	}
+
+	var entries []dependabotEntry
+	var current *dependabotEntry
+	for _, line := range lines[updatesIdx+1:] {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "- package-ecosystem:"):
+			if current != nil {
+				entries = append(entries, *current)
+			}
+			current = &dependabotEntry{
+				ecosystem: unquoteYAMLValue(strings.TrimSpace(strings.TrimPrefix(trimmed, "- package-ecosystem:"))),
+			}
+		case strings.HasPrefix(trimmed, "directory:") && current != nil:
+			current.directory = unquoteYAMLValue(strings.TrimSpace(strings.TrimPrefix(trimmed, "directory:")))
+		}
+	}
+	if current != nil {
+		entries = append(entries, *current)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("dependabot.yml has an empty `updates` list:\n%s", out)
+	}
+	return entries
+}
+
+// unquoteYAMLValue strips the double quotes the template applies to scalars.
+func unquoteYAMLValue(v string) string {
+	return strings.Trim(v, `"`)
+}
+
+// TestDependabot_EcosystemCoverage is a regression test for issue #153: the
+// generated updates list must never be null/empty, must include one
+// github-actions entry with `directory: "/"`, and must map languages to
+// gomod/npm/maven as appropriate.
+func TestDependabot_EcosystemCoverage(t *testing.T) {
+	languageEcosystems := []string{"gomod", "npm", "maven"}
+
+	tests := []struct {
+		name     string
+		projects []types.Project
+		want     map[string]int
+	}{
+		{
+			name: "no projects",
+			want: map[string]int{"gomod": 0, "npm": 0, "maven": 0},
+		},
+		{
+			name:     "go",
+			projects: []types.Project{{Name: "api", Path: "services/api", Language: "go"}},
+			want:     map[string]int{"gomod": 1, "npm": 0, "maven": 0},
+		},
+		{
+			name:     "svelte",
+			projects: []types.Project{{Name: "web", Path: "web", Language: "svelte"}},
+			want:     map[string]int{"gomod": 0, "npm": 1, "maven": 0},
+		},
+		{
+			name:     "spring",
+			projects: []types.Project{{Name: "service", Path: "service", Language: "spring"}},
+			want:     map[string]int{"gomod": 0, "npm": 0, "maven": 1},
+		},
+		{
+			name: "mixed",
+			projects: []types.Project{
+				{Name: "api", Path: "services/api", Language: "go"},
+				{Name: "web", Path: "web", Language: "svelte"},
+				{Name: "service", Path: "service", Language: "spring"},
+			},
+			want: map[string]int{"gomod": 1, "npm": 1, "maven": 1},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := renderDependabot(t, &types.Manifest{Projects: tt.projects})
+			entries := parseDependabotEntries(t, out)
+
+			counts := make(map[string]int, len(entries))
+			var githubActions []dependabotEntry
+			for _, entry := range entries {
+				counts[entry.ecosystem]++
+				if entry.ecosystem == "github-actions" {
+					githubActions = append(githubActions, entry)
+				}
+			}
+
+			for _, ecosystem := range languageEcosystems {
+				if counts[ecosystem] != tt.want[ecosystem] {
+					t.Errorf("%s entries = %d, want %d:\n%s", ecosystem, counts[ecosystem], tt.want[ecosystem], out)
+				}
+			}
+
+			wantTotal := 1 // github-actions is always present exactly once.
+			for _, ecosystem := range languageEcosystems {
+				wantTotal += tt.want[ecosystem]
+			}
+			if len(entries) != wantTotal {
+				t.Errorf("total updates entries = %d, want %d:\n%s", len(entries), wantTotal, out)
+			}
+
+			if len(githubActions) != 1 {
+				t.Fatalf("github-actions entries = %d, want exactly 1:\n%s", len(githubActions), out)
+			}
+			if githubActions[0].directory != "/" {
+				t.Errorf("github-actions directory = %q, want %q:\n%s", githubActions[0].directory, "/", out)
+			}
+		})
+	}
+}
+
 // TestDependabot_BenignProjectRendersUnchanged pins the benign rendering.
 func TestDependabot_BenignProjectRendersUnchanged(t *testing.T) {
 	m := &types.Manifest{
