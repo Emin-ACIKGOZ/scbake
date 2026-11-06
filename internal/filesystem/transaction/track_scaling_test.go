@@ -21,6 +21,7 @@ func countTrackOnce(t testing.TB, n int) time.Duration {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
+	t.Cleanup(func() { _ = tx.Rollback() })
 
 	start := time.Now()
 	for i := 0; i < n; i++ {
