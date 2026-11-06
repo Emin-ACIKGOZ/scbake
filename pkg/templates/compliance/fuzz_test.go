@@ -67,60 +67,21 @@ func renderDependabotInMemory(m *types.Manifest) (string, error) {
 	return buf.String(), nil
 }
 
-// fuzzDependabotEntry is one parsed item of the generated `updates` list.
-type fuzzDependabotEntry struct {
-	ecosystem string
-	directory string
-}
-
-// fuzzParseDependabotEntries performs deterministic line-based parsing of the
-// generated updates list, failing on a missing or empty updates section.
-func fuzzParseDependabotEntries(t *testing.T, out string) []fuzzDependabotEntry {
-	t.Helper()
-
-	lines := strings.Split(out, "\n")
-	updatesIdx := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "updates:" {
-			updatesIdx = i
-			break
+// expectedDependabotEcosystems derives the per-ecosystem entry counts that a
+// manifest should produce.
+func expectedDependabotEcosystems(projects []types.Project) map[string]int {
+	expected := map[string]int{"gomod": 0, "npm": 0, "maven": 0}
+	for _, p := range projects {
+		switch p.Language {
+		case "go":
+			expected["gomod"]++
+		case "svelte":
+			expected["npm"]++
+		case "spring":
+			expected["maven"]++
 		}
 	}
-	if updatesIdx < 0 {
-		t.Fatalf("dependabot.yml has no `updates:` section:\n%s", out)
-	}
-
-	var entries []fuzzDependabotEntry
-	var current *fuzzDependabotEntry
-	for _, line := range lines[updatesIdx+1:] {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(trimmed, "- package-ecosystem:"):
-			if current != nil {
-				entries = append(entries, *current)
-			}
-			current = &fuzzDependabotEntry{
-				ecosystem: unquoteFuzzYAMLValue(strings.TrimSpace(strings.TrimPrefix(trimmed, "- package-ecosystem:"))),
-			}
-		case strings.HasPrefix(trimmed, "directory:") && current != nil:
-			current.directory = unquoteFuzzYAMLValue(strings.TrimSpace(strings.TrimPrefix(trimmed, "directory:")))
-		}
-	}
-	if current != nil {
-		entries = append(entries, *current)
-	}
-	if len(entries) == 0 {
-		t.Fatalf("dependabot.yml has an empty `updates` list:\n%s", out)
-	}
-	if !strings.Contains(out, "- package-ecosystem:") {
-		t.Fatalf("dependabot.yml has no `- package-ecosystem:` line:\n%s", out)
-	}
-	return entries
-}
-
-// unquoteFuzzYAMLValue strips the double quotes the template applies to scalars.
-func unquoteFuzzYAMLValue(v string) string {
-	return strings.Trim(v, `"`)
+	return expected
 }
 
 // FuzzDependabotUpdates verifies the issue #153 invariants for every project
@@ -156,48 +117,7 @@ func FuzzDependabotUpdates(f *testing.F) {
 			t.Fatalf("render failed: %v", err)
 		}
 
-		entries := fuzzParseDependabotEntries(t, out)
-
-		expected := map[string]int{"gomod": 0, "npm": 0, "maven": 0}
-		for _, p := range projects {
-			switch p.Language {
-			case "go":
-				expected["gomod"]++
-			case "svelte":
-				expected["npm"]++
-			case "spring":
-				expected["maven"]++
-			}
-		}
-
-		counts := make(map[string]int, len(entries))
-		var githubActions []fuzzDependabotEntry
-		for _, entry := range entries {
-			counts[entry.ecosystem]++
-			if entry.ecosystem == "github-actions" {
-				githubActions = append(githubActions, entry)
-			}
-		}
-
-		for ecosystem, want := range expected {
-			if got := counts[ecosystem]; got != want {
-				t.Errorf("%s entries = %d, want %d:\n%s", ecosystem, got, want, out)
-			}
-		}
-
-		wantTotal := 1 // github-actions is always present exactly once.
-		for _, want := range expected {
-			wantTotal += want
-		}
-		if len(entries) != wantTotal {
-			t.Errorf("total updates entries = %d, want %d:\n%s", len(entries), wantTotal, out)
-		}
-
-		if len(githubActions) != 1 {
-			t.Fatalf("github-actions entries = %d, want exactly 1:\n%s", len(githubActions), out)
-		}
-		if githubActions[0].directory != "/" {
-			t.Errorf("github-actions directory = %q, want %q:\n%s", githubActions[0].directory, "/", out)
-		}
+		entries := parseDependabotEntries(t, out)
+		assertDependabotUpdateCounts(t, out, entries, expectedDependabotEcosystems(projects))
 	})
 }

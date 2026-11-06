@@ -294,21 +294,33 @@ type dependabotEntry struct {
 func parseDependabotEntries(t *testing.T, out string) []dependabotEntry {
 	t.Helper()
 
+	entries := parseDependabotEntryLines(dependabotUpdateLines(t, out))
+	if len(entries) == 0 {
+		t.Fatalf("dependabot.yml has an empty `updates` list:\n%s", out)
+	}
+	return entries
+}
+
+// dependabotUpdateLines returns the lines following the top-level `updates:` key.
+func dependabotUpdateLines(t *testing.T, out string) []string {
+	t.Helper()
+
 	lines := strings.Split(out, "\n")
-	updatesIdx := -1
 	for i, line := range lines {
 		if strings.TrimSpace(line) == "updates:" {
-			updatesIdx = i
-			break
+			return lines[i+1:]
 		}
 	}
-	if updatesIdx < 0 {
-		t.Fatalf("dependabot.yml has no `updates:` section:\n%s", out)
-	}
+	t.Fatalf("dependabot.yml has no `updates:` section:\n%s", out)
+	return nil
+}
 
+// parseDependabotEntryLines parses `- package-ecosystem:` items and their
+// following `directory:` value.
+func parseDependabotEntryLines(lines []string) []dependabotEntry {
 	var entries []dependabotEntry
 	var current *dependabotEntry
-	for _, line := range lines[updatesIdx+1:] {
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(trimmed, "- package-ecosystem:"):
@@ -325,9 +337,6 @@ func parseDependabotEntries(t *testing.T, out string) []dependabotEntry {
 	if current != nil {
 		entries = append(entries, *current)
 	}
-	if len(entries) == 0 {
-		t.Fatalf("dependabot.yml has an empty `updates` list:\n%s", out)
-	}
 	return entries
 }
 
@@ -336,13 +345,50 @@ func unquoteYAMLValue(v string) string {
 	return strings.Trim(v, `"`)
 }
 
+// countDependabotEcosystems groups entries by ecosystem and returns the
+// github-actions subset separately.
+func countDependabotEcosystems(entries []dependabotEntry) (map[string]int, []dependabotEntry) {
+	counts := make(map[string]int, len(entries))
+	var githubActions []dependabotEntry
+	for _, entry := range entries {
+		counts[entry.ecosystem]++
+		if entry.ecosystem == "github-actions" {
+			githubActions = append(githubActions, entry)
+		}
+	}
+	return counts, githubActions
+}
+
+// assertDependabotUpdateCounts verifies per-ecosystem counts, the total number
+// of entries, and the single github-actions entry.
+func assertDependabotUpdateCounts(t *testing.T, out string, entries []dependabotEntry, want map[string]int) {
+	t.Helper()
+
+	counts, githubActions := countDependabotEcosystems(entries)
+
+	wantTotal := 1 // github-actions is always present exactly once.
+	for ecosystem, n := range want {
+		if got := counts[ecosystem]; got != n {
+			t.Errorf("%s entries = %d, want %d:\n%s", ecosystem, got, n, out)
+		}
+		wantTotal += n
+	}
+	if len(entries) != wantTotal {
+		t.Errorf("total updates entries = %d, want %d:\n%s", len(entries), wantTotal, out)
+	}
+	if len(githubActions) != 1 {
+		t.Fatalf("github-actions entries = %d, want exactly 1:\n%s", len(githubActions), out)
+	}
+	if githubActions[0].directory != "/" {
+		t.Errorf("github-actions directory = %q, want %q:\n%s", githubActions[0].directory, "/", out)
+	}
+}
+
 // TestDependabot_EcosystemCoverage is a regression test for issue #153: the
 // generated updates list must never be null/empty, must include one
 // github-actions entry with `directory: "/"`, and must map languages to
 // gomod/npm/maven as appropriate.
 func TestDependabot_EcosystemCoverage(t *testing.T) {
-	languageEcosystems := []string{"gomod", "npm", "maven"}
-
 	tests := []struct {
 		name     string
 		projects []types.Project
@@ -392,36 +438,7 @@ func TestDependabot_EcosystemCoverage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			out := renderDependabot(t, &types.Manifest{Projects: tt.projects})
 			entries := parseDependabotEntries(t, out)
-
-			counts := make(map[string]int, len(entries))
-			var githubActions []dependabotEntry
-			for _, entry := range entries {
-				counts[entry.ecosystem]++
-				if entry.ecosystem == "github-actions" {
-					githubActions = append(githubActions, entry)
-				}
-			}
-
-			for _, ecosystem := range languageEcosystems {
-				if counts[ecosystem] != tt.want[ecosystem] {
-					t.Errorf("%s entries = %d, want %d:\n%s", ecosystem, counts[ecosystem], tt.want[ecosystem], out)
-				}
-			}
-
-			wantTotal := 1 // github-actions is always present exactly once.
-			for _, ecosystem := range languageEcosystems {
-				wantTotal += tt.want[ecosystem]
-			}
-			if len(entries) != wantTotal {
-				t.Errorf("total updates entries = %d, want %d:\n%s", len(entries), wantTotal, out)
-			}
-
-			if len(githubActions) != 1 {
-				t.Fatalf("github-actions entries = %d, want exactly 1:\n%s", len(githubActions), out)
-			}
-			if githubActions[0].directory != "/" {
-				t.Errorf("github-actions directory = %q, want %q:\n%s", githubActions[0].directory, "/", out)
-			}
+			assertDependabotUpdateCounts(t, out, entries, tt.want)
 		})
 	}
 }
