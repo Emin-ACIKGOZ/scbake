@@ -302,6 +302,80 @@ func TestSIGKILLIsReportedAndRecovered(t *testing.T) {
 	}
 }
 
+// TestRecoverTerminatesOnSignal verifies that a SIGTERM delivered while
+// recover is replaying pending transactions is not swallowed: recovery stops
+// and the process exits with the conventional 128+signal status instead of 0.
+func TestRecoverTerminatesOnSignal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signal delivery is not available on Windows")
+	}
+
+	project := t.TempDir()
+	writePendingTransactions(t, project, 300, 500)
+
+	cmd := exec.CommandContext(context.Background(), binaryPath, "recover", "--force", project)
+	cmd.Dir = project
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting recover: %v", err)
+	}
+
+	// Let the Go runtime install its signal handler; the pending workload is
+	// large enough that recovery is still running when the signal arrives.
+	time.Sleep(50 * time.Millisecond)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("sending SIGTERM: %v", err)
+	}
+
+	err := waitForCommand(t, cmd, interruptWait)
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("recover completed before SIGTERM (err=%v, output=%s)", err, output.String())
+	}
+	if exitErr.ExitCode() != fileutil.ExitTerminated {
+		t.Errorf("exit code = %d, want %d (output=%s)",
+			exitErr.ExitCode(), fileutil.ExitTerminated, output.String())
+	}
+}
+
+// writePendingTransactions creates count pending transaction directories, each
+// with entries unique created paths, so recovery has deterministic work to do.
+func writePendingTransactions(t *testing.T, project string, count, entries int) {
+	t.Helper()
+
+	tmpDir := filepath.Join(project, ".scbake", "tmp")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("creating transaction parent: %v", err)
+	}
+
+	header := fmt.Sprintf(
+		`{"version":1,"pid":%d,"started":%q}`,
+		1<<30,
+		time.Now().Add(-2*time.Hour).UTC().Format(time.RFC3339),
+	)
+	var body strings.Builder
+	for dirIndex := range count {
+		body.Reset()
+		body.WriteString(header)
+		body.WriteByte('\n')
+		for entryIndex := range entries {
+			fmt.Fprintf(&body, `{"op":"create","path":"generated/file-%d-%d"}`+"\n", dirIndex, entryIndex)
+		}
+
+		dir := filepath.Join(tmpDir, fmt.Sprintf("tx-%d", dirIndex))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("creating transaction %d: %v", dirIndex, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "journal.jsonl"), []byte(body.String()), 0o600); err != nil {
+			t.Fatalf("writing journal %d: %v", dirIndex, err)
+		}
+	}
+}
+
 // runInDir runs the scbake binary in dir and returns combined output.
 func runInDir(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()

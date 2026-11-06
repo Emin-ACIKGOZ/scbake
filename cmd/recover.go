@@ -27,10 +27,14 @@ checkout or a copy; pass --force to replay it anyway, or --discard to delete
 the transaction directory without restoring its backups. Recovering an
 interrupted 'new' removes the bootstrap project directory as a whole.`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
 		targetPath := "."
 		if len(args) > 0 {
 			targetPath = args[0]
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		absPath, err := filepath.Abs(targetPath)
@@ -46,11 +50,14 @@ interrupted 'new' removes the bootstrap project directory as a whole.`,
 		}
 
 		if dryRun {
-			pending, err := transaction.ListPending(rootPath)
+			pending, err := transaction.ListPendingContext(ctx, rootPath)
 			if err != nil {
 				return err
 			}
 			for _, tx := range pending {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				if tx.Alive && (!recoverDiscardFlag || tx.LivenessVerifiable) {
 					return fmt.Errorf("transaction in %s is still running (pid %d)", tx.Dir, tx.PID)
 				}
@@ -74,14 +81,20 @@ interrupted 'new' removes the bootstrap project directory as a whole.`,
 			if len(pending) == 0 {
 				fmt.Println("No interrupted transaction found.")
 			}
-			return nil
+			return ctx.Err()
 		}
 
 		recovered, err := transaction.RecoverWithOptions(rootPath, transaction.RecoverOptions{
+			Ctx:     ctx,
 			Discard: recoverDiscardFlag,
 			Force:   force,
 		})
 		if err != nil {
+			return err
+		}
+		// Do not report success or exit 0 if a signal arrived while recovery
+		// was running; the caller maps the context error to 128+signal.
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if recovered == 0 {

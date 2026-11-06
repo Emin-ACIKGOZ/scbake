@@ -4,6 +4,7 @@
 package transaction
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -484,6 +485,41 @@ func TestUnverifiableLivenessExpiresToUnknown(t *testing.T) {
 	}
 	if _, err := os.Stat(created); !os.IsNotExist(err) {
 		t.Errorf("recovery left created path %s", created)
+	}
+}
+
+// TestRecoverWithOptionsStopsOnCanceledContext verifies that cancellation is
+// observed before any transaction is replayed, so an interrupted recover does
+// not keep mutating files.
+func TestRecoverWithOptionsStopsOnCanceledContext(t *testing.T) {
+	root := t.TempDir()
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := filepath.Join(root, "created.txt")
+	if err := tx.Track(created); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+	markJournalOwnerDead(t, tx.tempDir, 1<<30)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	recovered, err := RecoverWithOptions(root, RecoverOptions{Ctx: ctx})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RecoverWithOptions error = %v, want context.Canceled", err)
+	}
+	if recovered != 0 {
+		t.Errorf("canceled recovery handled %d transactions, want 0", recovered)
+	}
+	if _, err := os.Stat(created); err != nil {
+		t.Errorf("canceled recovery removed created path %s: %v", created, err)
+	}
+	if _, err := os.Stat(filepath.Join(tx.tempDir, journalFileName)); err != nil {
+		t.Errorf("canceled recovery removed the journal: %v", err)
 	}
 }
 

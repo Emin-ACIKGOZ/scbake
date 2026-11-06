@@ -6,6 +6,7 @@ package transaction
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -127,10 +128,13 @@ type PendingTransaction struct {
 
 // RecoverOptions controls how Recover handles pending transactions.
 type RecoverOptions struct {
+	// Ctx cancels recovery between transactions and journal entries. A nil
+	// context means context.Background().
+	Ctx context.Context
 	// Discard removes transaction directories without restoring their backups.
 	Discard bool
-	// Force allows replaying a journal that has no matching local run marker,
-	// for example after the marker was removed with the system temp directory.
+	// Force allows replaying a journal that has no matching local run marker or
+	// whose owner liveness cannot be verified.
 	Force bool
 }
 
@@ -768,6 +772,15 @@ func listTransactionDirs(rootPath string) ([]string, error) {
 // ListPending returns every uncommitted transaction journal under root. A
 // malformed journal is an error rather than a silently ignored transaction.
 func ListPending(rootPath string) ([]PendingTransaction, error) {
+	return ListPendingContext(context.Background(), rootPath)
+}
+
+// ListPendingContext is ListPending with cancellation between transaction
+// directories, so a long recovery scan can stop when the caller is interrupted.
+func ListPendingContext(ctx context.Context, rootPath string) ([]PendingTransaction, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	dirs, err := listTransactionDirs(rootPath)
 	if err != nil {
 		return nil, err
@@ -775,6 +788,9 @@ func ListPending(rootPath string) ([]PendingTransaction, error) {
 
 	pending := make([]PendingTransaction, 0, len(dirs))
 	for _, dir := range dirs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		journal, err := readTransactionJournal(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -831,16 +847,20 @@ func Recover(rootPath string, discard bool) (int, error) {
 // explicitly opts in with Force, so a journal committed to a repository cannot
 // rewrite or delete files in a fresh checkout.
 func RecoverWithOptions(rootPath string, opts RecoverOptions) (int, error) {
+	ctx := opts.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	absRoot, err := filepath.Abs(rootPath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to resolve root path: %w", err)
 	}
 
 	if opts.Discard {
-		return discardTransactions(absRoot)
+		return discardTransactions(ctx, absRoot)
 	}
 
-	pending, err := ListPending(absRoot)
+	pending, err := ListPendingContext(ctx, absRoot)
 	if err != nil {
 		return 0, err
 	}
@@ -848,6 +868,9 @@ func RecoverWithOptions(rootPath string, opts RecoverOptions) (int, error) {
 	// Check liveness and provenance before mutating anything so a live run or a
 	// journal copied into the tree cannot be touched by accident.
 	for _, p := range pending {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if p.Alive {
 			return 0, fmt.Errorf("transaction in %s is still running (pid %d)", p.Dir, p.PID)
 		}
@@ -867,7 +890,10 @@ func RecoverWithOptions(rootPath string, opts RecoverOptions) (int, error) {
 
 	recovered := 0
 	for _, p := range pending {
-		if err := recoverTransaction(absRoot, p.Dir); err != nil {
+		if err := ctx.Err(); err != nil {
+			return recovered, err
+		}
+		if err := recoverTransaction(ctx, absRoot, p.Dir); err != nil {
 			return recovered, err
 		}
 		recovered++
@@ -880,13 +906,16 @@ func RecoverWithOptions(rootPath string, opts RecoverOptions) (int, error) {
 // journal. An explicit --discard must work for empty or malformed journals,
 // otherwise the transaction cannot be cleared. A readable journal that names a
 // live owner is still refused.
-func discardTransactions(rootPath string) (int, error) {
+func discardTransactions(ctx context.Context, rootPath string) (int, error) {
 	dirs, err := listTransactionDirs(rootPath)
 	if err != nil {
 		return 0, err
 	}
 
 	for _, dir := range dirs {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		// Only a verifiable incarnation blocks an explicit discard. When the
 		// platform cannot prove the PID belongs to the recorded owner, --discard
 		// is the escape hatch for a stuck PID-reuse false positive.
@@ -897,6 +926,9 @@ func discardTransactions(rootPath string) (int, error) {
 	}
 
 	for i, dir := range dirs {
+		if err := ctx.Err(); err != nil {
+			return i, err
+		}
 		journal, journalErr := readTransactionJournal(dir)
 		if err := os.RemoveAll(dir); err != nil {
 			return i, fmt.Errorf("failed to discard transaction %s: %w", dir, err)
@@ -911,12 +943,18 @@ func discardTransactions(rootPath string) (int, error) {
 
 // recoverTransaction replays the journal in reverse, then removes the
 // transaction directory.
-func recoverTransaction(rootPath, dir string) error {
+func recoverTransaction(ctx context.Context, rootPath, dir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	journal, err := readTransactionJournal(dir)
 	if err != nil {
 		return err
 	}
 	if journal.Committed {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := os.RemoveAll(dir); err != nil {
 			return fmt.Errorf("failed to clean committed transaction %s: %w", dir, err)
 		}
@@ -924,8 +962,11 @@ func recoverTransaction(rootPath, dir string) error {
 		return nil
 	}
 
-	manager, err := managerFromJournal(rootPath, dir, journal)
+	manager, err := managerFromJournal(ctx, rootPath, dir, journal)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := manager.Rollback(); err != nil {
@@ -937,6 +978,9 @@ func recoverTransaction(rootPath, dir string) error {
 	// removes the whole half-created project, matching the command's own
 	// handled-error cleanup.
 	if journal.RemoveRoot {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := os.RemoveAll(rootPath); err != nil {
 			return fmt.Errorf("failed to remove bootstrapped project root %s: %w", rootPath, err)
 		}
@@ -948,7 +992,7 @@ func recoverTransaction(rootPath, dir string) error {
 // managerFromJournal reconstructs rollback state without trusting any path
 // written by the journal: every path is revalidated against the root and the
 // backup must be a regular file inside the transaction directory.
-func managerFromJournal(rootPath, dir string, journal *transactionJournal) (*Manager, error) {
+func managerFromJournal(ctx context.Context, rootPath, dir string, journal *transactionJournal) (*Manager, error) {
 	manager := &Manager{
 		rootPath:   rootPath,
 		tempDir:    dir,
@@ -958,6 +1002,9 @@ func managerFromJournal(rootPath, dir string, journal *transactionJournal) (*Man
 	}
 
 	for _, record := range journal.Entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		path, err := fileutil.SafePath(rootPath, filepath.FromSlash(record.Path))
 		if err != nil {
 			return nil, fmt.Errorf("invalid path in transaction journal %s: %w", dir, err)
