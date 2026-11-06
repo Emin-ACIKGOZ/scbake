@@ -80,7 +80,7 @@ func assertInternalStateIgnoreTask(t *testing.T, task types.Task) {
 
 	appendTask, ok := task.(*tasks.AppendFileTask)
 	if !ok {
-		t.Fatalf("Task index 1 is not an *tasks.AppendFileTask: %T", task)
+		t.Fatalf("ignore task is not an *tasks.AppendFileTask: %T", task)
 	}
 	if appendTask.FilePath != internalStateIgnorePath {
 		t.Errorf("ignore task path = %q, want %q", appendTask.FilePath, internalStateIgnorePath)

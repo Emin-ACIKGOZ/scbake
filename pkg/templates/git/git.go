@@ -34,9 +34,11 @@ const internalStateExclude = ":(exclude,glob)**/.scbake/**"
 // repository-local exclude file, which is never committed.
 const internalStateIgnore = ".scbake/\n"
 
-// internalStateIgnorePath is repository-local and created by `git init`; it is
-// also predicted by the init task so rollback treats it as newly created state
-// instead of trying to restore a backup inside a removed .git directory.
+// internalStateIgnorePath is repository-local. `git init` normally creates it,
+// but a custom or empty template may omit the info directory; the init task
+// creates that directory as tracked state. Predicting the file lets rollback
+// remove it instead of trying to restore a backup inside a removed .git
+// directory.
 var internalStateIgnorePath = filepath.Join(fileutil.GitDir, "info", "exclude")
 
 // GetTasks returns the plan to initialize a Git repository.
