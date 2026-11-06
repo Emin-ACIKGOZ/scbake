@@ -82,6 +82,97 @@ func TestInterruptRollsBackAndExitsWithSignalStatus(t *testing.T) {
 	}
 }
 
+// TestInterruptRestoresOverwrittenFile verifies that the SIGINT/SIGTERM rollback
+// actually restores a pre-existing file from its backup, rather than only
+// relying on `new` deleting the whole bootstrap directory.
+//
+//nolint:cyclop // End-to-end signal, backup, and rollback assertions.
+func TestInterruptRestoresOverwrittenFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signal delivery is not available on Windows")
+	}
+
+	tests := []struct {
+		name string
+		sig  os.Signal
+		want int
+	}{
+		{"SIGINT", os.Interrupt, fileutil.ExitInterrupted},
+		{"SIGTERM", syscall.SIGTERM, fileutil.ExitTerminated},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			work := t.TempDir()
+			installBlockingGo(t, work)
+
+			project := filepath.Join(work, "project")
+			if err := os.MkdirAll(project, 0o750); err != nil {
+				t.Fatalf("creating project: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(project, "scbake.toml"), nil, 0o600); err != nil {
+				t.Fatalf("writing manifest: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(project, "go.mod"), []byte("module example.com/demo\n"), 0o600); err != nil {
+				t.Fatalf("writing go.mod: %v", err)
+			}
+			const original = "package main\n\n// original content\n"
+			mainPath := filepath.Join(project, "main.go")
+			if err := os.WriteFile(mainPath, []byte(original), 0o600); err != nil {
+				t.Fatalf("writing main.go: %v", err)
+			}
+
+			cmd := exec.CommandContext(context.Background(), binaryPath, "apply", "--lang", "go", "--force", ".")
+			cmd.Dir = project
+			cmd.Env = append(os.Environ(), "PATH="+filepath.Join(work, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			var output bytes.Buffer
+			cmd.Stdout = &output
+			cmd.Stderr = &output
+
+			if err := cmd.Start(); err != nil {
+				t.Fatalf("starting scbake: %v", err)
+			}
+
+			waitForPath(t, filepath.Join(project, "tidy.started"), tidyTimeout)
+
+			overwritten, err := os.ReadFile(mainPath) //nolint:gosec // test-controlled path
+			if err != nil {
+				t.Fatalf("reading overwritten main.go: %v", err)
+			}
+			if string(overwritten) == original {
+				t.Fatalf("main.go was not overwritten before the signal; backup would not be exercised")
+			}
+
+			if err := cmd.Process.Signal(tt.sig); err != nil {
+				_ = cmd.Process.Kill()
+				t.Fatalf("sending %s: %v", tt.sig, err)
+			}
+
+			waitErr := waitForCommand(t, cmd, interruptWait)
+			exitErr, ok := waitErr.(*exec.ExitError)
+			if !ok {
+				t.Fatalf("scbake did not fail after %s (err=%v, output=%s)", tt.sig, waitErr, output.String())
+			}
+			if exitErr.ExitCode() != tt.want {
+				t.Errorf("exit code = %d, want %d (output=%s)", exitErr.ExitCode(), tt.want, output.String())
+			}
+
+			restored, err := os.ReadFile(mainPath) //nolint:gosec // test-controlled path
+			if err != nil {
+				t.Fatalf("reading restored main.go: %v", err)
+			}
+			if string(restored) != original {
+				t.Errorf("main.go after %s = %q, want the original %q", tt.sig, restored, original)
+			}
+
+			if _, statErr := os.Stat(filepath.Join(project, ".scbake")); !os.IsNotExist(statErr) {
+				t.Errorf("transaction state was not cleaned up after %s (stat err: %v)", tt.sig, statErr)
+			}
+		})
+	}
+}
+
 // installBlockingGo writes a fake go binary that blocks on `go mod tidy` so the
 // test has a deterministic window in which to deliver a signal.
 func installBlockingGo(t *testing.T, work string) {
