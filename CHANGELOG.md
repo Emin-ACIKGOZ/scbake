@@ -4,6 +4,24 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.9.5] - 2026-11-06
+
+### Bug Fixes
+
+- **ci:** Pin macOS test runner to macos-26
+
+## [0.9.4] - 2026-11-01
+
+### Bug Fixes
+
+- **templates:** Indent GitHub CI setup steps as sequence items
+
+### Documentation
+
+- Correct rollback, atomicity, and reproducibility claims
+- **install:** Correct Go install and dependency requirements
+- **compliance:** Use common security wording
+
 ## [0.9.3] - 2026-10-27
 
 ### Bug Fixes
