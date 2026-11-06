@@ -64,7 +64,8 @@ func FuzzContentAlreadyPresentIdempotency(f *testing.F) {
 // FuzzGitignoreIgnoresInternalState checks that only the four supported
 // standalone .gitignore spellings are recognized. Surrounding text, comments,
 // path prefixes, and arbitrary bytes must not produce a false positive, while
-// trimming and CRLF handling must not hide a real entry.
+// trailing spaces, tabs, and CR must not hide a real entry. Leading whitespace
+// is part of the Git pattern and must not be trimmed.
 func FuzzGitignoreIgnoresInternalState(f *testing.F) {
 	f.Add([]byte(""))
 	f.Add([]byte("vendor/\n*.log\nnode_modules/\n"))
@@ -75,7 +76,8 @@ func FuzzGitignoreIgnoresInternalState(f *testing.F) {
 	f.Add([]byte("foo/.scbake/"))
 	f.Add([]byte(".scbake/\r\n"))
 	f.Add([]byte("vendor/\r\n.scbake\r\n*.log\r\n"))
-	f.Add([]byte("  .scbake  \n"))
+	f.Add([]byte(".scbake/ \t\r\n")) // trailing whitespace only
+	f.Add([]byte("  .scbake/\n"))    // leading whitespace is part of the pattern
 	f.Add([]byte("\x00\xff.scbake/\x00\n"))
 	f.Add([]byte(".scbake/\nfoo\n"))
 
@@ -84,12 +86,13 @@ func FuzzGitignoreIgnoresInternalState(f *testing.F) {
 	f.Fuzz(func(t *testing.T, input []byte) {
 		got := gitignoreIgnoresInternalState(input)
 
-		// Independent specification: true iff at least one trimmed line is
-		// exactly one of the supported spellings.
+		// Independent specification: true iff at least one line with only
+		// trailing spaces/tabs/CR removed is exactly one of the supported
+		// spellings.
 		want := false
 		var kept []string
 		for _, line := range strings.Split(string(input), "\n") {
-			trimmed := strings.TrimSpace(line)
+			trimmed := strings.TrimRight(line, " \t\r")
 			isSpelling := false
 			for _, spelling := range spellings {
 				if trimmed == spelling {

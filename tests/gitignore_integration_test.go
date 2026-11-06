@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
+	"scbake/pkg/tasks"
 	"strings"
 	"testing"
 
@@ -23,7 +24,7 @@ func requireSingleInternalStateIgnore(t *testing.T, project string) {
 	content := mustRead(t, filepath.Join(project, fileutil.GitIgnore))
 	count := 0
 	for _, line := range strings.Split(content, "\n") {
-		if strings.TrimSpace(line) == ".scbake/" {
+		if strings.TrimRight(line, " \t\r") == ".scbake/" {
 			count++
 		}
 	}
@@ -46,8 +47,7 @@ func requireBaseShadow(t *testing.T, project string) {
 	}
 
 	found := false
-	//nolint:gosec // test-controlled temp path
-	err = filepath.Walk(base, func(path string, info os.FileInfo, walkErr error) error {
+	err = filepath.Walk(base, func(_ string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -150,4 +150,70 @@ func TestGoProjectDoesNotDuplicateInternalStateIgnore(t *testing.T) {
 		t.Fatalf("apply failed: %v\n%s", err, out)
 	}
 	requireSingleInternalStateIgnore(t, project)
+}
+
+// requireNoDrift fails when drift scans the freshly reconciled project.
+func requireNoDrift(t *testing.T, project string) {
+	t.Helper()
+
+	out, err := runCLI("drift", project)
+	if err != nil {
+		t.Fatalf("drift reported changes after reconciliation: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "No drift detected") {
+		t.Fatalf("unexpected drift output:\n%s", out)
+	}
+}
+
+// TestManagedRootGitIgnoreHashMatchesDisk is the integration regression test for
+// the MEDIUM review finding: a .gitignore-writing template override without
+// .scbake/ gets the entry injected before hashing. The managed_files ledger must
+// match the on-disk file, and neither drift nor a later update may report
+// scbake's own append as user drift.
+func TestManagedRootGitIgnoreHashMatchesDisk(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+
+	work := t.TempDir()
+	t.Chdir(work)
+
+	overrideDir := filepath.Join(work, "overrides")
+	if err := os.MkdirAll(overrideDir, 0o750); err != nil {
+		t.Fatalf("create override dir: %v", err)
+	}
+	mustWrite(t, filepath.Join(overrideDir, "gitignore.tpl"), "vendor/\n")
+
+	out, err := runCLI("new", "managed-ignore", "--lang", "go", "--with", "makefile", "--template-dir", overrideDir)
+	if err != nil {
+		t.Fatalf("new failed: %v\n%s", err, out)
+	}
+
+	project := filepath.Join(work, "managed-ignore")
+	onDisk := mustRead(t, filepath.Join(project, fileutil.GitIgnore))
+	if !strings.Contains(onDisk, ".scbake/\n") {
+		t.Fatalf("managed .gitignore does not contain .scbake/:\n%q", onDisk)
+	}
+
+	manifest := decodeManifest(t, project)
+	wantHash := tasks.HashContent([]byte(onDisk))
+	if got := manifest.ManagedFiles[fileutil.GitIgnore]; got != wantHash {
+		t.Fatalf("managed_files[%q] = %q, want on-disk hash %q", fileutil.GitIgnore, got, wantHash)
+	}
+	requireNoDrift(t, project)
+
+	// A subsequent reconciliation must keep the ledger and disk in agreement.
+	out, err = runCLI("update", "--template-dir", overrideDir, project)
+	if err != nil {
+		t.Fatalf("update failed: %v\n%s", err, out)
+	}
+	updated := mustRead(t, filepath.Join(project, fileutil.GitIgnore))
+	if updated != onDisk {
+		t.Fatalf("update changed .gitignore: got %q, want %q", updated, onDisk)
+	}
+	manifest = decodeManifest(t, project)
+	if got := manifest.ManagedFiles[fileutil.GitIgnore]; got != tasks.HashContent([]byte(updated)) {
+		t.Fatalf("update desynchronized managed_files[%q]: got %q", fileutil.GitIgnore, got)
+	}
+	requireNoDrift(t, project)
 }
