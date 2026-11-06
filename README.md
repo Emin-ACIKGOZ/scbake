@@ -334,7 +334,9 @@ Discovery is bounded by the nearest Git root: a manifest at or below that root w
 | :--------- | :------------------------------------------------------------------------------ | :---------------------- |
 | **Go**     | Creates `.gitignore`, `main.go`; runs `go mod init`, `go mod tidy`              | `go`                    |
 | **Svelte** | Runs `npm create vite@latest`, installs dependencies, sets NPM scripts          | `npm`                   |
-| **Spring** | Downloads starter zip from `start.spring.io`, extracts, makes `mvnw` executable | `curl`, `unzip`, `java` |
+| **Spring** | Downloads starter zip from `start.spring.io`, extracts, makes `mvnw` executable | `curl`, `unzip` |
+
+**Note:** Spring scaffolding only requires `curl` and `unzip`. Java is required later to build the generated project, not to create it.
 
 
 ## Tooling Templates
