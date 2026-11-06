@@ -112,6 +112,7 @@ func TestEnsureTempDir_NotClockPredictable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
+	cleanupManagerMarker(t, tx)
 
 	file := filepath.Join(rootDir, "config.yaml")
 	createFile(t, file, "data", fileutil.FilePerms)
@@ -358,6 +359,7 @@ func TestTrack_RelativePathResolvedAgainstRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
+	cleanupManagerMarker(t, tx)
 
 	origWD, err := os.Getwd()
 	if err != nil {
@@ -409,6 +411,7 @@ func TestTrack_InRootNameBeginningWithDots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
+	cleanupManagerMarker(t, tx)
 
 	inRoot := filepath.Join(rootDir, "..hidden.xml")
 	createFile(t, inRoot, "data", fileutil.FilePerms)
@@ -630,6 +633,7 @@ func TestRollback_RefusesSymlinkedCreatedPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
+	cleanupManagerMarker(t, tx)
 
 	created := filepath.Join(root, "created")
 	if err := tx.Track(created); err != nil {

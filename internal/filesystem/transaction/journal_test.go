@@ -16,6 +16,17 @@ import (
 	"time"
 )
 
+// cleanupManagerMarker removes any local run marker a test transaction leaves
+// behind, keeping the private temp directory clean across runs.
+func cleanupManagerMarker(t *testing.T, tx *Manager) {
+	t.Helper()
+	t.Cleanup(func() {
+		if tx != nil && tx.markerPath != "" {
+			_ = os.Remove(tx.markerPath)
+		}
+	})
+}
+
 // markJournalOwnerDead rewrites the journal header so recovery treats the
 // transaction as belonging to a process that is no longer running.
 func markJournalOwnerDead(t *testing.T, dir string, pid int) {
@@ -362,6 +373,7 @@ func TestRecoverRefusesLiveTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cleanupManagerMarker(t, tx)
 
 	created := filepath.Join(root, "created.txt")
 	if err := tx.Track(created); err != nil {
@@ -498,6 +510,7 @@ func TestRecoverWithOptionsStopsOnCanceledContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cleanupManagerMarker(t, tx)
 	created := filepath.Join(root, "created.txt")
 	if err := tx.Track(created); err != nil {
 		t.Fatal(err)
@@ -845,6 +858,7 @@ func TestRecoverPreservesJournalOnRestoreFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cleanupManagerMarker(t, tx)
 	if err := tx.Track(existing); err != nil {
 		t.Fatal(err)
 	}

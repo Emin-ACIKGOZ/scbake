@@ -19,6 +19,7 @@ func TestTrack_CreatedSetMirrorsSlice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
+	cleanupManagerMarker(t, tx)
 
 	const n = 128
 	trackDistinct(t, tx, rootDir, n)
@@ -101,6 +102,7 @@ func TestTrack_DeduplicatesRepeatedCreatedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
+	cleanupManagerMarker(t, tx)
 
 	p := filepath.Join(rootDir, "once.txt")
 	for i := 0; i < 1000; i++ {
