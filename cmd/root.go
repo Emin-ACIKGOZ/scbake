@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"scbake/internal/util/fileutil"
@@ -50,9 +51,17 @@ and applying layered infrastructure templates.`,
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
+	// Go exits immediately on SIGINT/SIGTERM by default, which skips the
+	// deferred rollback in RunApply. Divert those signals into the command
+	// context so running tasks stop and the normal rollback path runs.
+	ctx, stopSignals, receivedSignal := signalContext(context.Background())
+	rootCmd.SetContext(ctx)
+
 	err := rootCmd.Execute()
-	if err != nil {
-		os.Exit(fileutil.ExitError)
+	stopSignals()
+
+	if code := commandExitCode(err, receivedSignal()); code != fileutil.ExitSuccess {
+		os.Exit(code)
 	}
 }
 
@@ -77,4 +86,5 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(driftCmd)
 	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(recoverCmd)
 }

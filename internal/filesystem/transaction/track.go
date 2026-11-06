@@ -29,10 +29,9 @@ func (m *Manager) Track(path string) error {
 
 	info, err := os.Lstat(absPath)
 	if os.IsNotExist(err) {
-		// Case 1: File/Dir does not exist. We record it as "created".
-		m.created = append(m.created, absPath)
-		m.createdSet[absPath] = struct{}{}
-		return nil
+		// Case 1: File/Dir does not exist. Journal it as created before the
+		// task writes, so a crash after the write can still remove it.
+		return m.trackCreated(absPath)
 	}
 	if err != nil {
 		// Some other error (permission, etc)
@@ -125,11 +124,62 @@ func (m *Manager) backupFile(absPath string, info os.FileInfo) error {
 		return fmt.Errorf("failed to backup file %s: %w", absPath, err)
 	}
 
-	// Record metadata
+	// Journal the backup before the caller overwrites the original. If the
+	// journal record is not durable, remove the now-unreferenced backup and
+	// abort. A close error after a durable record must keep the backup: both
+	// rollback and crash recovery need it.
+	journalPath, err := m.journalPathFor(absPath)
+	if err != nil {
+		_ = os.Remove(backupPath)
+		return err
+	}
+	durable, err := m.appendJournal(journalRecord{
+		Op:     journalOpBackup,
+		Path:   journalPath,
+		Backup: filepath.Base(backupPath),
+		Mode:   uint32(info.Mode()),
+	})
+	if err != nil && !durable {
+		_ = os.Remove(backupPath)
+		return err
+	}
+
+	// Record metadata. This runs for a durable record even when closing the
+	// journal reported an error, so rollback can still restore the file.
 	m.backups[absPath] = backupEntry{
 		tempPath: backupPath,
 		mode:     info.Mode(),
 	}
 
-	return nil
+	return err
+}
+
+// journalPathFor stores paths relative to the transaction root. The journal
+// survives a root relocation or a different symlinked spelling of the project,
+// while recovery still revalidates every path against the current root.
+func (m *Manager) journalPathFor(absPath string) (string, error) {
+	rel, err := filepath.Rel(m.rootPath, absPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to make %s relative to transaction root: %w", absPath, err)
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("refusing to journal path outside transaction root: %s", absPath)
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// trackCreated journals and records a path the task is about to create.
+func (m *Manager) trackCreated(absPath string) error {
+	journalPath, err := m.journalPathFor(absPath)
+	if err != nil {
+		return err
+	}
+	durable, err := m.appendJournal(journalRecord{Op: journalOpCreate, Path: journalPath})
+	if durable {
+		// Keep the in-memory entry even when closing the journal failed: the
+		// durable record describes this path, so rollback must still remove it.
+		m.created = append(m.created, absPath)
+		m.createdSet[absPath] = struct{}{}
+	}
+	return err
 }

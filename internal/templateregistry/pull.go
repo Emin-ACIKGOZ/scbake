@@ -34,6 +34,11 @@ const (
 // Pull downloads a template from a registry and caches it locally.
 // Uses the registry's stored token (overridable via SCBAKE_REGISTRY_TOKEN_<NAME> env var).
 func (m *Manager) Pull(registryName, templateName string) error {
+	return m.PullContext(context.Background(), registryName, templateName)
+}
+
+// PullContext is Pull with a caller-supplied cancellation context.
+func (m *Manager) PullContext(ctx context.Context, registryName, templateName string) error {
 	if err := ValidateName(registryName); err != nil {
 		return fmt.Errorf("invalid registry name: %w", err)
 	}
@@ -64,6 +69,7 @@ func (m *Manager) Pull(registryName, templateName string) error {
 
 	destDir := TemplateCachePath(m.cacheDir, registryName, templateName)
 	pullCtx := pullRequest{
+		ctx:          ctx,
 		downloadURL:  downloadURL,
 		token:        token,
 		destDir:      destDir,
@@ -79,6 +85,14 @@ func (m *Manager) Pull(registryName, templateName string) error {
 // PullFromURL downloads a template archive from an arbitrary URL and caches it.
 // Accepts an optional token for authentication.
 func (m *Manager) PullFromURL(registryName, templateName, downloadURL, token string) error {
+	return m.PullFromURLContext(context.Background(), registryName, templateName, downloadURL, token)
+}
+
+// PullFromURLContext is PullFromURL with a caller-supplied cancellation context.
+func (m *Manager) PullFromURLContext(
+	ctx context.Context,
+	registryName, templateName, downloadURL, token string,
+) error {
 	if err := ValidateName(registryName); err != nil {
 		return fmt.Errorf("invalid registry name: %w", err)
 	}
@@ -88,6 +102,7 @@ func (m *Manager) PullFromURL(registryName, templateName, downloadURL, token str
 
 	destDir := TemplateCachePath(m.cacheDir, registryName, templateName)
 	pullCtx := pullRequest{
+		ctx:          ctx,
 		downloadURL:  downloadURL,
 		token:        token,
 		destDir:      destDir,
@@ -99,6 +114,7 @@ func (m *Manager) PullFromURL(registryName, templateName, downloadURL, token str
 }
 
 type pullRequest struct {
+	ctx          context.Context
 	downloadURL  string
 	token        string
 	destDir      string
@@ -110,6 +126,9 @@ type pullRequest struct {
 }
 
 func (m *Manager) pullFromURL(pr pullRequest) error {
+	if pr.ctx == nil {
+		pr.ctx = context.Background()
+	}
 	manifestPath := TemplateManifestPath(m.cacheDir, pr.registryName, pr.templateName)
 	if err := m.validatePull(pr, manifestPath); err != nil {
 		return err
@@ -161,7 +180,7 @@ func (m *Manager) validatePull(pr pullRequest, manifestPath string) error {
 // immediately before each removal (see removeAllContained) in case destDir was
 // swapped for an escaping symlink while the body was read.
 func (m *Manager) downloadAndCache(pr pullRequest, manifestPath string) error {
-	resp, err := doDownload(pr.downloadURL, pr.token, pr.templateName)
+	resp, err := doDownloadContext(pr.ctx, pr.downloadURL, pr.token, pr.templateName)
 	if err != nil {
 		return err
 	}
@@ -362,10 +381,14 @@ func hashTree(dir string) (string, error) {
 }
 
 func doDownload(downloadURL, token, name string) (*http.Response, error) {
-	// The request uses a never-canceled background context; the client timeout
-	// below bounds the whole exchange. The caller reads resp.Body after this
-	// function returns, so the request context must not be canceled here.
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, downloadURL, nil)
+	return doDownloadContext(context.Background(), downloadURL, token, name)
+}
+
+func doDownloadContext(ctx context.Context, downloadURL, token, name string) (*http.Response, error) {
+	// The caller owns ctx and must keep it alive until resp.Body is read. The
+	// client timeout below bounds the whole exchange in addition to whatever
+	// cancellation the caller supplies.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		redactURLError(err)
 		return nil, fmt.Errorf("creating request for %s: %w", RedactURL(downloadURL), err)

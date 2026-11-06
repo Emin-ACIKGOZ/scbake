@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"scbake/internal/core"
@@ -37,11 +38,11 @@ var newCmd = &cobra.Command{
 	Short: "Create a new standalone project",
 	Long:  `Creates a new directory and applies the specified language pack and templates.`,
 	Args:  cobra.ExactArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		projectName := args[0]
 		dirCreated := false
 
-		if err := runNew(projectName, &dirCreated); err != nil {
+		if err := runNew(cmd.Context(), projectName, &dirCreated); err != nil {
 			// Cleanup: Only remove the directory if it was created during this session.
 			if dirCreated {
 				fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
@@ -56,7 +57,7 @@ var newCmd = &cobra.Command{
 }
 
 // runNew coordinates the project directory setup and delegates template application to the core engine.
-func runNew(projectName string, dirCreated *bool) error {
+func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 	// Reject traversal or absolute project names before touching the filesystem
 	// so 'new' can never create a directory outside the current working dir.
 	if err := templateregistry.ValidateName(projectName); err != nil {
@@ -111,6 +112,8 @@ func runNew(projectName string, dirCreated *bool) error {
 		License:             newLicenseFlag,
 		CopyrightHolder:     newCopyrightHolderFlag,
 		SetVars:             setVars,
+		Ctx:                 ctx,
+		NewProject:          true,
 		AllowAncestorSearch: allowAncestorSearch,
 	}
 

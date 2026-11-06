@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ func resetFlags() {
 	dryRun = false
 	force = false
 	allowAncestorSearch = false
+	recoverDiscardFlag = false
 }
 
 // executeCLI simulates command invocation by setting args on the root Cobra command.
@@ -60,18 +62,18 @@ func createMockGitScript(t *testing.T, dir string, failCommit bool) {
 		name = "git.bat"
 		// Use findstr to catch the 'commit' subcommand regardless of flag positions.
 		content = fmt.Sprintf(`@echo off
-echo %%* | findstr "init" >nul && ( mkdir %s & exit /b 0 )
+echo %%* | findstr "init" >nul && ( mkdir %s\info & type nul > %s\info\exclude & exit /b 0 )
 echo %%* | findstr "commit" >nul && ( if "%s"=="true" exit /b 1 )
-exit /b 0`, fileutil.GitDir, failStr)
+exit /b 0`, fileutil.GitDir, fileutil.GitDir, failStr)
 	} else {
 		name = "git"
 		// Use case matching to catch 'commit' or 'init' anywhere in the argument string.
 		content = fmt.Sprintf(`#!/bin/sh
 case "$*" in
-  *init*) mkdir %s; exit 0 ;;
+  *init*) mkdir -p %s/info; : > %s/info/exclude; exit 0 ;;
   *commit*) [ "%s" = "true" ] && exit 1 ;;
 esac
-exit 0`, fileutil.GitDir, failStr)
+exit 0`, fileutil.GitDir, fileutil.GitDir, failStr)
 	}
 
 	path := filepath.Join(dir, name)
@@ -341,37 +343,41 @@ func TestNew_DirectoryAlreadyExists(t *testing.T) {
 
 // --- Apply Command Tests ---
 
-// Verifies atomic rollback restores original file content on execution failure.
-func TestApply_PermissionError_Rollback(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip() // Permission modes (0400) behave differently on Windows.
-	}
-
+// TestApply_RollbackRestoresFile verifies that a handled task failure restores
+// the file that existed before the run and removes transaction residue.
+func TestApply_RollbackRestoresFile(t *testing.T) {
 	resetFlags()
 
 	tmpDir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(tmpDir, fileutil.ManifestFileName), []byte(""), fileutil.PrivateFilePerms)
 
-	targetFile := filepath.Join(tmpDir, "readonly.txt")
-	_ = os.WriteFile(targetFile, []byte("ORIGINAL"), 0400)
+	oldWD, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	_ = os.Chdir(tmpDir)
+
+	// Use the path the command will discover after chdir. On macOS /var is a
+	// symlink to /private/var, so mixing both spellings would make Track's
+	// lexical containment check reject the file.
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetFile := filepath.Join(root, "config.txt")
+	_ = os.WriteFile(targetFile, []byte("ORIGINAL"), fileutil.FilePerms)
 
 	templates.Register("fail", &MockHandlerGeneric{
 		Tasks: []types.Task{&MockFailTask{TargetFile: targetFile}},
 	})
 
-	oldWD, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(oldWD) })
-	_ = os.Chdir(tmpDir)
-
 	_ = executeCLI("apply", "--with", "fail", ".")
 
-	// Validate content restoration via cleaned path to satisfy G304.
-	content, _ := os.ReadFile(filepath.Clean(targetFile)) // #nosec G304
-	if string(content) != "ORIGINAL" {
-		t.Error("rollback failed to restore original content")
+	content, err := os.ReadFile(filepath.Clean(targetFile)) // #nosec G304
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	_ = os.Chmod(targetFile, fileutil.PrivateFilePerms)
+	if string(content) != "ORIGINAL" {
+		t.Errorf("restored content = %q, want %q", content, "ORIGINAL")
+	}
 	verifyTransactionCleanup(t, tmpDir)
 }
 
@@ -466,7 +472,7 @@ func TestRunNew_RejectsTraversalProjectName(t *testing.T) {
 
 	for _, name := range []string{"../evil", "..", "/abs", "a/b"} {
 		created := false
-		if err := runNew(name, &created); err == nil {
+		if err := runNew(context.Background(), name, &created); err == nil {
 			t.Errorf("runNew(%q) = nil, want error for traversal project name", name)
 		}
 		if created {

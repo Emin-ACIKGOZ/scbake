@@ -5,6 +5,8 @@ package tasks
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,11 +15,17 @@ import (
 	"scbake/internal/types"
 	"slices"
 	"strings"
+	"time"
 )
 
 const (
 	registryTokenEnvPrefix = templateregistry.RegistryTokenEnvPrefix
 	maxStderrBytes         = 4 << 10
+
+	// commandWaitDelay bounds how long Wait may block on inherited I/O pipes
+	// after the child is killed. Orphaned descendants can otherwise keep the
+	// stderr pipe open indefinitely (os/exec Cmd.WaitDelay).
+	commandWaitDelay = 2 * time.Second
 )
 
 // scrubRegistryTokens removes registry credentials from a child environment.
@@ -112,6 +120,7 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 	// G204: Command arguments are defined in the task manifest, which is the intended behavior
 	//nolint:gosec
 	cmd := exec.CommandContext(tc.Ctx, t.Cmd, t.Args...)
+	cmd.WaitDelay = commandWaitDelay
 
 	// Set the working directory for the command
 	if t.RunInTarget {
@@ -127,14 +136,36 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 	var stderr limitedBuffer
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
-	if err != nil {
-		msg := stderr.buf.String()
-		if stderr.truncated {
-			msg += "\n[stderr truncated]"
-		}
-		return fmt.Errorf("failed to run command '%s %v': %v\nstderr: %s", t.Cmd, t.Args, err, msg)
+	if err := cmd.Run(); err != nil {
+		return commandExecutionError(tc.Ctx, t.Cmd, t.Args, err, &stderr)
 	}
 
 	return nil
+}
+
+// commandExecutionError turns a child failure into a user-facing error. It also
+// treats ErrWaitDelay as success: WaitDelay only closes inherited pipes after
+// the child has already exited successfully.
+func commandExecutionError(ctx context.Context, name string, args []string, err error, stderr *limitedBuffer) error {
+	if ctxErr := canceledCommandError(ctx); ctxErr != nil {
+		return fmt.Errorf("command '%s %v' interrupted: %w", name, args, ctxErr)
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return nil
+	}
+
+	msg := stderr.buf.String()
+	if stderr.truncated {
+		msg += "\n[stderr truncated]"
+	}
+	return fmt.Errorf("failed to run command '%s %v': %v\nstderr: %s", name, args, err, msg)
+}
+
+// canceledCommandError reports a canceled task context, tolerating the zero
+// TaskContext used by tests and library callers that do not configure one.
+func canceledCommandError(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
 }

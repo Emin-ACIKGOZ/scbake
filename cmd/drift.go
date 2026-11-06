@@ -4,12 +4,14 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
 
 	"scbake/internal/core"
 	"scbake/internal/drift"
+	"scbake/internal/filesystem/transaction"
 	"scbake/internal/manifest"
 	"scbake/internal/types"
 	"scbake/internal/ui"
@@ -40,7 +42,7 @@ local edits according to --conflict-strategy. Because 'merge' preserves local
 edits it does not clear drift; use 'overwrite' to force restoration.`,
 	Args:         cobra.MaximumNArgs(1),
 	SilenceUsage: true,
-	RunE: func(_ *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		manifestPathArg := "."
 		targetPath := "."
 		if len(args) > 0 {
@@ -54,7 +56,7 @@ edits it does not clear drift; use 'overwrite' to force restoration.`,
 		}
 
 		if driftRepairFlag {
-			return repairDrift(absPath, manifestPathArg)
+			return repairDrift(cmd.Context(), absPath, manifestPathArg)
 		}
 
 		m, rootPath, err := manifest.LoadWithOptions(absPath, manifest.DiscoveryOptions{
@@ -62,6 +64,12 @@ edits it does not clear drift; use 'overwrite' to force restoration.`,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to load manifest: %w", err)
+		}
+
+		// An interrupted run leaves a journal that a plain drift scan cannot
+		// see in managed_files. Never report such a tree as clean.
+		if err := transaction.CheckPending(rootPath); err != nil {
+			return err
 		}
 
 		findings, err := drift.Detect(m, rootPath)
@@ -89,7 +97,7 @@ edits it does not clear drift; use 'overwrite' to force restoration.`,
 
 // repairDrift reuses 'update' so repair and update share one reconciliation and
 // transaction implementation. Local edits are preserved per --conflict-strategy.
-func repairDrift(absPath, manifestPathArg string) error {
+func repairDrift(ctx context.Context, absPath, manifestPathArg string) error {
 	rc := core.RunContext{
 		TargetPath:          absPath,
 		ManifestPathArg:     manifestPathArg,
@@ -98,6 +106,7 @@ func repairDrift(absPath, manifestPathArg string) error {
 		ConflictStrategy:    driftStrategyFlag,
 		TemplateDir:         templateDirFlag,
 		RegistryCacheDir:    GetRegistryCacheDir(),
+		Ctx:                 ctx,
 		AllowAncestorSearch: allowAncestorSearch,
 	}
 	reporter := ui.NewReporter(runUpdateTotalSteps, dryRun)

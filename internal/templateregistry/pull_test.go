@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1120,5 +1122,23 @@ func TestPullFromURL_RepullsLegacyManifest(t *testing.T) {
 	}
 	if callCount != 1 {
 		t.Fatalf("upgraded manifest should be a cache hit, got %d downloads", callCount)
+	}
+}
+
+// TestPullFromURLContext_HonorsCancellation verifies that a canceled CLI
+// context stops a network pull instead of waiting for the HTTP timeout.
+func TestPullFromURLContext_HonorsCancellation(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := m.PullFromURLContext(ctx, "acme", "go-api", "http://127.0.0.1:1/template.tar.gz", "")
+	if err == nil {
+		t.Fatal("canceled pull succeeded")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("pull error = %v, want context.Canceled", err)
 	}
 }

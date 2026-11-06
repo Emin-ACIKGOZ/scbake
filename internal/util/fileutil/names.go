@@ -28,4 +28,10 @@ const (
 
 	// ExitError indicates a general process failure.
 	ExitError = 1
+
+	// ExitInterrupted is the conventional exit status after SIGINT (128 + 2).
+	ExitInterrupted = 130
+
+	// ExitTerminated is the conventional exit status after SIGTERM (128 + 15).
+	ExitTerminated = 143
 )
