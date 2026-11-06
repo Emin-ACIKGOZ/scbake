@@ -81,39 +81,52 @@ func TestRunMarkerRejectsTempInsideProject(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			inside := filepath.Join(root, "tmp")
-			if err := os.MkdirAll(inside, fileutil.DirPerms); err != nil {
-				t.Fatal(err)
-			}
-			if tt.chdir {
-				t.Chdir(root)
-				t.Setenv("TMPDIR", tt.tmpDir)
-			} else {
-				t.Setenv("TMPDIR", inside)
-			}
-
-			nonce, err := newJournalNonce()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if path, err := writeRunMarker(nonce, root); err == nil {
-				t.Fatalf("writeRunMarker wrote %s inside the project root", path)
-			}
-
-			err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-				if err != nil {
-					return err
-				}
-				if !info.IsDir() && strings.HasPrefix(info.Name(), runMarkerPrefix) {
-					t.Errorf("run marker leaked into the project at %s", path)
-				}
-				return nil
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			assertRunMarkerRejectedForTempInsideProject(t, tt.tmpDir, tt.chdir)
 		})
+	}
+}
+
+// assertRunMarkerRejectedForTempInsideProject points TMPDIR at the project and
+// verifies that no marker is written into it.
+func assertRunMarkerRejectedForTempInsideProject(t *testing.T, tmpDir string, chdir bool) {
+	t.Helper()
+
+	root := t.TempDir()
+	inside := filepath.Join(root, "tmp")
+	if err := os.MkdirAll(inside, fileutil.DirPerms); err != nil {
+		t.Fatal(err)
+	}
+	if chdir {
+		t.Chdir(root)
+		t.Setenv("TMPDIR", tmpDir)
+	} else {
+		t.Setenv("TMPDIR", inside)
+	}
+
+	nonce, err := newJournalNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path, err := writeRunMarker(nonce, root); err == nil {
+		t.Fatalf("writeRunMarker wrote %s inside the project root", path)
+	}
+	assertNoRunMarkerInTree(t, root)
+}
+
+// assertNoRunMarkerInTree fails when a run marker leaked into root.
+func assertNoRunMarkerInTree(t *testing.T, root string) {
+	t.Helper()
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && strings.HasPrefix(info.Name(), runMarkerPrefix) {
+			t.Errorf("run marker leaked into the project at %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -186,10 +199,10 @@ func TestJournalTrustedRejectsInsecureMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(markerDir, runMarkerPrefix+nonce+runMarkerSuffix)
-	if err := os.WriteFile(path, []byte(canonicalRoot(root)+"\n"), 0o666); err != nil {
+	if err := os.WriteFile(path, []byte(canonicalRoot(root)+"\n"), fileutil.PrivateFilePerms); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(path, 0o666); err != nil {
+	if err := os.Chmod(path, 0o666); err != nil { // #nosec G302 -- test verifies an insecure marker is rejected
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Remove(path) })
@@ -573,7 +586,37 @@ func TestRecoverDiscardRemovesTransaction(t *testing.T) {
 // corrupted journal instead of deleting unknown paths, and that an explicit
 // discard still removes its run marker.
 func TestJournalRejectsMalformedTransaction(t *testing.T) {
-	root := t.TempDir()
+	root, txDir, markerPath := createMalformedTransaction(t)
+
+	if _, err := ListPending(root); err == nil {
+		t.Fatal("ListPending accepted a malformed journal")
+	}
+	if _, err := Recover(root, false); err == nil {
+		t.Fatal("Recover accepted a malformed journal")
+	}
+	if _, err := os.Stat(txDir); err != nil {
+		t.Errorf("malformed journal directory was removed: %v", err)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("refused recovery removed the run marker: %v", err)
+	}
+	if _, err := Recover(root, true); err != nil {
+		t.Fatalf("discard failed for a malformed journal: %v", err)
+	}
+	if _, err := os.Stat(txDir); !os.IsNotExist(err) {
+		t.Errorf("discard left a malformed journal directory: %v", err)
+	}
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Errorf("discard left the run marker for a malformed journal: %v", err)
+	}
+}
+
+// createMalformedTransaction builds an interrupted transaction whose journal
+// body is invalid while its header remains readable.
+func createMalformedTransaction(t *testing.T) (root, txDir, markerPath string) {
+	t.Helper()
+
+	root = t.TempDir()
 	tx, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -582,7 +625,7 @@ func TestJournalRejectsMalformedTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	markJournalOwnerDead(t, tx.tempDir, 1<<30)
-	markerPath := tx.markerPath
+	markerPath = tx.markerPath
 	if markerPath == "" {
 		t.Fatal("transaction did not create a run marker")
 	}
@@ -599,28 +642,7 @@ func TestJournalRejectsMalformedTransaction(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-
-	if _, err := ListPending(root); err == nil {
-		t.Fatal("ListPending accepted a malformed journal")
-	}
-	if _, err := Recover(root, false); err == nil {
-		t.Fatal("Recover accepted a malformed journal")
-	}
-	if _, err := os.Stat(tx.tempDir); err != nil {
-		t.Errorf("malformed journal directory was removed: %v", err)
-	}
-	if _, err := os.Stat(markerPath); err != nil {
-		t.Errorf("refused recovery removed the run marker: %v", err)
-	}
-	if _, err := Recover(root, true); err != nil {
-		t.Fatalf("discard failed for a malformed journal: %v", err)
-	}
-	if _, err := os.Stat(tx.tempDir); !os.IsNotExist(err) {
-		t.Errorf("discard left a malformed journal directory: %v", err)
-	}
-	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
-		t.Errorf("discard left the run marker for a malformed journal: %v", err)
-	}
+	return root, tx.tempDir, markerPath
 }
 
 // TestRecoverDiscardSweepsMarkerWithUnreadableHeader verifies that discard also

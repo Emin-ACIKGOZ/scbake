@@ -313,7 +313,7 @@ func TestRecoverTerminatesOnSignal(t *testing.T) {
 	project := t.TempDir()
 	writePendingTransactions(t, project, 300, 500)
 
-	cmd := exec.CommandContext(context.Background(), binaryPath, "recover", "--force", project)
+	cmd := exec.CommandContext(context.Background(), binaryPath, "recover", "--force", project) // #nosec G204 -- test-controlled binary path
 	cmd.Dir = project
 	var output bytes.Buffer
 	cmd.Stdout = &output

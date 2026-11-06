@@ -62,10 +62,10 @@ func TestRunMarkerDirRejectsSymlink(t *testing.T) {
 	t.Setenv("TMPDIR", base)
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "target")
-	if err := os.Mkdir(target, 0o755); err != nil {
+	if err := os.Mkdir(target, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(target, 0o755); err != nil {
+	if err := os.Chmod(target, 0o750); err != nil { // #nosec G302 -- test fixture mode must differ from the 0700 marker mode
 		t.Fatal(err)
 	}
 
@@ -81,8 +81,8 @@ func TestRunMarkerDirRejectsSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o755 {
-		t.Errorf("marker directory symlink changed target mode to %o, want 755", info.Mode().Perm())
+	if info.Mode().Perm() != 0o750 {
+		t.Errorf("marker directory symlink changed target mode to %o, want 750", info.Mode().Perm())
 	}
 }
 
