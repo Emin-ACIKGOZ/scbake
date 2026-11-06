@@ -18,6 +18,12 @@ type Handler struct{}
 // gitCmd is the Git executable invoked for repository setup tasks.
 const gitCmd = "git"
 
+// internalStateExclude is the pathspec magic that keeps scbake's private state
+// directory out of the initial commit even when no language pack supplied a
+// .gitignore. A committed journal can make a clone report drift and lets
+// `scbake recover` replay stale filesystem operations against the checkout.
+const internalStateExclude = ":(exclude).scbake"
+
 // GetTasks returns the plan to initialize a Git repository.
 // It performs `git init`, `git add .`, and `git commit` for a fresh target.
 //
@@ -80,14 +86,17 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		PredictedCreated: []string{fileutil.GitDir},
 	})
 
-	// Task 2: Stage all files with hooks disabled.
+	// Task 2: Stage all files with hooks disabled. `.scbake` holds transaction
+	// backups and the recovery journal; it is local process state, never a
+	// project artifact, so it must not enter the initial commit even when the
+	// selected templates do not provide a .gitignore that excludes it.
 	prio, err = seq.Next()
 	if err != nil {
 		return nil, err
 	}
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd:         gitCmd,
-		Args:        []string{"-c", noHooks, "add", "."},
+		Args:        []string{"-c", noHooks, "add", "--", ".", internalStateExclude},
 		Desc:        "Stage files",
 		TaskPrio:    int(prio),
 		RunInTarget: true,
