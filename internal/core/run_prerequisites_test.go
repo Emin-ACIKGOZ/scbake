@@ -30,7 +30,7 @@ func installFakeBinary(t *testing.T, dir, bin string) {
 	if runtime.GOOS == "windows" {
 		content = []byte("@echo off\r\nexit /b 0\r\n")
 	}
-	if err := os.WriteFile(path, content, 0o755); err != nil {
+	if err := os.WriteFile(path, content, 0o755); err != nil { //nolint:gosec // executable PATH shim for exec.LookPath
 		t.Fatalf("write fake %s binary: %v", bin, err)
 	}
 }
