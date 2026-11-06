@@ -236,6 +236,100 @@ func TestRecoverContextStopsBetweenEntries(t *testing.T) {
 	}
 }
 
+// TestRecoverNewCompletesRootRemovalAfterCancellation verifies that once the
+// tracked files are restored, a signal cannot strand the bootstrap root. The
+// old flow deleted the journal during rollback cleanup, then skipped root
+// removal on cancellation, leaving nothing for a retry to act on.
+func TestRecoverNewCompletesRootRemovalAfterCancellation(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "demo")
+	if err := os.Mkdir(root, fileutil.DirPerms); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := NewWithOptions(root, Options{RemoveRootOnRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := filepath.Join(root, "main.go")
+	if err := tx.Track(created); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+	markJournalOwnerDead(t, tx.tempDir, 1<<30)
+
+	ctx := &cancelWhenGoneContext{Context: context.Background(), path: tx.tempDir}
+	_, err = RecoverContext(ctx, root, false)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("RecoverContext error = %v, want nil or context.Canceled", err)
+	}
+
+	if _, statErr := os.Stat(root); !os.IsNotExist(statErr) {
+		if _, retryErr := RecoverContext(context.Background(), root, false); retryErr != nil {
+			t.Fatalf("retry after canceled root removal failed: %v", retryErr)
+		}
+		if _, statErr := os.Stat(root); !os.IsNotExist(statErr) {
+			t.Fatalf("canceled recovery left the bootstrap root without a usable retry record: %v", statErr)
+		}
+	}
+}
+
+// TestRecoverNewRetriesAfterRootRemovalFailure verifies that a failed root
+// removal leaves the transaction directory intact, so a second recover can
+// finish removing the bootstrap root.
+//
+//nolint:cyclop // Sets up an interrupted new, injects a removal failure, then retries.
+func TestRecoverNewRetriesAfterRootRemovalFailure(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "demo")
+	if err := os.Mkdir(root, fileutil.DirPerms); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := NewWithOptions(root, Options{RemoveRootOnRecovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := filepath.Join(root, "main.go")
+	if err := tx.Track(created); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+	markJournalOwnerDead(t, tx.tempDir, 1<<30)
+
+	originalRename := renameRootForRemoval
+	t.Cleanup(func() { renameRootForRemoval = originalRename })
+	renameRootForRemoval = func(_, _ string) error {
+		return errors.New("injected root removal failure")
+	}
+
+	if _, err := RecoverContext(context.Background(), root, false); err == nil {
+		t.Fatal("RecoverContext succeeded despite the injected root removal failure")
+	}
+	if _, statErr := os.Stat(root); statErr != nil {
+		t.Fatalf("failed root removal removed the root: %v", statErr)
+	}
+	if _, statErr := os.Stat(tx.tempDir); statErr != nil {
+		t.Fatalf("failed root removal deleted the retry journal: %v", statErr)
+	}
+
+	renameRootForRemoval = originalRename
+	recovered, err := RecoverContext(context.Background(), root, false)
+	if err != nil {
+		t.Fatalf("retry after failed root removal failed: %v", err)
+	}
+	if recovered != 1 {
+		t.Errorf("retry handled %d transactions, want 1", recovered)
+	}
+	if _, statErr := os.Stat(root); !os.IsNotExist(statErr) {
+		t.Errorf("retry left the bootstrap root behind: %v", statErr)
+	}
+}
+
 // TestRecoverRefusesLiveTransaction ensures recovery never touches a
 // transaction owned by a running process.
 func TestRecoverRefusesLiveTransaction(t *testing.T) {

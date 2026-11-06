@@ -577,14 +577,8 @@ func refuseLiveTransactions(ctx context.Context, dirs []string) error {
 // recoverTransaction replays the journal in reverse, then removes the
 // transaction directory.
 func recoverTransaction(ctx context.Context, rootPath, dir string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	journal, err := readTransactionJournal(dir)
+	journal, err := readRecoveryJournal(ctx, dir)
 	if err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if journal.Committed {
@@ -598,6 +592,14 @@ func recoverTransaction(ctx context.Context, rootPath, dir string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if journal.RemoveRoot {
+		// Restore tracked state without deleting the journal yet. Root removal
+		// below is the only step that consumes the retry record.
+		if err := manager.rollbackChanges(ctx); err != nil {
+			return fmt.Errorf("failed to recover transaction %s: %w", dir, err)
+		}
+		return removeBootstrappedRoot(context.WithoutCancel(ctx), rootPath)
+	}
 	if err := manager.RollbackContext(ctx); err != nil {
 		return fmt.Errorf("failed to recover transaction %s: %w", dir, err)
 	}
@@ -605,7 +607,23 @@ func recoverTransaction(ctx context.Context, rootPath, dir string) error {
 		return err
 	}
 
-	return removeBootstrappedRoot(ctx, rootPath, journal.RemoveRoot)
+	return nil
+}
+
+// readRecoveryJournal reads one journal and checks cancellation on both sides
+// of the potentially large parse.
+func readRecoveryJournal(ctx context.Context, dir string) (*transactionJournal, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	journal, err := readTransactionJournal(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return journal, nil
 }
 
 // cleanCommittedTransaction removes a transaction whose committed record is
@@ -620,21 +638,33 @@ func cleanCommittedTransaction(ctx context.Context, dir string) error {
 	return ctx.Err()
 }
 
+// renameRootForRemoval is the rename used to stage a bootstrap root for
+// deletion. Tests replace it to inject a deterministic removal failure.
+var renameRootForRemoval = os.Rename
+
 // removeBootstrappedRoot removes the project directory for an interrupted
-// `new`. `new` creates the project directory and bootstrap manifest before the
-// transaction starts, so recovery removes the whole half-created project,
-// matching the command's own handled-error cleanup.
-func removeBootstrappedRoot(ctx context.Context, rootPath string, remove bool) error {
+// `new`. It first renames the root into a sibling staging directory. The rename
+// is atomic: if it fails, the original root and its transaction journal are
+// untouched, so recovery can be retried. Once the rename succeeds the original
+// root path is gone and the staged tree is deleted.
+func removeBootstrappedRoot(ctx context.Context, rootPath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !remove {
-		return nil
+	parent := filepath.Dir(rootPath)
+	staging, err := os.MkdirTemp(parent, ".scbake-remove-*")
+	if err != nil {
+		return fmt.Errorf("failed to stage bootstrapped project root %s for removal: %w", rootPath, err)
 	}
-	if err := os.RemoveAll(rootPath); err != nil {
+	destination := filepath.Join(staging, filepath.Base(rootPath))
+	if err := renameRootForRemoval(rootPath, destination); err != nil {
+		_ = os.Remove(staging)
 		return fmt.Errorf("failed to remove bootstrapped project root %s: %w", rootPath, err)
 	}
-	return ctx.Err()
+	if err := os.RemoveAll(staging); err != nil {
+		return fmt.Errorf("removed bootstrapped project root %s but failed to clean staging directory %s: %w", rootPath, staging, err)
+	}
+	return nil
 }
 
 // managerFromJournal reconstructs rollback state without trusting any path

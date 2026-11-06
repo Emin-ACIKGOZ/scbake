@@ -29,6 +29,22 @@ func (m *Manager) RollbackContext(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	return m.rollback(ctx, true)
+}
+
+// rollbackChanges performs the same file restoration as RollbackContext but
+// leaves the transaction directory and journal in place. Recovery uses it when
+// removing a bootstrap root must happen before the retry record is discarded.
+func (m *Manager) rollbackChanges(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.rollback(ctx, false)
+}
+
+// rollback restores tracked state, optionally removing the temp directory and
+// journal once every mutation succeeded.
+func (m *Manager) rollback(ctx context.Context, cleanup bool) error {
 	if m.committed {
 		return nil
 	}
@@ -38,7 +54,7 @@ func (m *Manager) RollbackContext(ctx context.Context) error {
 	if ctxErr == nil {
 		errs = append(errs, m.restoreBackups(ctx)...)
 		ctxErr = ctx.Err()
-		if ctxErr == nil && len(errs) == 0 {
+		if ctxErr == nil && len(errs) == 0 && cleanup {
 			errs = append(errs, m.cleanupTempDir()...)
 			ctxErr = ctx.Err()
 		}
