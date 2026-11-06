@@ -208,6 +208,11 @@ generated project up to date **without clobbering local edits**. It replays
 managed template and license writes, but does not replay side-effecting commands
 or custom tasks such as file appends or XML insertions.
 
+Because `update` replays the `compliance` LICENSE write, it fetches the license
+text from spdx.org on every run, even when LICENSE is already current. On a
+compliance project, `update` and `drift --repair` therefore need network access
+to spdx.org; they fail offline. Plain `drift` does not need the network.
+
 ```bash
 scbake update [--template-dir <dir>] [--conflict-strategy <strategy>] [<path>]
 ```

@@ -473,7 +473,11 @@ It opens no transaction, takes no project lock, renders no template, and never
 touches the network, so it is safe as a CI gate; it exits non-zero when any
 blocking finding remains. `--repair` delegates to `core.RunUpdate`, so detection
 and repair share one reconciliation implementation (`internal/drift`). Detection
-does not backfill a missing base; a no-op `update` does not either.
+does not backfill a missing base; a no-op `update` does not either. Because repair
+replays `LicenseTask`, a compliance project's repair fetches the license text from
+spdx.org when the license inputs changed, no prior input fingerprint is recorded,
+or LICENSE is missing or locally modified. If the inputs are unchanged and LICENSE
+is clean, the task skips the fetch; plain detection never needs the network.
 
 Detection is deliberately conservative: a locally edited file is drift even
 when `update`'s default `merge` strategy is a no-op that preserves the edit.

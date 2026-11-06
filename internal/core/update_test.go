@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"scbake/internal/manifest"
 	"scbake/internal/types"
 	"scbake/internal/ui"
 	"scbake/pkg/tasks"
 	"scbake/pkg/templates/compliance"
+	"strings"
 	"testing"
 )
 
@@ -168,8 +170,7 @@ func TestUpdateLicenseHandEditFollowsConflictStrategy(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
 			}
-			// #nosec G304 -- test-controlled path
-			got, readErr := os.ReadFile(licensePath)
+			got, readErr := os.ReadFile(licensePath) // #nosec G304 -- test-controlled path
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
@@ -181,6 +182,60 @@ func TestUpdateLicenseHandEditFollowsConflictStrategy(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRunUpdateAppliesChangedLicense drives the real RunUpdate path (the one
+// `update` and `drift --repair` use) with the default merge strategy: a changed
+// metadata.license must be applied to the existing LICENSE.
+func TestRunUpdateAppliesChangedLicense(t *testing.T) {
+	root := t.TempDir()
+	m := &types.Manifest{
+		Templates: []types.Template{{Name: "compliance", Path: "."}},
+		Metadata:  map[string]string{"license": "MIT", "copyright_holder": "Acme"},
+	}
+	if err := manifest.Save(m, root); err != nil {
+		t.Fatalf("manifest.Save: %v", err)
+	}
+	rc := RunContext{
+		TargetPath:       root,
+		ManifestPathArg:  ".",
+		ConflictStrategy: types.ConflictMerge,
+	}
+	reporter := ui.NewPlainReporter(1, false)
+
+	// First run writes LICENSE for MIT and records it in managed_files.
+	if err := RunUpdate(rc, reporter); err != nil {
+		t.Fatalf("initial RunUpdate: %v", err)
+	}
+
+	// RunUpdate rewrote scbake.toml, so reload it before editing (Save rejects a
+	// stale copy), as a user editing the manifest would.
+	m, _, err := manifest.LoadWithOptions(root, manifest.DiscoveryOptions{})
+	if err != nil {
+		t.Fatalf("manifest.LoadWithOptions: %v", err)
+	}
+	m.Metadata["license"] = "Apache-2.0"
+	if err := manifest.Save(m, root); err != nil {
+		t.Fatalf("manifest.Save: %v", err)
+	}
+	if err := RunUpdate(rc, reporter); err != nil {
+		t.Fatalf("RunUpdate after license change: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, "LICENSE")) // #nosec G304 -- test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "Apache License") {
+		t.Fatalf("LICENSE was not updated to Apache-2.0; starts with %q", firstLine(string(got)))
+	}
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // TestApplyManifestChangesDeduplicates is a regression guard: the render-time
