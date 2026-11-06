@@ -226,14 +226,26 @@ func checkFilePreconditions(tc types.TaskContext, output, target string) (string
 // WriteManagedFile performs state-aware reconciliation, transaction tracking,
 // safe file writing, and manifest state updating for a generated file.
 func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte, perm os.FileMode) error {
-	newHash := HashContent(content)
-
 	absPath, err := checkFilePreconditions(tc, outputRelPath, tc.TargetPath)
 	if err != nil {
 		return err
 	}
-
 	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
+
+	// The persistent .scbake state belongs to the manifest root. When a
+	// template renders the root .gitignore, make the ignore entry part of that
+	// managed render before hashing so the ledger and base shadow match what is
+	// actually written, even if the template does not include it itself.
+	//
+	// The ledger key is root-relative, so a subproject's target-relative
+	// ".gitignore" is keyed like "sub/.gitignore" and must not inherit the
+	// root's state entry.
+	if filepath.ToSlash(outputRelPath) == fileutil.GitIgnore && ledgerKey == fileutil.GitIgnore {
+		content = appendInternalStateIgnore(content)
+	}
+
+	newHash := HashContent(content)
+
 	writePath, override, err := checkReconciliation(absPath, outputRelPath, ledgerKey, newHash, content, tc)
 	if err != nil {
 		return err // Conflict strategy is 'fail'
@@ -402,30 +414,89 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 		return nil
 	}
 
-	const gitignore = ".gitignore"
-	existing, err := fileutil.SafeReadFile(root, gitignore)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to read %s: %w", gitignore, err)
+	// A managed root .gitignore already carries the entry in its render (see
+	// WriteManagedFile). Mutating it out-of-band here would leave the recorded
+	// hash and base shadow stale, turning scbake's own append into user drift.
+	if tc.Manifest != nil && tc.Manifest.ManagedFiles[fileutil.GitIgnore] != "" {
+		return nil
+	}
+
+	relPath := fileutil.GitIgnore
+	absPath, err := fileutil.SafePath(root, relPath)
+	if err != nil {
+		warnInternalStateIgnore(relPath, err)
+		return nil
+	}
+
+	existing, err := fileutil.SafeReadFile(root, relPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			warnInternalStateIgnore(relPath, err)
+			return nil
+		}
+		existing = nil
 	}
 	if gitignoreIgnoresInternalState(existing) {
 		return nil
 	}
 
-	appendTC := tc
-	appendTC.TargetPath = root
-	task := &AppendFileTask{
-		FilePath: gitignore,
-		Content:  internalStateIgnoreEntry + "\n",
-		Desc:     "Ignore scbake internal state",
+	if err := checkIgnoredFileWritable(root, relPath); err != nil {
+		warnInternalStateIgnore(relPath, err)
+		return nil
 	}
-	return task.Execute(appendTC)
+	if err := trackAndWrite(tc, absPath, appendInternalStateIgnore(existing), fileutil.FilePerms); err != nil {
+		warnInternalStateIgnore(relPath, err)
+		return nil
+	}
+	return nil
+}
+
+// checkIgnoredFileWritable fails early when an existing ignore file cannot be
+// opened for writing, so the transaction does not record a backup it may be
+// unable to restore later. A missing file is left to trackAndWrite to create.
+func checkIgnoredFileWritable(root, relPath string) error {
+	f, err := fileutil.SafeOpenFile(root, relPath, os.O_WRONLY, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return f.Close()
+}
+
+// warnInternalStateIgnore reports a best-effort .gitignore update that was
+// skipped, matching the warning style used for conflict handling.
+func warnInternalStateIgnore(relPath string, err error) {
+	fmt.Fprintf(os.Stderr, "⚠️  Could not add %s to %s: %v\n", internalStateIgnoreEntry, relPath, err)
+}
+
+// appendInternalStateIgnore returns content with a standalone .scbake/ entry
+// appended when none is present. Existing bytes are preserved exactly, and a
+// separating newline is inserted only when the file does not already end with
+// one.
+func appendInternalStateIgnore(content []byte) []byte {
+	if gitignoreIgnoresInternalState(content) {
+		return content
+	}
+
+	out := make([]byte, 0, len(content)+len(internalStateIgnoreEntry)+2)
+	out = append(out, content...)
+	if len(out) > 0 && out[len(out)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	out = append(out, internalStateIgnoreEntry...)
+	out = append(out, '\n')
+	return out
 }
 
 // gitignoreIgnoresInternalState reports whether existing already ignores the
-// .scbake state directory using any of its common spellings.
+// .scbake state directory using any of its common spellings. Only trailing
+// spaces, tabs, and CR are trimmed: Git treats leading whitespace as part of
+// the pattern, so an indented entry does not ignore .scbake.
 func gitignoreIgnoresInternalState(existing []byte) bool {
 	for _, line := range strings.Split(string(existing), "\n") {
-		switch strings.TrimSpace(line) {
+		switch strings.TrimRight(line, " \t\r") {
 		case ".scbake", ".scbake/", "/.scbake", "/.scbake/":
 			return true
 		}
