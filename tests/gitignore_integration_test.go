@@ -217,3 +217,63 @@ func TestManagedRootGitIgnoreHashMatchesDisk(t *testing.T) {
 	}
 	requireNoDrift(t, project)
 }
+
+// TestManagedRootGitIgnoreStaleEntryDoesNotCreateDrift covers a legacy managed
+// root .gitignore whose recorded hash matches a render without .scbake/. The
+// helper must warn with regeneration guidance and leave the file untouched, so
+// the existing ledger remains clean instead of being desynchronized by an
+// out-of-band append.
+func TestManagedRootGitIgnoreStaleEntryDoesNotCreateDrift(t *testing.T) { //nolint:cyclop // assertion-heavy regression test
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+
+	work := t.TempDir()
+	t.Chdir(work)
+
+	overrideDir := filepath.Join(work, "overrides")
+	if err := os.MkdirAll(overrideDir, 0o750); err != nil {
+		t.Fatalf("create override dir: %v", err)
+	}
+	mustWrite(t, filepath.Join(overrideDir, "gitignore.tpl"), "vendor/\n")
+
+	out, err := runCLI("new", "stale-ignore", "--lang", "go", "--with", "makefile", "--template-dir", overrideDir)
+	if err != nil {
+		t.Fatalf("new failed: %v\n%s", err, out)
+	}
+
+	project := filepath.Join(work, "stale-ignore")
+	manifestPath := filepath.Join(project, fileutil.ManifestFileName)
+	manifest := decodeManifest(t, project)
+	oldHash := manifest.ManagedFiles[fileutil.GitIgnore]
+	if oldHash == "" {
+		t.Fatalf("new did not record managed_files[%q]", fileutil.GitIgnore)
+	}
+
+	// Simulate a managed render recorded before the injection hardening.
+	const staleIgnore = "vendor/\n"
+	mustWrite(t, filepath.Join(project, fileutil.GitIgnore), staleIgnore)
+	staleHash := tasks.HashContent([]byte(staleIgnore))
+	body := mustRead(t, manifestPath)
+	if !strings.Contains(body, oldHash) {
+		t.Fatalf("manifest does not contain the old .gitignore hash %q:\n%s", oldHash, body)
+	}
+	mustWrite(t, manifestPath, strings.Replace(body, oldHash, staleHash, 1))
+
+	// Applying another managed file invokes the helper for the stale .gitignore.
+	out, err = runCLI("apply", "--with", "makefile", project)
+	if err != nil {
+		t.Fatalf("apply failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Managed .gitignore") ||
+		!strings.Contains(out, "regenerate it with 'scbake apply' or 'scbake update'") {
+		t.Fatalf("apply did not warn about the stale managed .gitignore:\n%s", out)
+	}
+	if got := mustRead(t, filepath.Join(project, fileutil.GitIgnore)); got != staleIgnore {
+		t.Fatalf("helper mutated the stale managed .gitignore: got %q, want %q", got, staleIgnore)
+	}
+	if got := decodeManifest(t, project).ManagedFiles[fileutil.GitIgnore]; got != staleHash {
+		t.Fatalf("helper changed the recorded hash: got %q, want %q", got, staleHash)
+	}
+	requireNoDrift(t, project)
+}

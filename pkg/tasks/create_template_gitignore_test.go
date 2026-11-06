@@ -4,6 +4,7 @@
 package tasks
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +14,37 @@ import (
 	"strings"
 	"testing"
 )
+
+// captureStderr redirects os.Stderr while fn runs and returns everything it
+// wrote. Tests using it must not call t.Parallel.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stderr pipe: %v", err)
+	}
+	original := os.Stderr
+	os.Stderr = writeEnd
+	defer func() {
+		os.Stderr = original
+		_ = readEnd.Close()
+	}()
+
+	fn()
+
+	if err := writeEnd.Close(); err != nil {
+		os.Stderr = original
+		t.Fatalf("close stderr pipe: %v", err)
+	}
+	os.Stderr = original
+
+	out, err := io.ReadAll(readEnd)
+	if err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	return string(out)
+}
 
 // readGitIgnore returns the contents of root/.gitignore.
 func readGitIgnore(t *testing.T, root string) string {
@@ -211,30 +243,103 @@ func TestEnsureInternalStateIgnored_NoOps(t *testing.T) { //nolint:cyclop // ass
 	})
 }
 
-// TestEnsureInternalStateIgnored_SkipsManagedRootGitIgnore verifies that a
-// managed root .gitignore is only reconciled through its rendered content. An
-// out-of-band append here would desynchronize the ledger from the file.
-func TestEnsureInternalStateIgnored_SkipsManagedRootGitIgnore(t *testing.T) {
-	root := t.TempDir()
-	const initial = "node_modules\n"
-	if err := os.WriteFile(filepath.Join(root, fileutil.GitIgnore), []byte(initial), fileutil.FilePerms); err != nil {
-		t.Fatalf("seed .gitignore: %v", err)
+// TestEnsureInternalStateIgnored_ManagedRootGitIgnoreIsNotMutated verifies that
+// a managed root .gitignore is only reconciled through its rendered content. If
+// it is missing or no longer ignores .scbake, the helper warns with regeneration
+// guidance instead of mutating the file and desynchronizing the ledger.
+func TestEnsureInternalStateIgnored_ManagedRootGitIgnoreIsNotMutated(t *testing.T) { //nolint:cyclop // assertion-heavy regression test
+	tests := []struct {
+		name    string
+		initial string
+		missing bool
+	}{
+		{name: "missing file", missing: true},
+		{name: "missing entry", initial: "node_modules\n"},
 	}
 
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			gitignore := filepath.Join(root, fileutil.GitIgnore)
+			if !tt.missing {
+				if err := os.WriteFile(gitignore, []byte(tt.initial), fileutil.FilePerms); err != nil {
+					t.Fatalf("seed .gitignore: %v", err)
+				}
+			}
+
+			tx, err := transaction.New(root)
+			if err != nil {
+				t.Fatalf("transaction.New() failed: %v", err)
+			}
+			recordedHash := HashContent([]byte(tt.initial))
+			manifest := &types.Manifest{
+				ManagedFiles: map[string]string{fileutil.GitIgnore: recordedHash},
+			}
+			tc := types.TaskContext{TargetPath: root, Manifest: manifest, Tx: tx}
+
+			out := captureStderr(t, func() {
+				if err := ensureInternalStateIgnored(tc, root); err != nil {
+					t.Fatalf("ensureInternalStateIgnored() failed: %v", err)
+				}
+			})
+
+			if !strings.Contains(out, "Managed .gitignore") ||
+				!strings.Contains(out, "regenerate it with 'scbake apply' or 'scbake update'") {
+				t.Fatalf("warning does not mention regeneration:\n%s", out)
+			}
+			if !strings.Contains(out, "is missing or does not ignore .scbake/") {
+				t.Fatalf("warning does not describe the stale ignore:\n%s", out)
+			}
+
+			if tt.missing {
+				if _, err := os.Stat(gitignore); !os.IsNotExist(err) {
+					t.Fatalf("missing managed .gitignore was recreated (stat err: %v)", err)
+				}
+			} else {
+				got := readGitIgnore(t, root)
+				if got != tt.initial {
+					t.Fatalf("managed .gitignore was modified out-of-band: got %q, want %q", got, tt.initial)
+				}
+				if hash := HashContent([]byte(got)); hash != recordedHash {
+					t.Fatalf("helper created drift: on-disk hash %q, recorded %q", hash, recordedHash)
+				}
+			}
+			if got := manifest.ManagedFiles[fileutil.GitIgnore]; got != recordedHash {
+				t.Fatalf("helper changed the recorded hash: got %q, want %q", got, recordedHash)
+			}
+		})
+	}
+}
+
+// TestEnsureInternalStateIgnored_PropagatesWriteFailure forces trackAndWrite to
+// fail after the pre-write check by targeting a missing parent directory. The
+// error must propagate so the caller rolls back instead of committing a
+// partially written .gitignore.
+func TestEnsureInternalStateIgnored_PropagatesWriteFailure(t *testing.T) {
+	root := t.TempDir()
 	tx, err := transaction.New(root)
 	if err != nil {
 		t.Fatalf("transaction.New() failed: %v", err)
 	}
-	manifest := &types.Manifest{
-		ManagedFiles: map[string]string{fileutil.GitIgnore: HashContent([]byte(initial))},
-	}
-	tc := types.TaskContext{TargetPath: root, Manifest: manifest, Tx: tx}
+	missingRoot := filepath.Join(root, "missing-parent")
+	tc := types.TaskContext{TargetPath: missingRoot, Tx: tx}
 
-	if err := ensureInternalStateIgnored(tc, root); err != nil {
-		t.Fatalf("ensureInternalStateIgnored() failed: %v", err)
+	err = ensureInternalStateIgnored(tc, missingRoot)
+	if err == nil {
+		t.Fatal("ensureInternalStateIgnored() swallowed a trackAndWrite failure")
 	}
-	if got := readGitIgnore(t, root); got != initial {
-		t.Fatalf("managed .gitignore was modified out-of-band: got %q, want %q", got, initial)
+	if !strings.Contains(err.Error(), fileutil.GitIgnore) {
+		t.Fatalf("write failure does not mention .gitignore: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(missingRoot, fileutil.GitIgnore)); !os.IsNotExist(statErr) {
+		t.Fatalf("failure left a .gitignore behind (stat err: %v)", statErr)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback() failed: %v", err)
+	}
+	if _, statErr := os.Stat(missingRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("rollback left the missing parent directory behind (stat err: %v)", statErr)
 	}
 }
 
@@ -284,6 +389,93 @@ func TestWriteManagedFile_RootGitIgnoreInjectsEntryBeforeHashing(t *testing.T) {
 	}
 	if got, wantHash := manifest.ManagedFiles[fileutil.GitIgnore], HashContent([]byte(onDisk)); got != wantHash {
 		t.Fatalf("repeat Execute() changed the recorded hash: got %q, want %q", got, wantHash)
+	}
+}
+
+// TestWriteManagedFile_EquivalentRootGitIgnorePaths verifies injection keys on
+// the root-relative ledger entry, not the spelling of the output path. Dot
+// prefixes, parent traversal that resolves to the root, and absolute in-root
+// paths all normalize to the root .gitignore, while a subproject file does not.
+func TestWriteManagedFile_EquivalentRootGitIgnorePaths(t *testing.T) { //nolint:cyclop // table-driven path regression test
+	tests := []struct {
+		name       string
+		outputPath func(root string) string
+		wantKey    string
+		wantInject bool
+	}{
+		{
+			name:       "dot prefixed",
+			outputPath: func(string) string { return "./" + fileutil.GitIgnore },
+			wantKey:    fileutil.GitIgnore,
+			wantInject: true,
+		},
+		{
+			name:       "parent traversal",
+			outputPath: func(string) string { return filepath.Join("sub", "..", fileutil.GitIgnore) },
+			wantKey:    fileutil.GitIgnore,
+			wantInject: true,
+		},
+		{
+			name:       "absolute in-root",
+			outputPath: func(root string) string { return filepath.Join(root, fileutil.GitIgnore) },
+			wantKey:    fileutil.GitIgnore,
+			wantInject: true,
+		},
+		{
+			name:       "subproject",
+			outputPath: func(string) string { return filepath.Join("sub", fileutil.GitIgnore) },
+			wantKey:    "sub/" + fileutil.GitIgnore,
+			wantInject: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			tx, err := transaction.New(root)
+			if err != nil {
+				t.Fatalf("transaction.New() failed: %v", err)
+			}
+			manifest := &types.Manifest{SbakeVersion: "v1.0.0"}
+			tc := types.TaskContext{TargetPath: root, Manifest: manifest, Tx: tx}
+
+			const initial = "vendor/\n"
+			if err := WriteManagedFile(tc, tt.outputPath(root), []byte(initial), fileutil.FilePerms); err != nil {
+				t.Fatalf("WriteManagedFile() failed: %v", err)
+			}
+
+			onDisk, err := fileutil.SafeReadFile(root, tt.wantKey)
+			if err != nil {
+				t.Fatalf("read %s: %v", tt.wantKey, err)
+			}
+			want := initial
+			if tt.wantInject {
+				want += internalStateIgnoreEntry + "\n"
+			}
+			if string(onDisk) != want {
+				t.Fatalf("%s = %q, want %q", tt.wantKey, onDisk, want)
+			}
+			if got, wantHash := manifest.ManagedFiles[tt.wantKey], HashContent(onDisk); got != wantHash {
+				t.Fatalf("managed_files[%q] = %q, want on-disk hash %q", tt.wantKey, got, wantHash)
+			}
+
+			// A later base-shadow write must not append the entry again.
+			if err := writeBaseShadow(tc, "Makefile", []byte("all:\n")); err != nil {
+				t.Fatalf("writeBaseShadow() failed: %v", err)
+			}
+			after, err := fileutil.SafeReadFile(root, tt.wantKey)
+			if err != nil {
+				t.Fatalf("read %s after base shadow: %v", tt.wantKey, err)
+			}
+			if string(after) != want {
+				t.Fatalf("%s changed after base shadow write: got %q, want %q", tt.wantKey, after, want)
+			}
+			if tt.wantInject {
+				if got := countInternalStateIgnoreLines(string(after)); got != 1 {
+					t.Fatalf("%s has %d .scbake/ entries, want 1", tt.wantKey, got)
+				}
+			}
+		})
 	}
 }
 
