@@ -48,6 +48,9 @@ func TestNewKeepsProjectAfterDurableCommitCloseError(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(work, project, fileutil.ManifestFileName)); err != nil {
 		t.Errorf("project was removed after a durable commit close error: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(work, project, fileutil.InternalDir, fileutil.TmpDir)); !os.IsNotExist(err) {
+		t.Errorf("durable commit left transaction temp state behind (stat err: %v)", err)
+	}
 	if strings.Contains(stderr, "Cleaning up failed project directory") {
 		t.Errorf("new ran handled-error cleanup after a durable commit: %s", stderr)
 	}

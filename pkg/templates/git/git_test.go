@@ -29,26 +29,46 @@ func TestGitHandler_Structure(t *testing.T) {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
 
-	if len(plan) != 3 {
-		t.Fatalf("Expected exactly 3 tasks, got %d", len(plan))
+	if len(plan) != 4 {
+		t.Fatalf("Expected exactly 4 tasks, got %d", len(plan))
 	}
 
 	noHooks := "core.hooksPath=" + os.DevNull
-	expected := []struct {
+	expected := map[int]struct {
 		cmd  string
 		args []string
 	}{
-		{"git", []string{"init"}},
-		{"git", []string{"-c", noHooks, "add", "--", ".", internalStateExclude}},
-		{"git", []string{"-c", noHooks, "commit", "--allow-empty", "-m", "scbake: Apply templates"}},
+		0: {"git", []string{"init"}},
+		2: {"git", []string{"-c", noHooks, "add", "--", ".", internalStateExclude}},
+		3: {"git", []string{"-c", noHooks, "commit", "--allow-empty", "-m", "scbake: Apply templates"}},
 	}
 
 	for i, task := range plan {
+		assertSequentialPriority(t, plan, task, i)
+		assertBandBoundary(t, task, i)
+		if i == 1 {
+			assertInternalStateIgnoreTask(t, task)
+			continue
+		}
 		execTask := assertExecTask(t, task, i)
 		assertCommandIdentity(t, execTask, expected[i], i)
-		assertSequentialPriority(t, plan, execTask, i)
 		assertPredictedCreated(t, execTask, i)
-		assertBandBoundary(t, execTask, i)
+	}
+}
+
+// assertInternalStateIgnoreTask verifies the repository-local ignore task.
+func assertInternalStateIgnoreTask(t *testing.T, task types.Task) {
+	t.Helper()
+
+	appendTask, ok := task.(*tasks.AppendFileTask)
+	if !ok {
+		t.Fatalf("Task index 1 is not an *tasks.AppendFileTask: %T", task)
+	}
+	if appendTask.FilePath != internalStateIgnorePath {
+		t.Errorf("ignore task path = %q, want %q", appendTask.FilePath, internalStateIgnorePath)
+	}
+	if appendTask.Content != internalStateIgnore {
+		t.Errorf("ignore task content = %q, want %q", appendTask.Content, internalStateIgnore)
 	}
 }
 
@@ -195,35 +215,51 @@ func assertCommandIdentity(t *testing.T, task *tasks.ExecCommandTask, expected s
 	}
 }
 
-func assertSequentialPriority(t *testing.T, plan []types.Task, task *tasks.ExecCommandTask, index int) {
+func assertSequentialPriority(t *testing.T, plan []types.Task, task types.Task, index int) {
 	t.Helper()
 	if index == 0 {
 		return
 	}
 	prev := plan[index-1].Priority()
-	if task.TaskPrio != prev+1 {
+	if task.Priority() != prev+1 {
 		t.Errorf("Task %d: priority %d is not strictly consecutive to Task %d (%d)",
-			index, task.TaskPrio, index-1, prev)
+			index, task.Priority(), index-1, prev)
 	}
 }
 
 func assertPredictedCreated(t *testing.T, task *tasks.ExecCommandTask, index int) {
 	t.Helper()
-	if index != 0 && index != 2 {
-		return
-	}
-	if len(task.PredictedCreated) == 0 || task.PredictedCreated[0] != fileutil.GitDir {
-		t.Errorf("Task %d: missing predicted directory %s", index, fileutil.GitDir)
+	switch index {
+	case 0:
+		if !containsPath(task.PredictedCreated, fileutil.GitDir) {
+			t.Errorf("Task %d: missing predicted directory %s", index, fileutil.GitDir)
+		}
+		if !containsPath(task.PredictedCreated, internalStateIgnorePath) {
+			t.Errorf("Task %d: missing predicted exclude file %s", index, internalStateIgnorePath)
+		}
+	case 3:
+		if !containsPath(task.PredictedCreated, fileutil.GitDir) {
+			t.Errorf("Task %d: missing predicted directory %s", index, fileutil.GitDir)
+		}
 	}
 }
 
-func assertBandBoundary(t *testing.T, task *tasks.ExecCommandTask, index int) {
+func containsPath(paths []string, want string) bool {
+	for _, path := range paths {
+		if path == want {
+			return true
+		}
+	}
+	return false
+}
+
+func assertBandBoundary(t *testing.T, task types.Task, index int) {
 	t.Helper()
-	if task.TaskPrio < int(types.PrioVersionControl) ||
-		task.TaskPrio > int(types.MaxVersionControl) {
+	if task.Priority() < int(types.PrioVersionControl) ||
+		task.Priority() > int(types.MaxVersionControl) {
 		t.Errorf("Task %d: priority %d outside VersionControl band [%d, %d]",
 			index,
-			task.TaskPrio,
+			task.Priority(),
 			types.PrioVersionControl,
 			types.MaxVersionControl,
 		)

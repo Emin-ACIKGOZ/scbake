@@ -167,34 +167,40 @@ func (m *Manager) Commit() error {
 	// Record the commit durably before deleting the backups. If the process
 	// dies after this point, a later run knows the transaction succeeded and can
 	// reclaim the directory instead of treating it as interrupted.
+	var commitErr error
 	if m.tempDir != "" {
 		durable, err := m.appendJournalRecord(journalRecord{Op: journalOpCommitted})
 		if durable {
-			// The committed record is on disk. A later Close error must be
-			// returned to the caller but must not re-enable deferred rollback.
+			// The committed record is on disk. A later Close error must not
+			// re-enable deferred rollback, but cleanup still has to run.
 			m.committed = true
 		}
 		if err != nil {
-			return m.commitError(err)
+			if !durable {
+				return err
+			}
+			commitErr = err
 		}
 	}
 	m.committed = true
 
 	// If tempDir was never created, there is nothing to clean up.
 	if m.tempDir != "" {
-		// Remove the temp directory and all backed-up files.
+		// Remove the temp directory and all backed-up files. Do this even when
+		// closing the committed journal failed: the record is durable, so the
+		// only remaining work is best-effort cleanup.
 		if err := os.RemoveAll(m.tempDir); err != nil {
-			return m.commitError(fmt.Errorf("failed to cleanup transaction temp dir: %w", err))
+			commitErr = errors.Join(commitErr, fmt.Errorf("failed to cleanup transaction temp dir: %w", err))
+		} else {
+			// Prune parent scaffolding if empty (.scbake/tmp and .scbake)
+			m.cleanupStructure()
 		}
-
-		// Prune parent scaffolding if empty (.scbake/tmp and .scbake)
-		m.cleanupStructure()
 	}
 
 	// Reset internal state so a trailing Rollback cannot undo committed changes.
 	m.resetState()
 
-	return nil
+	return m.commitError(commitErr)
 }
 
 // commitError marks errors that occur after the point of no return. Callers

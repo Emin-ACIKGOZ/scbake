@@ -470,6 +470,7 @@ func TestCommitRemainsCommittedAfterJournalCloseError(t *testing.T) {
 		return &closeFailFile{journalFile: f}, nil
 	}
 
+	tempDir := tx.tempDir
 	if err := tx.Commit(); err == nil {
 		t.Fatal("Commit did not report the injected journal close error")
 	} else if !errors.Is(err, ErrCommitted) {
@@ -478,13 +479,8 @@ func TestCommitRemainsCommittedAfterJournalCloseError(t *testing.T) {
 	if !tx.committed {
 		t.Error("Commit did not treat the fsynced committed record as durable")
 	}
-
-	journal, err := readTransactionJournal(tx.tempDir)
-	if err != nil {
-		t.Fatalf("reading committed journal: %v", err)
-	}
-	if !journal.Committed {
-		t.Error("committed record was not durable on disk")
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Errorf("Commit left transaction state at %s after a durable close error: %v", tempDir, err)
 	}
 
 	if err := tx.Rollback(); err != nil {

@@ -62,18 +62,18 @@ func createMockGitScript(t *testing.T, dir string, failCommit bool) {
 		name = "git.bat"
 		// Use findstr to catch the 'commit' subcommand regardless of flag positions.
 		content = fmt.Sprintf(`@echo off
-echo %%* | findstr "init" >nul && ( mkdir %s & exit /b 0 )
+echo %%* | findstr "init" >nul && ( mkdir %s\info & type nul > %s\info\exclude & exit /b 0 )
 echo %%* | findstr "commit" >nul && ( if "%s"=="true" exit /b 1 )
-exit /b 0`, fileutil.GitDir, failStr)
+exit /b 0`, fileutil.GitDir, fileutil.GitDir, failStr)
 	} else {
 		name = "git"
 		// Use case matching to catch 'commit' or 'init' anywhere in the argument string.
 		content = fmt.Sprintf(`#!/bin/sh
 case "$*" in
-  *init*) mkdir %s; exit 0 ;;
+  *init*) mkdir -p %s/info; : > %s/info/exclude; exit 0 ;;
   *commit*) [ "%s" = "true" ] && exit 1 ;;
 esac
-exit 0`, fileutil.GitDir, failStr)
+exit 0`, fileutil.GitDir, fileutil.GitDir, failStr)
 	}
 
 	path := filepath.Join(dir, name)

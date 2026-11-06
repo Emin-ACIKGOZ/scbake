@@ -29,6 +29,16 @@ const gitCmd = "git"
 // exclude in that case instead of an error.
 const internalStateExclude = ":(exclude,glob)**/.scbake/**"
 
+// internalStateIgnore keeps scbake's private state out of the working tree even
+// when no selected template provides a .gitignore. It is written to the
+// repository-local exclude file, which is never committed.
+const internalStateIgnore = ".scbake/\n"
+
+// internalStateIgnorePath is repository-local and created by `git init`; it is
+// also predicted by the init task so rollback treats it as newly created state
+// instead of trying to restore a backup inside a removed .git directory.
+var internalStateIgnorePath = filepath.Join(fileutil.GitDir, "info", "exclude")
+
 // GetTasks returns the plan to initialize a Git repository.
 // It performs `git init`, `git add .`, and `git commit` for a fresh target.
 //
@@ -88,10 +98,26 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		Desc:             "Initialize Git repository",
 		TaskPrio:         int(prio),
 		RunInTarget:      true,
-		PredictedCreated: []string{fileutil.GitDir},
+		PredictedCreated: []string{fileutil.GitDir, internalStateIgnorePath},
 	})
 
-	// Task 2: Stage all files with hooks disabled. `.scbake` holds transaction
+	// Task 2: Keep scbake's private state out of the worktree. The git-only
+	// flow has no .gitignore, and tooling templates such as makefile do not
+	// provide one either, so without this the finalized .scbake/base ledger
+	// leaves the new repository dirty. The exclude file is repository-local and
+	// never part of the scaffold.
+	prio, err = seq.Next()
+	if err != nil {
+		return nil, err
+	}
+	plan = append(plan, &tasks.AppendFileTask{
+		FilePath: internalStateIgnorePath,
+		Content:  internalStateIgnore,
+		Desc:     "Ignore scbake transaction state",
+		TaskPrio: int(prio),
+	})
+
+	// Task 3: Stage all files with hooks disabled. `.scbake` holds transaction
 	// backups and the recovery journal; it is local process state, never a
 	// project artifact, so it must not enter the initial commit even when the
 	// selected templates do not provide a .gitignore that excludes it.
@@ -107,7 +133,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		RunInTarget: true,
 	})
 
-	// Task 3: Create initial commit with hooks disabled.
+	// Task 4: Create initial commit with hooks disabled.
 	// We use "commit -m ..." to snapshot the scaffolding state.
 	// Note: If 'git add' found nothing (e.g. empty dir), this might fail with "nothing to commit".
 	// However, scbake always creates the manifest at minimum, so this should usually succeed.

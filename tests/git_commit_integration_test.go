@@ -42,6 +42,15 @@ func TestNewWithGoAndGitExcludesTransactionState(t *testing.T) {
 	assertNewExcludesTransactionState(t, "new --lang go --with git", "new", "demo", "--lang", "go", "--with", "git")
 }
 
+// TestNewWithGitAndToolingLeavesCleanTree covers the non-Go tooling flow.
+// Templates such as makefile do not generate a .gitignore, but they do write
+// .scbake/base ledger state, so the repository-local exclude must keep the
+// worktree clean.
+func TestNewWithGitAndToolingLeavesCleanTree(t *testing.T) {
+	requireGit(t)
+	assertNewExcludesTransactionState(t, "new --with git,makefile", "new", "demo", "--with", "git,makefile")
+}
+
 // TestNewWithGitHonorsGlobalExcludesFile covers a host configuration whose
 // core.excludesFile ignores .scbake. That is a second way .scbake can be
 // ignored even without a generated .gitignore, and it must not turn the
@@ -90,6 +99,14 @@ func assertNewExcludesTransactionState(t *testing.T, label string, args ...strin
 	tracked := gitOutput(t, project, "ls-tree", "-r", "--name-only", "HEAD")
 	if strings.Contains(tracked, ".scbake") {
 		t.Errorf("initial commit contains scbake transaction state:\n%s", tracked)
+	}
+
+	exclude, err := os.ReadFile(filepath.Join(project, ".git", "info", "exclude")) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatalf("reading repository exclude file: %v", err)
+	}
+	if !strings.Contains(string(exclude), ".scbake/") {
+		t.Errorf("repository-local exclude does not ignore .scbake/:\n%s", exclude)
 	}
 
 	if _, statErr := os.Stat(filepath.Join(project, ".scbake", "tmp")); !os.IsNotExist(statErr) {
