@@ -311,6 +311,25 @@ func runMarkerPath(nonce, rootPath string) (string, error) {
 // directory, where `git add .` would commit it. When create is true the
 // directory is created with mode 0700; otherwise it must already exist.
 func runMarkerDir(rootPath string, create bool) (string, error) {
+	dir, err := runMarkerDirPath(rootPath)
+	if err != nil {
+		return "", err
+	}
+	if create {
+		if err := prepareMarkerDir(dir); err != nil {
+			return "", err
+		}
+		return dir, nil
+	}
+	if err := verifyMarkerDir(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// runMarkerDirPath resolves the marker directory and rejects a temp directory
+// that would place it inside the project.
+func runMarkerDirPath(rootPath string) (string, error) {
 	base, err := absoluteTempDir()
 	if err != nil {
 		return "", err
@@ -325,36 +344,60 @@ func runMarkerDir(rootPath string, create bool) (string, error) {
 			base, project,
 		)
 	}
+	return filepath.Join(base, runMarkerDirPrefix+currentUserToken()), nil
+}
 
-	dir := filepath.Join(base, runMarkerDirPrefix+currentUserToken())
-	if create {
-		// Use Mkdir rather than MkdirAll: base is an existing resolved
-		// directory, and Mkdir refuses to traverse a symlink planted at dir.
-		if err := os.Mkdir(dir, runMarkerDirPerms); err != nil && !os.IsExist(err) {
-			return "", fmt.Errorf("failed to create run marker directory: %w", err)
-		}
+// prepareMarkerDir creates the marker directory if needed and verifies that it
+// is a private directory owned by the current user.
+func prepareMarkerDir(dir string) error {
+	// Use Mkdir rather than MkdirAll: the temp base already exists, and Mkdir
+	// refuses to traverse a symlink planted at dir.
+	if err := os.Mkdir(dir, runMarkerDirPerms); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("failed to create run marker directory: %w", err)
 	}
 
 	info, err := os.Lstat(dir)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if !markerDirTrusted(info) {
 		// Repair the mode only after confirming the entry is a real directory
 		// owned by this user. Never chmod a symlink or another user's path.
-		if info.IsDir() && info.Mode()&os.ModeSymlink == 0 && markerOwnerTrusted(info) {
-			if err := os.Chmod(dir, runMarkerDirPerms); err != nil {
-				return "", fmt.Errorf("failed to secure run marker directory: %w", err)
-			}
-			if info, err = os.Lstat(dir); err != nil {
-				return "", err
-			}
+		if err := repairMarkerDirMode(dir, info); err != nil {
+			return err
+		}
+		if info, err = os.Lstat(dir); err != nil {
+			return err
 		}
 	}
 	if !markerDirTrusted(info) {
-		return "", fmt.Errorf("refusing untrusted run marker directory %s", dir)
+		return fmt.Errorf("refusing untrusted run marker directory %s", dir)
 	}
-	return dir, nil
+	return nil
+}
+
+// repairMarkerDirMode tightens the mode of a directory owned by the current
+// user. It leaves symlinks and foreign-owned paths untouched.
+func repairMarkerDirMode(dir string, info os.FileInfo) error {
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !markerOwnerTrusted(info) {
+		return nil
+	}
+	if err := os.Chmod(dir, runMarkerDirPerms); err != nil {
+		return fmt.Errorf("failed to secure run marker directory: %w", err)
+	}
+	return nil
+}
+
+// verifyMarkerDir checks an existing marker directory without modifying it.
+func verifyMarkerDir(dir string) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !markerDirTrusted(info) {
+		return fmt.Errorf("refusing untrusted run marker directory %s", dir)
+	}
+	return nil
 }
 
 // absoluteTempDir resolves os.TempDir to an absolute, symlink-free path. A
@@ -514,11 +557,6 @@ func journalOwnerLiveness(journal *transactionJournal, now time.Time) journalLiv
 		return journalUnknown
 	}
 	return journalAlive
-}
-
-// journalOwnerAlive reports whether the recorded owner is provably alive.
-func journalOwnerAlive(journal *transactionJournal, now time.Time) bool {
-	return journalOwnerLiveness(journal, now) == journalAlive
 }
 
 // journalOwnerVerifiablyAlive reports a live owner only when the platform can
@@ -722,30 +760,44 @@ func (j *transactionJournal) readLine(rawLine string, readErr error, dir string,
 			dir, maxJournalLineBytes,
 		)
 	}
-	terminated := strings.HasSuffix(rawLine, "\n")
 	line := bytes.TrimSpace([]byte(rawLine))
-
 	if len(line) > 0 {
-		if *first {
-			if err := j.readHeader(line, dir); err != nil {
-				return false, err
-			}
-			*first = false
-		} else if err := j.readEntry(line, dir); err != nil {
-			if readErr == io.EOF && !terminated && !json.Valid(line) {
-				return true, nil
-			}
-			return false, err
+		done, err := j.readRecord(line, readErr, strings.HasSuffix(rawLine, "\n"), dir, first)
+		if done || err != nil {
+			return done, err
 		}
 	}
+	return journalReadDone(readErr, dir)
+}
 
-	if readErr == io.EOF {
-		return true, nil
+// readRecord parses one non-empty line as either the header or an entry.
+func (j *transactionJournal) readRecord(line []byte, readErr error, terminated bool, dir string, first *bool) (bool, error) {
+	if *first {
+		if err := j.readHeader(line, dir); err != nil {
+			return false, err
+		}
+		*first = false
+		return false, nil
 	}
-	if readErr != nil {
-		return false, fmt.Errorf("failed to read transaction journal %s: %w", dir, readErr)
+	if err := j.readEntry(line, dir); err != nil {
+		if readErr == io.EOF && !terminated && !json.Valid(line) {
+			return true, nil
+		}
+		return false, err
 	}
 	return false, nil
+}
+
+// journalReadDone maps the reader's terminal condition to the readLine result.
+func journalReadDone(readErr error, dir string) (bool, error) {
+	switch readErr {
+	case nil:
+		return false, nil
+	case io.EOF:
+		return true, nil
+	default:
+		return false, fmt.Errorf("failed to read transaction journal %s: %w", dir, readErr)
+	}
 }
 
 // readHeader parses and validates the first journal line.
@@ -915,49 +967,66 @@ func RecoverWithOptions(rootPath string, opts RecoverOptions) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := validatePendingForRecovery(ctx, pending, opts.Force); err != nil {
+		return 0, err
+	}
+	return recoverPendingTransactions(ctx, absRoot, pending)
+}
 
-	// Check liveness and provenance before mutating anything so a live run or a
-	// journal copied into the tree cannot be touched by accident.
+// validatePendingForRecovery checks liveness and provenance before anything is
+// mutated so a live run or a journal copied into the tree is not touched.
+func validatePendingForRecovery(ctx context.Context, pending []PendingTransaction, force bool) error {
 	for _, p := range pending {
 		if err := ctx.Err(); err != nil {
-			return 0, err
+			return err
 		}
-		if p.Alive {
-			return 0, fmt.Errorf("transaction in %s is still running (pid %d)", p.Dir, p.PID)
-		}
-		if p.LivenessUnknown && !opts.Force {
-			detail := ""
-			if p.RemoveRoot {
-				detail = " and replaying it would remove the entire project root"
-			}
-			return 0, fmt.Errorf(
-				"transaction in %s may still be running (pid %d); its liveness cannot be verified%s: rerun with --force to replay it or --discard to remove it",
-				p.Dir, p.PID, detail,
-			)
-		}
-		if !p.Trusted && !opts.Force {
-			detail := ""
-			if p.RemoveRoot {
-				detail = "; replaying it would remove the entire project root"
-			}
-			return 0, fmt.Errorf(
-				"transaction in %s has no local run marker; it may belong to another checkout%s: rerun with --force to replay it or --discard to remove it",
-				p.Dir, detail,
-			)
+		if err := validatePendingTransaction(p, force); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
+// validatePendingTransaction applies the per-transaction recovery guards.
+func validatePendingTransaction(p PendingTransaction, force bool) error {
+	if p.Alive {
+		return fmt.Errorf("transaction in %s is still running (pid %d)", p.Dir, p.PID)
+	}
+	if p.LivenessUnknown && !force {
+		detail := ""
+		if p.RemoveRoot {
+			detail = " and replaying it would remove the entire project root"
+		}
+		return fmt.Errorf(
+			"transaction in %s may still be running (pid %d); its liveness cannot be verified%s: rerun with --force to replay it or --discard to remove it",
+			p.Dir, p.PID, detail,
+		)
+	}
+	if !p.Trusted && !force {
+		detail := ""
+		if p.RemoveRoot {
+			detail = "; replaying it would remove the entire project root"
+		}
+		return fmt.Errorf(
+			"transaction in %s has no local run marker; it may belong to another checkout%s: rerun with --force to replay it or --discard to remove it",
+			p.Dir, detail,
+		)
+	}
+	return nil
+}
+
+// recoverPendingTransactions replays each validated pending transaction.
+func recoverPendingTransactions(ctx context.Context, rootPath string, pending []PendingTransaction) (int, error) {
 	recovered := 0
 	for _, p := range pending {
 		if err := ctx.Err(); err != nil {
 			return recovered, err
 		}
-		if err := recoverTransaction(ctx, absRoot, p.Dir); err != nil {
+		if err := recoverTransaction(ctx, rootPath, p.Dir); err != nil {
 			return recovered, err
 		}
 		recovered++
 	}
-
 	return recovered, nil
 }
 
@@ -970,48 +1039,68 @@ func discardTransactions(ctx context.Context, rootPath string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := checkDiscardableTransactions(ctx, dirs); err != nil {
+		return 0, err
+	}
+	discarded, err := discardTransactionDirs(ctx, rootPath, dirs)
+	if err != nil {
+		return discarded, err
+	}
+	// Every transaction directory is gone now, so any marker that records this
+	// root is orphaned and safe to remove.
+	removeRootMarkers(rootPath)
+	return discarded, nil
+}
 
+// checkDiscardableTransactions refuses only a transaction whose live owner
+// incarnation can be verified. Where liveness cannot be proven, --discard is
+// the explicit escape hatch for a stuck PID-reuse false positive.
+func checkDiscardableTransactions(ctx context.Context, dirs []string) error {
 	for _, dir := range dirs {
 		if err := ctx.Err(); err != nil {
-			return 0, err
+			return err
 		}
-		// Only a verifiable incarnation blocks an explicit discard. When the
-		// platform cannot prove the PID belongs to the recorded owner, --discard
-		// is the escape hatch for a stuck PID-reuse false positive.
-		if journal, err := readTransactionJournal(dir); err == nil &&
-			!journal.Committed && journalOwnerVerifiablyAlive(journal) {
-			return 0, fmt.Errorf("transaction in %s is still running (pid %d)", dir, journal.PID)
+		journal, err := readTransactionJournal(dir)
+		if err != nil || journal.Committed || !journalOwnerVerifiablyAlive(journal) {
+			continue
 		}
+		return fmt.Errorf("transaction in %s is still running (pid %d)", dir, journal.PID)
 	}
+	return nil
+}
 
+// discardTransactionDirs removes the transaction directories in order.
+func discardTransactionDirs(ctx context.Context, rootPath string, dirs []string) (int, error) {
 	for i, dir := range dirs {
 		if err := ctx.Err(); err != nil {
 			return i, err
 		}
-		journal, journalErr := readTransactionJournal(dir)
-		var header *transactionJournal
-		if journalErr != nil {
-			// The body may be malformed while the header still names the run
-			// marker. Read it independently so --discard does not leak markers.
-			header, _ = readTransactionJournalHeader(dir)
-		}
-		if err := os.RemoveAll(dir); err != nil {
-			return i, fmt.Errorf("failed to discard transaction %s: %w", dir, err)
-		}
-		switch {
-		case journalErr == nil:
-			removeJournalMarker(journal, rootPath)
-		case header != nil:
-			removeJournalMarker(header, rootPath)
+		if err := discardTransactionDir(rootPath, dir); err != nil {
+			return i, err
 		}
 	}
-
-	// A journal whose header is also unreadable cannot name its nonce. Every
-	// transaction directory is gone now, so any marker that records this root
-	// is orphaned and safe to remove.
-	removeRootMarkers(rootPath)
-
 	return len(dirs), nil
+}
+
+// discardTransactionDir removes one transaction directory and its marker.
+func discardTransactionDir(rootPath, dir string) error {
+	journal, journalErr := readTransactionJournal(dir)
+	var header *transactionJournal
+	if journalErr != nil {
+		// The body may be malformed while the header still names the run
+		// marker. Read it independently so --discard does not leak markers.
+		header, _ = readTransactionJournalHeader(dir)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("failed to discard transaction %s: %w", dir, err)
+	}
+	switch {
+	case journalErr == nil:
+		removeJournalMarker(journal, rootPath)
+	case header != nil:
+		removeJournalMarker(header, rootPath)
+	}
+	return nil
 }
 
 // removeRootMarkers deletes local run markers whose recorded root matches
@@ -1031,30 +1120,40 @@ func removeRootMarkers(rootPath string) {
 		return
 	}
 	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() ||
-			!strings.HasPrefix(name, runMarkerPrefix) ||
-			!strings.HasSuffix(name, runMarkerSuffix) {
+		if !isRunMarkerEntry(entry) {
 			continue
 		}
-		path := filepath.Join(dir, name)
-		info, err := os.Lstat(path)
-		if err != nil || !markerFileTrusted(info) {
-			continue
-		}
-		f, err := fileutil.SafeOpenFile(dir, name, os.O_RDONLY, 0)
-		if err != nil {
-			continue
-		}
-		data, err := io.ReadAll(io.LimitReader(f, maxRunMarkerBytes+1))
-		_ = f.Close()
-		if err != nil || len(data) > maxRunMarkerBytes {
-			continue
-		}
-		if sameRoot(strings.TrimSpace(string(data)), canonical) {
-			_ = os.Remove(path)
+		if markerMatchesRoot(dir, entry.Name(), canonical) {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
 		}
 	}
+}
+
+// isRunMarkerEntry reports whether entry has the run marker file name shape.
+func isRunMarkerEntry(entry os.DirEntry) bool {
+	name := entry.Name()
+	return !entry.IsDir() &&
+		strings.HasPrefix(name, runMarkerPrefix) &&
+		strings.HasSuffix(name, runMarkerSuffix)
+}
+
+// markerMatchesRoot reads one marker and reports whether it records canonical.
+func markerMatchesRoot(dir, name, canonical string) bool {
+	path := filepath.Join(dir, name)
+	info, err := os.Lstat(path)
+	if err != nil || !markerFileTrusted(info) {
+		return false
+	}
+	f, err := fileutil.SafeOpenFile(dir, name, os.O_RDONLY, 0)
+	if err != nil {
+		return false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxRunMarkerBytes+1))
+	_ = f.Close()
+	if err != nil || len(data) > maxRunMarkerBytes {
+		return false
+	}
+	return sameRoot(strings.TrimSpace(string(data)), canonical)
 }
 
 // recoverTransaction replays the journal in reverse, then removes the
@@ -1068,16 +1167,27 @@ func recoverTransaction(ctx context.Context, rootPath, dir string) error {
 		return err
 	}
 	if journal.Committed {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := os.RemoveAll(dir); err != nil {
-			return fmt.Errorf("failed to clean committed transaction %s: %w", dir, err)
-		}
-		removeJournalMarker(journal, rootPath)
-		return nil
+		return cleanCommittedTransaction(ctx, rootPath, dir, journal)
 	}
+	return replayTransaction(ctx, rootPath, dir, journal)
+}
 
+// cleanCommittedTransaction removes a transaction whose journal already records
+// a successful commit.
+func cleanCommittedTransaction(ctx context.Context, rootPath, dir string, journal *transactionJournal) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("failed to clean committed transaction %s: %w", dir, err)
+	}
+	removeJournalMarker(journal, rootPath)
+	return nil
+}
+
+// replayTransaction rolls back the tracked changes and optionally removes the
+// bootstrapped project root.
+func replayTransaction(ctx context.Context, rootPath, dir string, journal *transactionJournal) error {
 	manager, err := managerFromJournal(ctx, rootPath, dir, journal)
 	if err != nil {
 		return err
