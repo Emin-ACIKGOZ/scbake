@@ -29,8 +29,8 @@ func TestGitHandler_Structure(t *testing.T) {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
 
-	if len(plan) != 4 {
-		t.Fatalf("Expected exactly 4 tasks, got %d", len(plan))
+	if len(plan) != 5 {
+		t.Fatalf("Expected exactly 5 tasks, got %d", len(plan))
 	}
 
 	noHooks := "core.hooksPath=" + os.DevNull
@@ -39,20 +39,38 @@ func TestGitHandler_Structure(t *testing.T) {
 		args []string
 	}{
 		0: {"git", []string{"init"}},
-		2: {"git", []string{"-c", noHooks, "add", "--", ".", internalStateExclude}},
-		3: {"git", []string{"-c", noHooks, "commit", "--allow-empty", "-m", "scbake: Apply templates"}},
+		3: {"git", []string{"-c", noHooks, "add", "--", ".", internalStateExclude}},
+		4: {"git", []string{"-c", noHooks, "commit", "--allow-empty", "-m", "scbake: Apply templates"}},
 	}
 
 	for i, task := range plan {
 		assertSequentialPriority(t, plan, task, i)
 		assertBandBoundary(t, task, i)
-		if i == 1 {
+		switch i {
+		case 1:
+			assertInternalStateDirectoryTask(t, task)
+			continue
+		case 2:
 			assertInternalStateIgnoreTask(t, task)
 			continue
 		}
 		execTask := assertExecTask(t, task, i)
 		assertCommandIdentity(t, execTask, expected[i], i)
 		assertPredictedCreated(t, execTask, i)
+	}
+}
+
+// assertInternalStateDirectoryTask verifies the repository metadata directory
+// task runs before the ignore append.
+func assertInternalStateDirectoryTask(t *testing.T, task types.Task) {
+	t.Helper()
+
+	dirTask, ok := task.(*tasks.CreateDirTask)
+	if !ok {
+		t.Fatalf("Task index 1 is not an *tasks.CreateDirTask: %T", task)
+	}
+	if want := filepath.Dir(internalStateIgnorePath); dirTask.Path != want {
+		t.Errorf("metadata directory task path = %q, want %q", dirTask.Path, want)
 	}
 }
 
@@ -237,7 +255,7 @@ func assertPredictedCreated(t *testing.T, task *tasks.ExecCommandTask, index int
 		if !containsPath(task.PredictedCreated, internalStateIgnorePath) {
 			t.Errorf("Task %d: missing predicted exclude file %s", index, internalStateIgnorePath)
 		}
-	case 3:
+	case 4:
 		if !containsPath(task.PredictedCreated, fileutil.GitDir) {
 			t.Errorf("Task %d: missing predicted directory %s", index, fileutil.GitDir)
 		}

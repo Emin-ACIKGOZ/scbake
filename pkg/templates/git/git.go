@@ -101,7 +101,21 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		PredictedCreated: []string{fileutil.GitDir, internalStateIgnorePath},
 	})
 
-	// Task 2: Keep scbake's private state out of the worktree. The git-only
+	// Task 2: Ensure the repository metadata directory exists. A custom or
+	// empty git template is not guaranteed to provide info/exclude, so create
+	// the parent before appending to it. Tracking this path lets rollback remove
+	// it when git init did not create it.
+	prio, err = seq.Next()
+	if err != nil {
+		return nil, err
+	}
+	plan = append(plan, &tasks.CreateDirTask{
+		Path:     filepath.Dir(internalStateIgnorePath),
+		Desc:     "Create Git metadata directory",
+		TaskPrio: int(prio),
+	})
+
+	// Task 3: Keep scbake's private state out of the worktree. The git-only
 	// flow has no .gitignore, and tooling templates such as makefile do not
 	// provide one either, so without this the finalized .scbake/base ledger
 	// leaves the new repository dirty. The exclude file is repository-local and
@@ -117,7 +131,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		TaskPrio: int(prio),
 	})
 
-	// Task 3: Stage all files with hooks disabled. `.scbake` holds transaction
+	// Task 4: Stage all files with hooks disabled. `.scbake` holds transaction
 	// backups and the recovery journal; it is local process state, never a
 	// project artifact, so it must not enter the initial commit even when the
 	// selected templates do not provide a .gitignore that excludes it.
@@ -133,7 +147,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		RunInTarget: true,
 	})
 
-	// Task 4: Create initial commit with hooks disabled.
+	// Task 5: Create initial commit with hooks disabled.
 	// We use "commit -m ..." to snapshot the scaffolding state.
 	// Note: If 'git add' found nothing (e.g. empty dir), this might fail with "nothing to commit".
 	// However, scbake always creates the manifest at minimum, so this should usually succeed.

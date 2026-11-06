@@ -42,6 +42,16 @@ func TestNewWithGoAndGitExcludesTransactionState(t *testing.T) {
 	assertNewExcludesTransactionState(t, "new --lang go --with git", "new", "demo", "--lang", "go", "--with", "git")
 }
 
+// TestNewWithGitCustomTemplateWithoutInfo covers a custom or empty
+// GIT_TEMPLATE_DIR. Git copies only the template contents into .git, so
+// info/exclude may be absent; the git template must create the parent before
+// appending the local ignore.
+func TestNewWithGitCustomTemplateWithoutInfo(t *testing.T) {
+	requireGit(t)
+	t.Setenv("GIT_TEMPLATE_DIR", t.TempDir())
+	assertNewExcludesTransactionState(t, "new --with git with an empty template", "new", "demo", "--with", "git")
+}
+
 // TestNewWithGitAndToolingLeavesCleanTree covers the non-Go tooling flow.
 // Templates such as makefile do not generate a .gitignore, but they do write
 // .scbake/base ledger state, so the repository-local exclude must keep the
