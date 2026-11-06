@@ -74,16 +74,9 @@ type fuzzDependabotEntry struct {
 }
 
 // fuzzParseDependabotEntries performs deterministic line-based parsing of the
-// generated updates list, failing on null/empty/missing updates.
+// generated updates list, failing on a missing or empty updates section.
 func fuzzParseDependabotEntries(t *testing.T, out string) []fuzzDependabotEntry {
 	t.Helper()
-
-	if strings.Contains(out, "updates: null") {
-		t.Fatalf("dependabot.yml emits `updates: null`:\n%s", out)
-	}
-	if strings.Contains(out, "updates: []") {
-		t.Fatalf("dependabot.yml emits an empty `updates` list:\n%s", out)
-	}
 
 	lines := strings.Split(out, "\n")
 	updatesIdx := -1
@@ -141,6 +134,12 @@ func FuzzDependabotUpdates(f *testing.F) {
 	f.Add(1, "service", "service", "spring")
 	f.Add(3, "api|web|service", "services/api|web|service", "go|svelte|spring")
 	f.Add(1, "unnamed", "unnamed", "")
+	f.Add(
+		2,
+		"api|web",
+		"services/updates: null|web/updates: []",
+		"go|svelte",
+	)
 	f.Add(
 		4,
 		"quoted\"name|dot.name|slash/name|nbs\u00a0name",

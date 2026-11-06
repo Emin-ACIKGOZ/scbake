@@ -290,16 +290,9 @@ type dependabotEntry struct {
 
 // parseDependabotEntries extracts the entries under `updates:` from a generated
 // dependabot.yml. It intentionally uses line parsing instead of a YAML
-// dependency and fails when the updates list is null, empty, or missing.
+// dependency and fails when the updates section is missing or empty.
 func parseDependabotEntries(t *testing.T, out string) []dependabotEntry {
 	t.Helper()
-
-	if strings.Contains(out, "updates: null") {
-		t.Fatalf("dependabot.yml emits `updates: null`:\n%s", out)
-	}
-	if strings.Contains(out, "updates: []") {
-		t.Fatalf("dependabot.yml emits an empty `updates` list:\n%s", out)
-	}
 
 	lines := strings.Split(out, "\n")
 	updatesIdx := -1
@@ -382,6 +375,16 @@ func TestDependabot_EcosystemCoverage(t *testing.T) {
 				{Name: "service", Path: "service", Language: "spring"},
 			},
 			want: map[string]int{"gomod": 1, "npm": 1, "maven": 1},
+		},
+		{
+			// Regression for the review finding: these substrings belong to a
+			// quoted directory value, not to the top-level updates key.
+			name: "path containing updates null",
+			projects: []types.Project{
+				{Name: "api", Path: "services/updates: null", Language: "go"},
+				{Name: "web", Path: "web/updates: []", Language: "svelte"},
+			},
+			want: map[string]int{"gomod": 1, "npm": 1, "maven": 0},
 		},
 	}
 
