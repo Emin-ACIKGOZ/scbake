@@ -22,7 +22,12 @@ const gitCmd = "git"
 // directory out of the initial commit even when no language pack supplied a
 // .gitignore. A committed journal can make a clone report drift and lets
 // `scbake recover` replay stale filesystem operations against the checkout.
-const internalStateExclude = ":(exclude).scbake"
+//
+// The glob form matches descendants without naming a literal `.scbake` path.
+// Naming `.scbake` itself makes Git complain when a generated .gitignore or a
+// global excludesFile ignores that path; the glob is simply a non-matching
+// exclude in that case instead of an error.
+const internalStateExclude = ":(exclude,glob)**/.scbake/**"
 
 // GetTasks returns the plan to initialize a Git repository.
 // It performs `git init`, `git add .`, and `git commit` for a fresh target.
