@@ -1135,6 +1135,51 @@ func TestRecoverRemoveRootThroughSymlinkedRoot(t *testing.T) {
 	}
 }
 
+// TestRecoverDiscardRefusesLiveMalformedBody verifies that a malformed body
+// does not bypass the liveness guard when the header still names a live owner.
+func TestRecoverDiscardRefusesLiveMalformedBody(t *testing.T) {
+	root := t.TempDir()
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupManagerMarker(t, tx)
+
+	created := filepath.Join(root, "created.txt")
+	if err := tx.Track(created); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(created, []byte("data"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.OpenFile(filepath.Join(tx.tempDir, journalFileName), os.O_APPEND|os.O_WRONLY, fileutil.PrivateFilePerms) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("not json\n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Recover(root, true); err == nil ||
+		!strings.Contains(err.Error(), "still running") {
+		t.Fatalf("discard error = %v, want a live-owner refusal", err)
+	}
+	if _, err := discardTransactionDir(root, tx.tempDir); err == nil {
+		t.Fatal("discardTransactionDir removed a live transaction with a malformed body")
+	}
+	if _, err := os.Stat(filepath.Join(tx.tempDir, journalFileName)); err != nil {
+		t.Errorf("refused discard removed the journal: %v", err)
+	}
+	if _, err := os.Stat(created); err != nil {
+		t.Errorf("refused discard removed user-visible path %s: %v", created, err)
+	}
+}
+
 // TestRecoverDiscardEmptyJournal verifies the explicit discard path works when
 // the journal cannot be parsed.
 func TestRecoverDiscardEmptyJournal(t *testing.T) {

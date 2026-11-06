@@ -1032,6 +1032,19 @@ func hasTransactionJournal(dir string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+// refuseLiveDiscard rejects a transaction whose header names a live owner.
+// It also works when only the header is readable, so a malformed body cannot
+// bypass the liveness guard.
+func refuseLiveDiscard(dir string, journal *transactionJournal) error {
+	if journal == nil || journal.Committed {
+		return nil
+	}
+	if journalOwnerLiveness(journal, time.Now().UTC()) != journalAlive {
+		return nil
+	}
+	return fmt.Errorf("transaction in %s is still running (pid %d)", dir, journal.PID)
+}
+
 // checkDiscardableTransactions refuses a transaction whose owner is alive.
 // Where liveness cannot be proven (an aged PID match), --discard remains the
 // explicit escape hatch for a stuck PID-reuse false positive.
@@ -1041,13 +1054,14 @@ func checkDiscardableTransactions(ctx context.Context, dirs []string) error {
 			return err
 		}
 		journal, err := readTransactionJournal(dir)
-		if err != nil || journal.Committed {
-			continue
+		if err != nil {
+			// The body may be malformed while the header still names a live
+			// owner. Check the header independently before allowing discard.
+			journal, _ = readTransactionJournalHeader(dir)
 		}
-		if journalOwnerLiveness(journal, time.Now().UTC()) != journalAlive {
-			continue
+		if err := refuseLiveDiscard(dir, journal); err != nil {
+			return err
 		}
-		return fmt.Errorf("transaction in %s is still running (pid %d)", dir, journal.PID)
 	}
 	return nil
 }
@@ -1084,6 +1098,15 @@ func discardTransactionDir(rootPath, dir string) (bool, error) {
 		// The body may be malformed while the header still names the run
 		// marker. Read it independently so --discard does not leak markers.
 		header, _ = readTransactionJournalHeader(dir)
+	}
+	liveJournal := journal
+	if journalErr != nil {
+		liveJournal = header
+	}
+	// Re-check liveness immediately before deletion so a transaction that was
+	// alive at the first pass cannot be removed by a stale decision.
+	if err := refuseLiveDiscard(dir, liveJournal); err != nil {
+		return false, err
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return false, fmt.Errorf("failed to discard transaction %s: %w", dir, err)
