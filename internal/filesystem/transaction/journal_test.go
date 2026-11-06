@@ -687,6 +687,54 @@ func TestRecoverDiscardSweepsMarkerWithUnreadableHeader(t *testing.T) {
 	}
 }
 
+// TestJournalWriterEnforcesEntryLimit verifies the writer refuses a record that
+// would make the journal exceed the reader's entry cap, before writing it.
+func TestJournalWriterEnforcesEntryLimit(t *testing.T) {
+	root := t.TempDir()
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupManagerMarker(t, tx)
+	if err := tx.startJournal(); err != nil {
+		t.Fatal(err)
+	}
+	tx.journalEntries = maxJournalEntries
+
+	err = tx.appendJournal(journalRecord{Op: journalOpCreate, Path: "created.txt"})
+	if err == nil || !strings.Contains(err.Error(), "maximum of") {
+		t.Fatalf("appendJournal error = %v, want the entry-limit refusal", err)
+	}
+	if _, err := readTransactionJournal(tx.tempDir); err != nil {
+		t.Errorf("writer left an unreadable journal after refusing an entry: %v", err)
+	}
+}
+
+// TestJournalWriterEnforcesFileSizeLimit verifies the writer refuses a record
+// that would make the journal exceed the reader's size cap.
+func TestJournalWriterEnforcesFileSizeLimit(t *testing.T) {
+	root := t.TempDir()
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupManagerMarker(t, tx)
+	if err := tx.startJournal(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = tx.appendJournal(journalRecord{
+		Op:   journalOpCreate,
+		Path: strings.Repeat("a", maxJournalFileBytes),
+	})
+	if err == nil || !strings.Contains(err.Error(), "maximum size") {
+		t.Fatalf("appendJournal error = %v, want the size-limit refusal", err)
+	}
+	if _, err := readTransactionJournal(tx.tempDir); err != nil {
+		t.Errorf("writer left an unreadable journal after refusing an oversized record: %v", err)
+	}
+}
+
 // TestJournalRejectsOversizedFile verifies that a force-added or corrupted
 // journal larger than the size cap fails closed before it is parsed.
 func TestJournalRejectsOversizedFile(t *testing.T) {

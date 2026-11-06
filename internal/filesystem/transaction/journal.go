@@ -227,6 +227,7 @@ func (m *Manager) startJournal() error {
 	}
 
 	m.journalPath = journalPath
+	m.journalEntries = 0
 	return nil
 }
 
@@ -237,6 +238,10 @@ func (m *Manager) appendJournal(record journalRecord) error {
 		return err
 	}
 
+	data, err := marshalJournalRecord(record)
+	if err != nil {
+		return fmt.Errorf("failed to encode transaction journal record: %w", err)
+	}
 	f, err := fileutil.SafeOpenFile(
 		m.tempDir,
 		journalFileName,
@@ -246,7 +251,26 @@ func (m *Manager) appendJournal(record journalRecord) error {
 	if err != nil {
 		return fmt.Errorf("failed to open transaction journal: %w", err)
 	}
-	if err := writeJournalRecord(f, record); err != nil {
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return fmt.Errorf("failed to stat transaction journal: %w", err)
+	}
+	if journalRecordIsEntry(record.Op) && m.journalEntries >= maxJournalEntries {
+		_ = f.Close()
+		return fmt.Errorf(
+			"transaction journal %s has reached the maximum of %d entries",
+			m.journalPath, maxJournalEntries,
+		)
+	}
+	if info.Size()+int64(len(data)) > maxJournalFileBytes {
+		_ = f.Close()
+		return fmt.Errorf(
+			"transaction journal %s would exceed the maximum size of %d bytes",
+			m.journalPath, maxJournalFileBytes,
+		)
+	}
+	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("failed to append transaction journal: %w", err)
 	}
@@ -257,16 +281,32 @@ func (m *Manager) appendJournal(record journalRecord) error {
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("failed to close transaction journal: %w", err)
 	}
+	if journalRecordIsEntry(record.Op) {
+		m.journalEntries++
+	}
 	return nil
+}
+
+// journalRecordIsEntry reports whether op counts against the reader's entry cap.
+func journalRecordIsEntry(op string) bool {
+	return op == journalOpCreate || op == journalOpBackup
+}
+
+// marshalJournalRecord encodes one JSON object followed by a newline.
+func marshalJournalRecord(record journalRecord) ([]byte, error) {
+	data, err := json.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
 }
 
 // writeJournalRecord writes one JSON object followed by a newline.
 func writeJournalRecord(f *os.File, record journalRecord) error {
-	data, err := json.Marshal(record)
+	data, err := marshalJournalRecord(record)
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
 	_, err = f.Write(data)
 	return err
 }

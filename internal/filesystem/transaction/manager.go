@@ -58,6 +58,11 @@ type Manager struct {
 	// left open on Windows.
 	journalPath string
 
+	// journalEntries is the number of create/backup records written to the
+	// journal. It is tracked so the writer enforces the same entry cap as the
+	// reader and never produces a journal that recovery cannot parse.
+	journalEntries int
+
 	// markerPath is the local run marker outside the project that proves this
 	// journal was started on this machine, not checked out through Git.
 	markerPath string
@@ -288,6 +293,7 @@ func (m *Manager) cleanupStructure() {
 func (m *Manager) resetState() {
 	m.tempDir = ""
 	m.journalPath = ""
+	m.journalEntries = 0
 	m.markerPath = ""
 	m.backups = make(map[string]backupEntry)
 	m.created = make([]string, 0)
