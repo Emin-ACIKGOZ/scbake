@@ -6,12 +6,14 @@ package cmd
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"scbake/internal/core"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/templates"
+	"strings"
 	"testing"
 )
 
@@ -81,6 +83,95 @@ func TestRunNew_ValidatesBeforeCreatingDirectory(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRunNew_ChecksToolsBeforeCreatingDirectory is a regression test for #147:
+// when the selected language's toolchain is missing, 'new' must fail before the
+// project directory is created rather than creating it and cleaning it up.
+func TestRunNew_ChecksToolsBeforeCreatingDirectory(t *testing.T) {
+	resetNewFlags()
+
+	work := t.TempDir()
+	// t.Chdir restores the working directory before the TempDir cleanup runs;
+	// removing the current directory fails on Windows.
+	t.Chdir(work)
+	// An empty PATH entry hides the go binary from exec.LookPath.
+	t.Setenv("PATH", t.TempDir())
+
+	const project = "residue-no-go"
+	newLangFlag = "go"
+
+	created := false
+	if err := runNew(project, &created); err == nil {
+		t.Fatalf("runNew(%q) = nil, want an error for missing go", project)
+	}
+	if created {
+		t.Errorf("runNew(%q) created the project directory before checking language tools", project)
+	}
+	if _, statErr := os.Stat(filepath.Join(work, project)); !os.IsNotExist(statErr) {
+		t.Errorf("runNew(%q) left a project directory behind (stat err: %v)", project, statErr)
+	}
+}
+
+// TestRunNew_DryRunWarnsOnMissingTool guards the dry-run half of the same fix:
+// a missing language toolchain is reported as a warning, not an error, and the
+// dry run writes no project directory.
+func TestRunNew_DryRunWarnsOnMissingTool(t *testing.T) {
+	resetNewFlags()
+
+	work := t.TempDir()
+	t.Chdir(work)
+	t.Setenv("PATH", t.TempDir())
+	dryRun = true
+
+	const project = "residue-dry-no-go"
+	newLangFlag = "go"
+
+	created := false
+	var runErr error
+	var stderr string
+	stdout := captureStdout(t, func() {
+		stderr = captureStderr(t, func() {
+			runErr = runNew(project, &created)
+		})
+	})
+	if runErr != nil {
+		t.Fatalf("runNew(%q) dry run = %v, want nil (missing tool is a warning)", project, runErr)
+	}
+	if !strings.Contains(stderr, "⚠️  'go' command not found") {
+		t.Errorf("runNew(%q) dry run stderr = %q, want the missing-go warning", project, stderr)
+	}
+	if !strings.Contains(stdout, "[DRY RUN] Create .gitignore") {
+		t.Errorf("runNew(%q) dry run stdout = %q, want the plan line '[DRY RUN] Create .gitignore'", project, stdout)
+	}
+	if _, statErr := os.Stat(filepath.Join(work, project)); !os.IsNotExist(statErr) {
+		t.Errorf("runNew(%q) dry run created a project directory (stat err: %v)", project, statErr)
+	}
+}
+
+// captureStderr redirects os.Stderr for the duration of fn and returns what
+// was written.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe failed: %v", err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing pipe writer failed: %v", err)
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured stderr failed: %v", err)
+	}
+	_ = r.Close()
+	return string(data)
 }
 
 // TestRunNew_ValidSelectionStillCreatesProject guards the happy path after the

@@ -79,6 +79,15 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 	if newLangFlag == "" && len(newWithFlag) == 0 {
 		return core.ErrNoSelection
 	}
+	// Check the language toolchain before the directory exists, so a missing
+	// binary (e.g. go) does not leave a directory to be cleaned up. A dry run
+	// writes nothing, so it is left to core to report the missing tool as a
+	// warning while the plan is still printed.
+	if !dryRun {
+		if err := core.CheckLangPrerequisites(newLangFlag); err != nil {
+			return err
+		}
+	}
 
 	reporter := ui.NewReporter(newCmdTotalSteps, dryRun)
 
