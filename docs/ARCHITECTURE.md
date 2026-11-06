@@ -374,7 +374,9 @@ classifies it `modified` (bytes differ), `missing` (absent), or clean. It opens
 no transaction, renders no template, and never touches the network, so it is
 safe as a CI gate; it exits non-zero when any finding remains. `--repair`
 delegates to `core.RunUpdate`, so detection and repair share one reconciliation
-implementation (`internal/drift`).
+implementation (`internal/drift`). Because repair replays `LicenseTask`, a
+compliance project's repair fetches the license text from spdx.org and needs
+network access even when LICENSE is already clean; plain detection does not.
 
 Detection is deliberately conservative: a locally edited file is drift even
 when `update`'s default `merge` strategy is a no-op that preserves the edit.
