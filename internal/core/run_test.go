@@ -35,7 +35,7 @@ func TestRunApplyMakefileUsesPerProjectTests(t *testing.T) {
 	if err := RunApply(RunContext{TargetPath: root, ManifestPathArg: ".", WithFlag: []string{"makefile"}}, ui.NewPlainReporter(10, false)); err != nil {
 		t.Fatalf("RunApply failed: %v", err)
 	}
-	out, err := os.ReadFile(filepath.Join(root, "Makefile")) //nolint:gosec // root is t.TempDir and filename is fixed
+	out, err := os.ReadFile(filepath.Join(root, "Makefile")) // #nosec G304 -- root is t.TempDir and filename is fixed
 	if err != nil {
 		t.Fatalf("read generated Makefile: %v", err)
 	}
