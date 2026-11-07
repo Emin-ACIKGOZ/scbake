@@ -133,7 +133,7 @@ func assertGeneratedTestTarget(t *testing.T, out, target, language, path string,
 	assertTestCommandsDefined(t, out)
 
 	if count == 0 {
-		assertNeutralNoProject(t, out, target, input)
+		assertNeutralNoProject(t, target, input)
 		return
 	}
 	assertPerLanguageTestSelection(t, target, language, path, input)
@@ -154,7 +154,7 @@ func assertNoEmptyGeneratedRecipes(t *testing.T, target, input string) {
 
 // assertNeutralNoProject checks that an empty manifest fails with actionable
 // guidance rather than claiming there is nothing to test successfully.
-func assertNeutralNoProject(t *testing.T, out, target, input string) {
+func assertNeutralNoProject(t *testing.T, target, input string) {
 	t.Helper()
 
 	if strings.Contains(target, "go test ./...") {
