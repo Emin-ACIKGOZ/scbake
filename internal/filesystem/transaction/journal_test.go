@@ -470,39 +470,14 @@ func TestCommitRemainsCommittedAfterJournalCloseError(t *testing.T) {
 
 	// Record the state at the instant the atomic rename publishes the marker,
 	// before cleanup starts deleting the transaction directory.
-	renameCalled := false
-	originalRename := renameCommitMarker
-	renameCommitMarker = func(oldPath, newPath string) error {
-		if err := originalRename(oldPath, newPath); err != nil {
-			return err
-		}
-		renameCalled = true
-		if !commitMarkerExists(tempDir) {
-			t.Error("commit marker was not a regular file immediately after the rename")
-		}
-		assertNoCommitMarkerTemp(t, tempDir)
-		committedJournal, err := readTransactionJournal(tempDir)
-		if err != nil {
-			t.Errorf("reading committed journal at the marker rename: %v", err)
-			return nil
-		}
-		if !committedJournal.Committed {
-			t.Error("journal was not committed at the marker rename")
-		}
-		if committedJournal.Version != journalVersion {
-			t.Errorf("journal version = %d, want %d", committedJournal.Version, journalVersion)
-		}
-		assertNoCommittedRecord(t, tempDir)
-		return nil
-	}
-	t.Cleanup(func() { renameCommitMarker = originalRename })
+	markerPublished := observeCommitPoint(t, tempDir)
 
 	if err := tx.Commit(); err == nil {
 		t.Fatal("Commit did not report the injected cleanup failure")
 	} else if !errors.Is(err, ErrCommitted) {
 		t.Errorf("Commit error = %v, want ErrCommitted", err)
 	}
-	if !renameCalled {
+	if !markerPublished() {
 		t.Fatal("Commit never published the commit marker")
 	}
 	if !tx.committed {
@@ -520,10 +495,11 @@ func TestCommitRemainsCommittedAfterJournalCloseError(t *testing.T) {
 		t.Errorf("Rollback undid a durably committed run: content = %q", content)
 	}
 
-	// os.RemoveAll keeps deleting siblings after a failure. Only the blocker
-	// survives, so the directory is journal-less committed residue. Once the
-	// blocker is released and the residue is stale, the startup sweep reclaims
-	// it without any rollback opportunity.
+	// The helper removes journal.jsonl first, then RemoveAll deletes the marker
+	// and backup up to the blocker. Only the blocker survives, so the directory
+	// is journal-less committed residue. Once the blocker is released and the
+	// residue is stale, the startup sweep reclaims it without any rollback
+	// opportunity.
 	releaseCleanup()
 	ageTransactionDir(t, tempDir)
 	if _, err := New(root); err != nil {

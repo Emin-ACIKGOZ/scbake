@@ -109,6 +109,206 @@ func journalBackupName(t *testing.T, dir string) string {
 	return ""
 }
 
+// assertCommitPoint checks that the atomic rename left a complete commit point:
+// a regular marker, no temp marker, and a committed v2 journal with no
+// committed record.
+func assertCommitPoint(t *testing.T, dir string) {
+	t.Helper()
+	info, err := os.Lstat(filepath.Join(dir, commitMarkerFileName))
+	if err != nil {
+		t.Errorf("stat published marker: %v", err)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("published marker mode = %v, want a regular file", info.Mode())
+	}
+	assertNoCommitMarkerTemp(t, dir)
+
+	journal, err := readTransactionJournal(dir)
+	if err != nil {
+		t.Errorf("reading journal at commit point: %v", err)
+		return
+	}
+	if !journal.Committed {
+		t.Error("journal was not committed at the marker rename")
+	}
+	if journal.Version != journalVersion {
+		t.Errorf("journal version = %d, want %d", journal.Version, journalVersion)
+	}
+	assertNoCommittedRecord(t, dir)
+}
+
+// observeCommitPoint wraps the rename seam and asserts the commit point as soon
+// as the real rename succeeds, before cleanup starts. The returned function
+// reports whether the rename ran.
+func observeCommitPoint(t *testing.T, dir string) func() bool {
+	t.Helper()
+	published := false
+	originalRename := renameCommitMarker
+	renameCommitMarker = func(oldPath, newPath string) error {
+		if err := originalRename(oldPath, newPath); err != nil {
+			return err
+		}
+		published = true
+		assertCommitPoint(t, dir)
+		return nil
+	}
+	t.Cleanup(func() { renameCommitMarker = originalRename })
+	return func() bool { return published }
+}
+
+// committedTransactionFixture builds a committed transaction directory with a
+// v2 journal, a regular marker, and one backup file.
+func committedTransactionFixture(t *testing.T, root, suffix string) (dir, backupName string) {
+	t.Helper()
+	original := filepath.Join(root, "state.txt")
+	if err := os.WriteFile(original, []byte("original"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	dir = newTransactionDir(t, root, suffix)
+	backupName = "0_state.txt"
+	if err := os.WriteFile(filepath.Join(dir, backupName), []byte("original"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+	writeTestJournalVersion(
+		t,
+		dir,
+		journalVersion,
+		1<<30,
+		"",
+		journalRecord{Op: journalOpBackup, Path: "state.txt", Backup: backupName, Mode: uint32(fileutil.FilePerms)},
+	)
+	if err := writeCommitMarker(dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir, backupName
+}
+
+// TestRemoveCommittedTransactionSuccess verifies the helper removes a
+// committed transaction directory entirely.
+func TestRemoveCommittedTransactionSuccess(t *testing.T) {
+	root := t.TempDir()
+	dir, _ := committedTransactionFixture(t, root, "remove")
+
+	if err := removeCommittedTransaction(dir); err != nil {
+		t.Fatalf("removeCommittedTransaction failed: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("removeCommittedTransaction left the transaction directory: %v", err)
+	}
+}
+
+// TestRemoveCommittedTransactionFailClosed checks the ordering invariant: when
+// the journal cannot be removed, the helper must leave the marker and backup
+// intact so the transaction still looks committed to a later retry.
+//
+//nolint:cyclop // The test checks every preserved artifact before retrying.
+func TestRemoveCommittedTransactionFailClosed(t *testing.T) {
+	root := t.TempDir()
+	dir, backupName := committedTransactionFixture(t, root, "remove-blocked")
+
+	// A non-empty directory at the journal path makes os.Remove fail portably.
+	journalPath := filepath.Join(dir, journalFileName)
+	if err := os.Remove(journalPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(journalPath, fileutil.DirPerms); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(journalPath, "keep"), []byte("keep"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeCommittedTransaction(dir); err == nil {
+		t.Fatal("removeCommittedTransaction succeeded although the journal could not be removed")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("failed cleanup removed the transaction directory: %v", err)
+	}
+	if !commitMarkerExists(dir) {
+		t.Error("failed cleanup removed the commit marker")
+	}
+	if _, err := os.Stat(filepath.Join(dir, backupName)); err != nil {
+		t.Errorf("failed cleanup removed the backup: %v", err)
+	}
+	entries, err := os.ReadDir(journalPath)
+	if err != nil || len(entries) == 0 {
+		t.Errorf("failed cleanup altered the journal blocker: entries=%d err=%v", len(entries), err)
+	}
+
+	// Once the blocker is gone the helper must succeed.
+	if err := os.RemoveAll(journalPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCommittedTransaction(dir); err != nil {
+		t.Fatalf("removeCommittedTransaction after removing the blocker: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("retry left the transaction directory: %v", err)
+	}
+}
+
+// TestSweepCommittedTransactionOrdering verifies the startup sweep removes a
+// normal committed+dead transaction, but leaves the marker and backup intact
+// when the journal cannot be removed.
+//
+//nolint:cyclop // Covers both the success and fail-closed sweep paths.
+func TestSweepCommittedTransactionOrdering(t *testing.T) {
+	t.Run("normal journal is swept", func(t *testing.T) {
+		root := t.TempDir()
+		dir, _ := committedTransactionFixture(t, root, "sweep-normal")
+
+		sweepStaleTransactions(root)
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Errorf("sweep did not reclaim a committed transaction with a dead owner: %v", err)
+		}
+	})
+
+	t.Run("journal removal failure preserves committed state", func(t *testing.T) {
+		if runtime.GOOS == osWindows {
+			t.Skip("permission-based unlink failure is not portable to Windows")
+		}
+
+		root := t.TempDir()
+		dir, backupName := committedTransactionFixture(t, root, "sweep-blocked")
+		if err := os.Chmod(dir, readOnlyDirPerms); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, fileutil.DirPerms) })
+
+		sweepStaleTransactions(root)
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("sweep removed a transaction whose journal could not be removed: %v", err)
+		}
+		if !commitMarkerExists(dir) {
+			t.Error("sweep removed the commit marker when journal removal failed")
+		}
+		if _, err := os.Stat(filepath.Join(dir, journalFileName)); err != nil {
+			t.Errorf("sweep removed the journal despite the injection: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, backupName)); err != nil {
+			t.Errorf("sweep removed the backup when journal removal failed: %v", err)
+		}
+
+		// New() runs the same sweep; it must tolerate the committed residue.
+		if _, err := New(root); err != nil {
+			t.Fatalf("New() with committed residue: %v", err)
+		}
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("New() reclaimed a transaction whose journal could not be removed: %v", err)
+		}
+
+		if err := os.Chmod(dir, fileutil.DirPerms); err != nil {
+			t.Fatal(err)
+		}
+		sweepStaleTransactions(root)
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Errorf("sweep did not reclaim the transaction after the journal became removable: %v", err)
+		}
+	})
+}
+
 // TestWriteCommitMarkerPublishesRegularFile covers the marker primitive
 // directly: success must leave exactly a regular committed file and no temp.
 func TestWriteCommitMarkerPublishesRegularFile(t *testing.T) {
@@ -168,44 +368,13 @@ func TestCommitWritesVersionTwoJournalWithoutCommittedRecord(t *testing.T) {
 	}
 
 	// Observe the directory at the exact commit point, before cleanup removes
-	// it: the marker is regular, no temp marker remains, and the v2 journal is
-	// committed without ever appending a committed record.
-	markerPublished := false
-	originalRename := renameCommitMarker
-	renameCommitMarker = func(oldPath, newPath string) error {
-		if err := originalRename(oldPath, newPath); err != nil {
-			return err
-		}
-		markerPublished = true
-		info, err := os.Lstat(filepath.Join(tempDir, commitMarkerFileName))
-		if err != nil {
-			t.Errorf("stat published marker: %v", err)
-			return nil
-		}
-		if !info.Mode().IsRegular() {
-			t.Errorf("published marker mode = %v, want a regular file", info.Mode())
-		}
-		assertNoCommitMarkerTemp(t, tempDir)
-		committedJournal, err := readTransactionJournal(tempDir)
-		if err != nil {
-			t.Errorf("reading journal at commit point: %v", err)
-			return nil
-		}
-		if !committedJournal.Committed {
-			t.Error("journal was not committed at the marker rename")
-		}
-		if committedJournal.Version != journalVersion {
-			t.Errorf("journal version = %d, want %d", committedJournal.Version, journalVersion)
-		}
-		assertNoCommittedRecord(t, tempDir)
-		return nil
-	}
-	t.Cleanup(func() { renameCommitMarker = originalRename })
+	// it.
+	markerPublished := observeCommitPoint(t, tempDir)
 
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
-	if !markerPublished {
+	if !markerPublished() {
 		t.Fatal("Commit never published the commit marker")
 	}
 	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
