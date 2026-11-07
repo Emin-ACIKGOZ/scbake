@@ -42,7 +42,10 @@ func (h *Handler) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 		TaskPrio:     int(p1),
 	})
 
-	// Task 2: Install necessary ESLint dependencies
+	// Task 2: Install necessary ESLint dependencies.
+	// node_modules is tool-managed: tracking the directory cleans up a newly
+	// created tree, but pre-existing contents are not snapshotted because
+	// backing up dependency trees is intentionally out of scope.
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd: "npm",
 		Args: []string{
