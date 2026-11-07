@@ -460,15 +460,7 @@ func persistManagedFiles(m *types.Manifest, tc types.TaskContext) {
 // persistManagedInputs copies the managed input fingerprints recorded by tasks
 // into the manifest.
 func persistManagedInputs(m *types.Manifest, tc types.TaskContext) {
-	if tc.Manifest.ManagedInputs == nil {
-		return
-	}
-	if m.ManagedInputs == nil {
-		m.ManagedInputs = make(map[string]string)
-	}
-	for k, v := range tc.Manifest.ManagedInputs {
-		m.ManagedInputs[k] = v
-	}
+	mergeStringMap(&m.ManagedInputs, tc.Manifest.ManagedInputs)
 }
 
 // snapshotManifestContent records a newly created manifest's bytes so rollback
@@ -477,6 +469,20 @@ func persistManagedInputs(m *types.Manifest, tc types.TaskContext) {
 func snapshotManifestContent(tx *transaction.Manager, manifestPath string) {
 	if err := tx.SnapshotCreatedContent(manifestPath); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Could not snapshot manifest content for rollback: %v\n", err)
+	}
+}
+
+// mergeStringMap copies every entry of src into *dst, allocating *dst when it is
+// nil. A nil src leaves *dst untouched.
+func mergeStringMap(dst *map[string]string, src map[string]string) {
+	if src == nil {
+		return
+	}
+	if *dst == nil {
+		*dst = make(map[string]string, len(src))
+	}
+	for k, v := range src {
+		(*dst)[k] = v
 	}
 }
 

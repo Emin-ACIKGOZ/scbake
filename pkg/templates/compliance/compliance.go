@@ -149,17 +149,9 @@ func licenseFileIsClean(tc types.TaskContext) bool {
 	if tc.Manifest == nil || tc.Manifest.ManagedFiles == nil {
 		return false
 	}
-	key := "LICENSE"
-	if tc.Tx != nil && tc.Tx.Root() != "" {
-		absTarget, err := filepath.Abs(tc.TargetPath)
-		if err != nil {
-			return false
-		}
-		rel, err := filepath.Rel(tc.Tx.Root(), filepath.Join(absTarget, "LICENSE"))
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return false
-		}
-		key = filepath.ToSlash(rel)
+	key, ok := licenseManagedKey(tc)
+	if !ok {
+		return false
 	}
 	recordedHash := tc.Manifest.ManagedFiles[key]
 	if recordedHash == "" {
@@ -170,6 +162,24 @@ func licenseFileIsClean(tc types.TaskContext) bool {
 		return false
 	}
 	return tasks.HashContent(content) == recordedHash
+}
+
+// licenseManagedKey returns the ManagedFiles key for the LICENSE file. Inside a
+// transaction the key is relative to the transaction root; it reports false when
+// the target falls outside that root.
+func licenseManagedKey(tc types.TaskContext) (string, bool) {
+	if tc.Tx == nil || tc.Tx.Root() == "" {
+		return "LICENSE", true
+	}
+	absTarget, err := filepath.Abs(tc.TargetPath)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(tc.Tx.Root(), filepath.Join(absTarget, "LICENSE"))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 // fillLicensePlaceholders replaces the year and copyright-holder fields used by
