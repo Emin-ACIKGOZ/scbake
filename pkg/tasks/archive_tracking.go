@@ -93,27 +93,28 @@ func trackArchiveEntries(tc types.TaskContext, cmdDir, archivePath string) error
 // platforms. Absolute paths, traversal outside the extraction root, and
 // empty or "." names are also rejected.
 func safeArchiveEntryName(name string) (string, error) {
-	if name == "" || name == "." {
-		return "", errors.New("empty or '.' entry name")
-	}
 	if strings.Contains(name, `\`) {
 		return "", errors.New("backslash in entry name")
 	}
-	if strings.HasPrefix(name, "/") || filepath.IsAbs(name) || filepath.VolumeName(name) != "" || isWindowsDrivePath(name) {
-		return "", errors.New("absolute entry path")
+
+	// Normalize before validating absolute and drive-prefixed forms. Checking
+	// only the raw name lets "./A:" and "./C:/escape.txt" through: they clean
+	// to "A:" and "C:/escape.txt", which are drive-relative on Windows.
+	clean := path.Clean(name)
+	if clean == "." {
+		return "", errors.New("empty or '.' entry name")
 	}
 	for _, part := range strings.Split(name, "/") {
 		if part == ".." {
 			return "", errors.New("entry path contains '..' traversal")
 		}
 	}
-
-	clean := path.Clean(name)
-	if clean == "." {
-		return "", errors.New("entry name resolves to '.'")
-	}
 	if clean == ".." || strings.HasPrefix(clean, "../") {
 		return "", errors.New("entry path traverses outside the extraction root")
+	}
+	if strings.HasPrefix(name, "/") || filepath.IsAbs(name) || filepath.VolumeName(name) != "" || isWindowsDrivePath(name) ||
+		strings.HasPrefix(clean, "/") || filepath.IsAbs(clean) || filepath.VolumeName(clean) != "" || isWindowsDrivePath(clean) {
+		return "", errors.New("absolute entry path")
 	}
 
 	return filepath.FromSlash(clean), nil
