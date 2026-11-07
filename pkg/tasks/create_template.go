@@ -160,7 +160,7 @@ func checkReconciliation(
 	// base is available; otherwise fall back to an artifact so local edits are
 	// never clobbered.
 	if tc.ConflictStrategy == types.ConflictMerge {
-		return reconcileMerge(absFinalPath, outputRelPath, ledgerKey, existingContent, newContent, tc)
+		return reconcileMerge(absFinalPath, outputRelPath, ledgerKey, originalHash, existingContent, newContent, tc)
 	}
 
 	p, cErr := handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
@@ -170,11 +170,21 @@ func checkReconciliation(
 // reconcileMerge performs the `merge` strategy: a clean three-way merge writes
 // the merged content, anything else writes an artifact so no local edit is lost.
 func reconcileMerge(
-	absFinalPath, outputRelPath, ledgerKey string,
+	absFinalPath, outputRelPath, ledgerKey, originalHash string,
 	existingContent, newContent []byte,
 	tc types.TaskContext,
 ) (string, []byte, error) {
 	if base, ok := readBaseShadow(tc, ledgerKey); ok {
+		// The base must be the pristine render recorded in the ledger. A stale
+		// or corrupt base is not a valid common ancestor: the merge can silently
+		// keep one side and drop the other. Treat it as missing and preserve the
+		// local file via the artifact path.
+		if HashContent(base) != originalHash {
+			fmt.Fprintf(os.Stderr,
+				"⚠️  No valid pristine base for %s (hash mismatch); writing new template to artifact.\n",
+				outputRelPath)
+			return absFinalPath + ".scbake-new", nil, nil
+		}
 		if merged, status := merge.Merge(base, existingContent, newContent); status == merge.Clean {
 			return absFinalPath, merged, nil
 		}
