@@ -14,7 +14,9 @@ import (
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/templateregistry"
 	"scbake/internal/types"
+	"scbake/internal/util/fileutil"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -171,7 +173,7 @@ func TestExecCommandTask_BoundsStderr(t *testing.T) {
 }
 
 // TestExecCommandTaskHelper is a child process for the tests above.
-func TestExecCommandTaskHelper(_ *testing.T) {
+func TestExecCommandTaskHelper(_ *testing.T) { //nolint:cyclop // one branch per helper mode
 	switch os.Getenv("GO_WANT_EXEC_HELPER") {
 	case "env":
 		if token := os.Getenv("SCBAKE_REGISTRY_TOKEN_PROD"); token != "" {
@@ -199,47 +201,251 @@ func TestExecCommandTaskHelper(_ *testing.T) {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	case "mutate":
+		// Write or overwrite files as a stand-in for an opaque external
+		// command, then optionally fail so the caller can exercise rollback.
+		mutateHelperFile(os.Getenv("GO_WANT_EXEC_HELPER_PATH"), os.Getenv("GO_WANT_EXEC_HELPER_CONTENT"), os.Getenv("GO_WANT_EXEC_HELPER_MODE"))
+		mutateHelperFile(os.Getenv("GO_WANT_EXEC_HELPER_PATH2"), os.Getenv("GO_WANT_EXEC_HELPER_CONTENT2"), os.Getenv("GO_WANT_EXEC_HELPER_MODE2"))
+		if os.Getenv("GO_WANT_EXEC_HELPER_FAIL") != "" {
+			fmt.Fprintln(os.Stderr, "intentional helper failure")
+			os.Exit(1)
+		}
+	case "sentinel":
+		writeHelperFile(os.Getenv("GO_WANT_EXEC_HELPER_PATH"), "helper ran\n")
 	case "sleep":
 		time.Sleep(5 * time.Second)
 	}
 }
 
-func TestExecCommandTask_PredictedCreated(t *testing.T) {
-	// Verify that predicted paths are tracked even if the command doesn't create them
-	rootDir := t.TempDir()
-	tx, _ := transaction.New(rootDir)
+// mutateHelperFile writes content to path and optionally sets its permission
+// bits. It is used by the child-process helper to simulate an external command
+// touching transaction-tracked paths.
+func mutateHelperFile(path, content, mode string) {
+	if path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), fileutil.DirPerms); err != nil { //nolint:gosec // path is injected by the test environment
+		fmt.Fprintf(os.Stderr, "helper mkdir %s: %v\n", path, err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil { //nolint:gosec // path is injected by the test environment
+		fmt.Fprintf(os.Stderr, "helper write %s: %v\n", path, err)
+		os.Exit(1)
+	}
+	if mode == "" {
+		return
+	}
+	perm, err := strconv.ParseUint(mode, 8, 32)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "helper parse mode %q: %v\n", mode, err)
+		os.Exit(1)
+	}
+	if err := os.Chmod(path, os.FileMode(perm)); err != nil { //nolint:gosec // path is injected by the test environment
+		fmt.Fprintf(os.Stderr, "helper chmod %s: %v\n", path, err)
+		os.Exit(1)
+	}
+}
 
-	// We expect "generated_artifact" to be created.
-	// We won't actually create it (using a dummy command),
-	// but we want to verify the Transaction Manager *thinks* we are about to create it.
+// writeHelperFile writes a sentinel proving the child command ran.
+func writeHelperFile(path, content string) {
+	if path == "" {
+		return
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil { //nolint:gosec // path is injected by the test environment
+		fmt.Fprintf(os.Stderr, "helper write sentinel %s: %v\n", path, err)
+		os.Exit(1)
+	}
+}
+
+func TestExecCommandTask_PredictedCreated(t *testing.T) { //nolint:cyclop // three behavioral subtests with explicit setup
+	t.Run("existing file is backed up and restored", func(t *testing.T) {
+		root := t.TempDir()
+		const original = "module example.com/original\n\ngo 1.21\n"
+		const modified = "module example.com/modified\n"
+
+		path := filepath.Join(root, "go.mod")
+		if err := os.WriteFile(path, []byte(original), 0o640); err != nil { //nolint:gosec // mode restoration under test
+			t.Fatalf("seed go.mod: %v", err)
+		}
+		if err := os.Chmod(path, 0o640); err != nil { //nolint:gosec // mode restoration under test
+			t.Fatalf("set go.mod mode: %v", err)
+		}
+
+		tx, err := transaction.New(root)
+		if err != nil {
+			t.Fatalf("transaction.New: %v", err)
+		}
+		t.Setenv("GO_WANT_EXEC_HELPER", "mutate")
+		t.Setenv("GO_WANT_EXEC_HELPER_PATH", path)
+		t.Setenv("GO_WANT_EXEC_HELPER_CONTENT", modified)
+		t.Setenv("GO_WANT_EXEC_HELPER_MODE", "0600")
+
+		task := &ExecCommandTask{
+			Cmd:              os.Args[0],
+			Args:             []string{"-test.run=^TestExecCommandTaskHelper$"},
+			Desc:             "Rewrite go.mod",
+			RunInTarget:      true,
+			PredictedCreated: []string{"go.mod"},
+		}
+		tc := types.TaskContext{Ctx: context.Background(), TargetPath: root, Tx: tx}
+
+		if err := task.Execute(tc); err != nil {
+			t.Fatalf("task failed: %v", err)
+		}
+		if got := mustReadTestFile(t, path); got != modified {
+			t.Fatalf("command did not modify go.mod: got %q, want %q", got, modified)
+		}
+
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
+		if got := mustReadTestFile(t, path); got != original {
+			t.Fatalf("go.mod content after rollback = %q, want %q", got, original)
+		}
+		assertTestFileMode(t, path, 0o640)
+	})
+
+	t.Run("missing file created by command is removed", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "go.sum")
+
+		tx, err := transaction.New(root)
+		if err != nil {
+			t.Fatalf("transaction.New: %v", err)
+		}
+		t.Setenv("GO_WANT_EXEC_HELPER", "mutate")
+		t.Setenv("GO_WANT_EXEC_HELPER_PATH", path)
+		t.Setenv("GO_WANT_EXEC_HELPER_CONTENT", "example.com/dep v1.0.0 h1:abc=\n")
+
+		task := &ExecCommandTask{
+			Cmd:              os.Args[0],
+			Args:             []string{"-test.run=^TestExecCommandTaskHelper$"},
+			Desc:             "Create go.sum",
+			RunInTarget:      true,
+			PredictedCreated: []string{"go.sum"},
+		}
+		tc := types.TaskContext{Ctx: context.Background(), TargetPath: root, Tx: tx}
+
+		if err := task.Execute(tc); err != nil {
+			t.Fatalf("task failed: %v", err)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("command did not create go.sum: %v", err)
+		}
+
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("go.sum survived rollback; stat err = %v", err)
+		}
+	})
+
+	t.Run("failed command still rolls back tracked mutations", func(t *testing.T) {
+		root := t.TempDir()
+		const original = "module example.com/original\n\ngo 1.21\n"
+		const modified = "module example.com/modified\n"
+
+		existing := filepath.Join(root, "go.mod")
+		created := filepath.Join(root, "go.sum")
+		if err := os.WriteFile(existing, []byte(original), 0o640); err != nil { //nolint:gosec // mode restoration under test
+			t.Fatalf("seed go.mod: %v", err)
+		}
+		if err := os.Chmod(existing, 0o640); err != nil { //nolint:gosec // mode restoration under test
+			t.Fatalf("set go.mod mode: %v", err)
+		}
+
+		tx, err := transaction.New(root)
+		if err != nil {
+			t.Fatalf("transaction.New: %v", err)
+		}
+		t.Setenv("GO_WANT_EXEC_HELPER", "mutate")
+		t.Setenv("GO_WANT_EXEC_HELPER_PATH", existing)
+		t.Setenv("GO_WANT_EXEC_HELPER_CONTENT", modified)
+		t.Setenv("GO_WANT_EXEC_HELPER_MODE", "0600")
+		t.Setenv("GO_WANT_EXEC_HELPER_PATH2", created)
+		t.Setenv("GO_WANT_EXEC_HELPER_CONTENT2", "example.com/dep v1.0.0 h1:abc=\n")
+		t.Setenv("GO_WANT_EXEC_HELPER_FAIL", "1")
+
+		task := &ExecCommandTask{
+			Cmd:              os.Args[0],
+			Args:             []string{"-test.run=^TestExecCommandTaskHelper$"},
+			Desc:             "Mutate then fail",
+			RunInTarget:      true,
+			PredictedCreated: []string{"go.mod", "go.sum"},
+		}
+		tc := types.TaskContext{Ctx: context.Background(), TargetPath: root, Tx: tx}
+
+		err = task.Execute(tc)
+		if err == nil {
+			t.Fatal("expected the helper command to fail")
+		}
+		if !strings.Contains(err.Error(), "intentional helper failure") {
+			t.Errorf("error does not include helper stderr: %v", err)
+		}
+		if got := mustReadTestFile(t, existing); got != modified {
+			t.Fatalf("precondition failed: command did not modify go.mod: %q", got)
+		}
+		if _, err := os.Stat(created); err != nil {
+			t.Fatalf("precondition failed: command did not create go.sum: %v", err)
+		}
+
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
+		if got := mustReadTestFile(t, existing); got != original {
+			t.Fatalf("go.mod content after rollback = %q, want %q", got, original)
+		}
+		assertTestFileMode(t, existing, 0o640)
+		if _, err := os.Stat(created); !os.IsNotExist(err) {
+			t.Fatalf("go.sum survived rollback; stat err = %v", err)
+		}
+	})
+}
+
+// TestExecCommandTask_DryRunSkipsTrackingAndExecution verifies that a dry run
+// neither registers predicted paths with the transaction nor executes the
+// command.
+func TestExecCommandTask_DryRunSkipsTrackingAndExecution(t *testing.T) {
+	root := t.TempDir()
+	const original = "module example.com/original\n"
+	existing := filepath.Join(root, "go.mod")
+	if err := os.WriteFile(existing, []byte(original), 0o600); err != nil {
+		t.Fatalf("seed go.mod: %v", err)
+	}
+	sentinel := filepath.Join(root, "command-ran")
+
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New: %v", err)
+	}
+	t.Setenv("GO_WANT_EXEC_HELPER", "sentinel")
+	t.Setenv("GO_WANT_EXEC_HELPER_PATH", sentinel)
+
 	task := &ExecCommandTask{
-		Cmd:              "echo",
-		Args:             []string{"noop"},
-		Desc:             "Prediction Test",
-		TaskPrio:         100,
+		Cmd:              os.Args[0],
+		Args:             []string{"-test.run=^TestExecCommandTaskHelper$"},
+		Desc:             "Must not run",
 		RunInTarget:      true,
-		PredictedCreated: []string{"generated_artifact"},
+		PredictedCreated: []string{"go.mod", "go.sum"},
 	}
-
-	tc := types.TaskContext{
-		Ctx:        context.Background(),
-		TargetPath: rootDir,
-		Tx:         tx,
-	}
+	tc := types.TaskContext{Ctx: context.Background(), TargetPath: root, Tx: tx, DryRun: true}
 
 	if err := task.Execute(tc); err != nil {
-		t.Fatalf("Task failed: %v", err)
+		t.Fatalf("dry-run task failed: %v", err)
 	}
-
-	// Simulate Rollback
-	if err := tx.Rollback(); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("dry run executed the command; stat err = %v", err)
 	}
-
-	// If the file HAD been created, it would be deleted.
-	// Since we are black-box testing the integration, we rely on the fact that
-	// Track() was called without error.
-	// Ideally, we'd check tx internals, but we can infer success by the absence of error.
+	if got := mustReadTestFile(t, existing); got != original {
+		t.Fatalf("dry run modified go.mod: got %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, "go.sum")); !os.IsNotExist(err) {
+		t.Fatalf("dry run created go.sum; stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, fileutil.InternalDir)); !os.IsNotExist(err) {
+		t.Fatalf("dry run created transaction state; stat err = %v", err)
+	}
 }
 
 // TestExecCommandTask_ContextCanceled verifies that a canceled task context is
