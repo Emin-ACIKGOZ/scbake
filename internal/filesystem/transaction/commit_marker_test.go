@@ -5,6 +5,7 @@ package transaction
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -185,6 +186,35 @@ func committedTransactionFixture(t *testing.T, root, suffix string) (dir, backup
 	return dir, backupName
 }
 
+// blockJournalRemoval replaces journal.jsonl with a non-empty directory so
+// os.Remove fails portably. The returned function removes the blocker.
+func blockJournalRemoval(t *testing.T, dir string) func() {
+	t.Helper()
+	journalPath := filepath.Join(dir, journalFileName)
+	if err := os.Remove(journalPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(journalPath, fileutil.DirPerms); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(journalPath, "keep"), []byte("keep"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
+		if err := os.RemoveAll(journalPath); err != nil {
+			t.Errorf("removing journal blocker: %v", err)
+		}
+	}
+	t.Cleanup(release)
+	return release
+}
+
 // TestRemoveCommittedTransactionSuccess verifies the helper removes a
 // committed transaction directory entirely.
 func TestRemoveCommittedTransactionSuccess(t *testing.T) {
@@ -202,23 +232,10 @@ func TestRemoveCommittedTransactionSuccess(t *testing.T) {
 // TestRemoveCommittedTransactionFailClosed checks the ordering invariant: when
 // the journal cannot be removed, the helper must leave the marker and backup
 // intact so the transaction still looks committed to a later retry.
-//
-//nolint:cyclop // The test checks every preserved artifact before retrying.
 func TestRemoveCommittedTransactionFailClosed(t *testing.T) {
 	root := t.TempDir()
 	dir, backupName := committedTransactionFixture(t, root, "remove-blocked")
-
-	// A non-empty directory at the journal path makes os.Remove fail portably.
-	journalPath := filepath.Join(dir, journalFileName)
-	if err := os.Remove(journalPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(journalPath, fileutil.DirPerms); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(journalPath, "keep"), []byte("keep"), fileutil.PrivateFilePerms); err != nil {
-		t.Fatal(err)
-	}
+	release := blockJournalRemoval(t, dir)
 
 	if err := removeCommittedTransaction(dir); err == nil {
 		t.Fatal("removeCommittedTransaction succeeded although the journal could not be removed")
@@ -232,20 +249,114 @@ func TestRemoveCommittedTransactionFailClosed(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, backupName)); err != nil {
 		t.Errorf("failed cleanup removed the backup: %v", err)
 	}
-	entries, err := os.ReadDir(journalPath)
+	entries, err := os.ReadDir(filepath.Join(dir, journalFileName))
 	if err != nil || len(entries) == 0 {
 		t.Errorf("failed cleanup altered the journal blocker: entries=%d err=%v", len(entries), err)
 	}
 
 	// Once the blocker is gone the helper must succeed.
-	if err := os.RemoveAll(journalPath); err != nil {
-		t.Fatal(err)
-	}
+	release()
 	if err := removeCommittedTransaction(dir); err != nil {
 		t.Fatalf("removeCommittedTransaction after removing the blocker: %v", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("retry left the transaction directory: %v", err)
+	}
+}
+
+// TestCleanCommittedTransactionFailClosed covers the committed-recovery call
+// site directly: when the journal cannot be removed, cleanup fails and leaves
+// the marker and backup intact; removing the blocker lets a retry finish.
+func TestCleanCommittedTransactionFailClosed(t *testing.T) {
+	root := t.TempDir()
+	dir, backupName := committedTransactionFixture(t, root, "clean-blocked")
+	release := blockJournalRemoval(t, dir)
+
+	if err := cleanCommittedTransaction(context.Background(), dir); err == nil {
+		t.Fatal("cleanCommittedTransaction succeeded although the journal could not be removed")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("failed cleanup removed the transaction directory: %v", err)
+	}
+	if !commitMarkerExists(dir) {
+		t.Error("failed cleanup removed the commit marker")
+	}
+	if _, err := os.Stat(filepath.Join(dir, backupName)); err != nil {
+		t.Errorf("failed cleanup removed the backup: %v", err)
+	}
+
+	release()
+	if err := cleanCommittedTransaction(context.Background(), dir); err != nil {
+		t.Fatalf("cleanCommittedTransaction after removing the blocker: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("retry left the transaction directory: %v", err)
+	}
+}
+
+// TestCommitCleanupFailurePreservesCommittedState guards the Commit call site:
+// a journal-removal failure must be reported as ErrCommitted, keep the marker
+// and backup, disable rollback, and leave the residue reclaimable by a later
+// sweep.
+//
+//nolint:cyclop // The test checks the commit error, durable state, rollback, and retry.
+func TestCommitCleanupFailurePreservesCommittedState(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "config.yml")
+	if err := os.WriteFile(existing, []byte("original"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Track(existing); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(existing, []byte("committed"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+	tempDir := tx.tempDir
+	backupName := journalBackupName(t, tempDir)
+	release := blockJournalRemoval(t, tempDir)
+
+	if err := tx.Commit(); err == nil {
+		t.Fatal("Commit succeeded although the journal could not be removed")
+	} else if !errors.Is(err, ErrCommitted) {
+		t.Errorf("Commit error = %v, want ErrCommitted", err)
+	}
+	if _, err := os.Stat(tempDir); err != nil {
+		t.Errorf("Commit removed the transaction directory: %v", err)
+	}
+	if !commitMarkerExists(tempDir) {
+		t.Error("Commit removed the commit marker")
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, backupName)); err != nil {
+		t.Errorf("Commit removed the backup: %v", err)
+	}
+	if !tx.committed {
+		t.Error("Commit did not mark the transaction committed")
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback after committed cleanup failure: %v", err)
+	}
+	content, err := os.ReadFile(existing) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "committed" {
+		t.Errorf("Rollback undid a committed run: content = %q", content)
+	}
+
+	// With the journal gone the directory is committed residue; once it is
+	// stale the startup sweep reclaims it.
+	release()
+	ageTransactionDir(t, tempDir)
+	sweepStaleTransactions(root)
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Errorf("sweep did not reclaim the committed residue: %v", err)
 	}
 }
 

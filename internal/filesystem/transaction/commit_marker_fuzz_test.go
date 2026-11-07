@@ -229,13 +229,9 @@ func FuzzTransactionCommitState(f *testing.F) {
 			return
 		}
 
-		// Committed transactions are already gone: dead owners are reclaimed by
-		// the sweep above, and live owners are skipped by New and Recover. The
-		// committed cleanup path is covered by the deterministic tests.
-		if committed {
-			return
-		}
-
+		// Valid, uncommitted, dead-owner transactions are the only remaining
+		// state here: committed dead owners were swept above, and live owners
+		// returned early.
 		recovered, err := Recover(root, false)
 		if err != nil {
 			t.Fatalf("Recover failed for an uncommitted transaction: %v", err)
