@@ -199,7 +199,7 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 func managedWriteTasks(plan []types.Task) []types.Task {
 	out := make([]types.Task, 0, len(plan))
 	for _, t := range plan {
-		if _, ok := t.(*tasks.CreateTemplateTask); ok {
+		if _, ok := t.(types.ManagedWriter); ok {
 			out = append(out, t)
 		}
 	}
@@ -383,6 +383,7 @@ func persistManifestState(
 			m.ManagedFiles[k] = v
 		}
 	}
+	mergeStringMap(&m.ManagedInputs, tc.Manifest.ManagedInputs)
 
 	// We track the manifest file itself before saving.
 	// This ensures that if the Save succeeds but a subsequent step crashes (unlikely),
@@ -396,6 +397,20 @@ func persistManifestState(
 		return fmt.Errorf("manifest save failed: %w", err)
 	}
 	return nil
+}
+
+// mergeStringMap copies every entry of src into *dst, allocating *dst when it is
+// nil. A nil src leaves *dst untouched.
+func mergeStringMap(dst *map[string]string, src map[string]string) {
+	if src == nil {
+		return
+	}
+	if *dst == nil {
+		*dst = make(map[string]string, len(src))
+	}
+	for k, v := range src {
+		(*dst)[k] = v
+	}
 }
 
 // updateManifest merges new projects and templates into the existing manifest

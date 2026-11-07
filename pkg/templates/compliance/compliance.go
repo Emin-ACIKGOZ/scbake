@@ -5,9 +5,12 @@
 package compliance
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
@@ -20,6 +23,10 @@ import (
 
 //go:embed templates/*.tpl schema.json
 var templates embed.FS
+
+const licenseInputStateKey = "compliance.LICENSE"
+
+var fetchSPDXLicense = spdx.License
 
 // Handler implements templates.Handler.
 type Handler struct{}
@@ -90,6 +97,9 @@ func (t *LicenseTask) Description() string { return "Generate LICENSE file" }
 // Priority implements types.Task.
 func (t *LicenseTask) Priority() int { return t.TaskPrio }
 
+// ManagedWrite implements types.ManagedWriter.
+func (t *LicenseTask) ManagedWrite() {}
+
 // Execute performs the license generation task.
 func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	if tc.Manifest.Metadata == nil {
@@ -103,20 +113,73 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 		return errors.New("explicit license and copyright_holder are required for the compliance template")
 	}
 
+	year := time.Now().Year()
+	inputHash := licenseInputHash(licenseID, holders, year)
+	if !tc.Force && tc.Manifest.ManagedInputs[licenseInputStateKey] == inputHash && licenseFileIsClean(tc) {
+		return nil
+	}
+
 	// 1. Fetch license text dynamically from SPDX.org
-	lic, err := spdx.License(licenseID)
+	lic, err := fetchSPDXLicense(licenseID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch license '%s': %w", licenseID, err)
 	}
 
 	text := lic.Text
-	year := strconv.Itoa(time.Now().Year())
-
 	// 2. Replace common SPDX placeholders.
-	text = fillLicensePlaceholders(text, year, holders)
+	text = fillLicensePlaceholders(text, strconv.Itoa(year), holders)
 
 	// 3. Write license file with state-aware reconciliation and transaction tracking
-	return tasks.WriteManagedFile(tc, "LICENSE", []byte(text), fileutil.FilePerms)
+	if err := tasks.WriteManagedFile(tc, "LICENSE", []byte(text), fileutil.FilePerms); err != nil {
+		return err
+	}
+	if tc.Manifest.ManagedInputs == nil {
+		tc.Manifest.ManagedInputs = make(map[string]string)
+	}
+	tc.Manifest.ManagedInputs[licenseInputStateKey] = inputHash
+	return nil
+}
+
+func licenseInputHash(licenseID, holders string, year int) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", licenseID, holders, year)))
+	return hex.EncodeToString(sum[:])
+}
+
+func licenseFileIsClean(tc types.TaskContext) bool {
+	if tc.Manifest == nil || tc.Manifest.ManagedFiles == nil {
+		return false
+	}
+	key, ok := licenseManagedKey(tc)
+	if !ok {
+		return false
+	}
+	recordedHash := tc.Manifest.ManagedFiles[key]
+	if recordedHash == "" {
+		return false
+	}
+	content, err := fileutil.SafeReadFile(tc.TargetPath, "LICENSE")
+	if err != nil {
+		return false
+	}
+	return tasks.HashContent(content) == recordedHash
+}
+
+// licenseManagedKey returns the ManagedFiles key for the LICENSE file. Inside a
+// transaction the key is relative to the transaction root; it reports false when
+// the target falls outside that root.
+func licenseManagedKey(tc types.TaskContext) (string, bool) {
+	if tc.Tx == nil || tc.Tx.Root() == "" {
+		return "LICENSE", true
+	}
+	absTarget, err := filepath.Abs(tc.TargetPath)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(tc.Tx.Root(), filepath.Join(absTarget, "LICENSE"))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 // fillLicensePlaceholders replaces the year and copyright-holder fields used by

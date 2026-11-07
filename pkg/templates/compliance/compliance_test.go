@@ -5,12 +5,18 @@ package compliance
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"scbake/internal/types"
 	"scbake/pkg/tasks"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/mitchellh/go-spdx"
 )
 
 func TestComplianceHandler_GetTasks(t *testing.T) {
@@ -233,6 +239,88 @@ func TestLicenseTask_ManagedFilesTracking(t *testing.T) {
 	}
 	if _, ok := m.ManagedFiles["LICENSE"]; !ok {
 		t.Error("ManagedFiles should track LICENSE after execution")
+	}
+}
+
+func TestLicenseTaskSkipsFetchForCleanUnchangedLicense(t *testing.T) {
+	root := t.TempDir()
+	metadata := map[string]string{"license": "MIT", "copyright_holder": "Acme"}
+	content := []byte(fillLicensePlaceholders("License for <copyright holder>, <year>\n", strconv.Itoa(time.Now().Year()), "Acme"))
+	if err := os.WriteFile(filepath.Join(root, "LICENSE"), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := &types.Manifest{
+		Metadata: metadata,
+		ManagedFiles: map[string]string{
+			"LICENSE": tasks.HashContent(content),
+		},
+		ManagedInputs: map[string]string{
+			licenseInputStateKey: licenseInputHash("MIT", "Acme", time.Now().Year()),
+		},
+	}
+	calls := 0
+	previousFetcher := fetchSPDXLicense
+	fetchSPDXLicense = func(string) (*spdx.LicenseInfo, error) {
+		calls++
+		return nil, errors.New("network must not be used for an unchanged clean license")
+	}
+	t.Cleanup(func() { fetchSPDXLicense = previousFetcher })
+
+	err := (&LicenseTask{}).Execute(types.TaskContext{
+		Ctx: context.Background(), TargetPath: root, Manifest: m, DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("unchanged license should be reusable offline: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("SPDX fetch called %d times for unchanged clean license, want 0", calls)
+	}
+}
+
+func TestLicenseTaskFetchesWhenResolvedInputsChange(t *testing.T) {
+	root := t.TempDir()
+	oldMetadata := map[string]string{"license": "MIT", "copyright_holder": "Acme"}
+	content := []byte(fillLicensePlaceholders("MIT for <copyright holder>, <year>\n", strconv.Itoa(time.Now().Year()), "Acme"))
+	if err := os.WriteFile(filepath.Join(root, "LICENSE"), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := &types.Manifest{
+		Metadata: map[string]string{"license": "Apache-2.0", "copyright_holder": "Acme"},
+		ManagedFiles: map[string]string{
+			"LICENSE": tasks.HashContent(content),
+		},
+		ManagedInputs: map[string]string{
+			licenseInputStateKey: licenseInputHash(oldMetadata["license"], oldMetadata["copyright_holder"], time.Now().Year()),
+		},
+	}
+	calls := 0
+	previousFetcher := fetchSPDXLicense
+	fetchSPDXLicense = func(id string) (*spdx.LicenseInfo, error) {
+		calls++
+		if id != "Apache-2.0" {
+			return nil, fmt.Errorf("unexpected SPDX id %q", id)
+		}
+		return &spdx.LicenseInfo{ID: id, Text: "Apache License for <copyright holder> <year>\n"}, nil
+	}
+	t.Cleanup(func() { fetchSPDXLicense = previousFetcher })
+
+	if err := (&LicenseTask{}).Execute(types.TaskContext{
+		Ctx: context.Background(), TargetPath: root, Manifest: m,
+	}); err != nil {
+		t.Fatalf("changed license input should regenerate LICENSE: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("SPDX fetch called %d times for changed input, want 1", calls)
+	}
+	updated, err := os.ReadFile(filepath.Join(root, "LICENSE")) //nolint:gosec // test temp path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(updated), "Apache License") {
+		t.Fatalf("LICENSE was not regenerated from changed input: %q", updated)
+	}
+	if m.ManagedInputs[licenseInputStateKey] != licenseInputHash("Apache-2.0", "Acme", time.Now().Year()) {
+		t.Fatal("managed input fingerprint was not updated")
 	}
 }
 

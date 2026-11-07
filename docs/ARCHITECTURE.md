@@ -359,8 +359,9 @@ flags. Two properties make it safe:
   `.scbake/base/<path>`. When both the template and the working file changed,
   `update` runs a conservative line-oriented three-way merge
   (`internal/merge`) against that base. Non-overlapping edits merge; overlaps
-  fall back to an artifact. Only `CreateTemplateTask` writes are replayed, so
-  environment commands never re-run.
+  fall back to an artifact. Managed writes implement `ManagedWriter`, so both
+`CreateTemplateTask` and `LicenseTask` are replayed; environment commands,
+append tasks, and XML insertion tasks never re-run.
 
 `managed_files` continues to hold the hash of the pristine render, so a merged
 file is still recognized as locally modified on the next `apply` (SCB-056).
@@ -373,7 +374,11 @@ classifies it `modified` (bytes differ), `missing` (absent), or clean. It opens
 no transaction, renders no template, and never touches the network, so it is
 safe as a CI gate; it exits non-zero when any finding remains. `--repair`
 delegates to `core.RunUpdate`, so detection and repair share one reconciliation
-implementation (`internal/drift`).
+implementation (`internal/drift`). Because repair replays `LicenseTask`, a
+compliance project's repair fetches the license text from spdx.org when the
+license inputs changed, no prior input fingerprint is recorded, or LICENSE is
+missing or locally modified. If inputs are unchanged and LICENSE is clean, the
+task skips the fetch; plain detection never needs the network.
 
 Detection is deliberately conservative: a locally edited file is drift even
 when `update`'s default `merge` strategy is a no-op that preserves the edit.

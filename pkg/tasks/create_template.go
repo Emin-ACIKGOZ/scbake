@@ -91,6 +91,9 @@ func (t *CreateTemplateTask) Priority() int {
 	return t.TaskPrio
 }
 
+// ManagedWrite implements types.ManagedWriter.
+func (t *CreateTemplateTask) ManagedWrite() {}
+
 // HashContent calculates the SHA-256 hash of the given bytes.
 func HashContent(content []byte) string {
 	hasher := sha256.New()
