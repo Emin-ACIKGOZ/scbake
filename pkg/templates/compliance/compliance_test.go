@@ -312,7 +312,7 @@ func TestLicenseTaskFetchesWhenResolvedInputsChange(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("SPDX fetch called %d times for changed input, want 1", calls)
 	}
-	updated, err := os.ReadFile(filepath.Join(root, "LICENSE"))
+	updated, err := os.ReadFile(filepath.Join(root, "LICENSE")) //nolint:gosec // test temp path
 	if err != nil {
 		t.Fatal(err)
 	}
