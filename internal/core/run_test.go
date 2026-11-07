@@ -240,6 +240,48 @@ func TestRunApplyMakefileWithoutProjectsFailsClearly(t *testing.T) {
 	}
 }
 
+func TestRunApplyMakefileUsesPerProjectTestsWhenTestCommandIsUnset(t *testing.T) {
+	rootDir := t.TempDir()
+	m := &types.Manifest{
+		Projects: []types.Project{
+			{Name: "backend", Path: "backend", Language: "go"},
+			{Name: "api", Path: "api", Language: "go"},
+		},
+		Templates: []types.Template{{Name: "makefile", Path: "."}},
+	}
+	if err := manifest.Save(m, rootDir); err != nil {
+		t.Fatalf("save manifest without test_command: %v", err)
+	}
+
+	if err := RunApply(RunContext{
+		TargetPath:      rootDir,
+		ManifestPathArg: ".",
+		WithFlag:        []string{"makefile"},
+	}, ui.NewPlainReporter(10, false)); err != nil {
+		t.Fatalf("RunApply failed: %v", err)
+	}
+
+	generated, err := os.ReadFile(filepath.Join(rootDir, "Makefile")) // #nosec G304 -- rootDir is t.TempDir and filename is fixed
+	if err != nil {
+		t.Fatalf("read generated Makefile: %v", err)
+	}
+	out := string(generated)
+	for _, want := range []string{
+		"(cd backend && $(MAKE_TEST_COMMAND_go))",
+		"(cd api && $(MAKE_TEST_COMMAND_go))",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("generated Makefile missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "No projects configured") || strings.Contains(out, "@exit 1") {
+		t.Fatalf("unset test_command should use per-project tests:\n%s", out)
+	}
+	if _, exists := m.Metadata["test_command"]; exists {
+		t.Fatalf("test setup unexpectedly has metadata.test_command: %#v", m.Metadata)
+	}
+}
+
 func TestRunUpdateLegacyMakefileWithoutProjectsFailsClearly(t *testing.T) {
 	rootDir := t.TempDir()
 	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
