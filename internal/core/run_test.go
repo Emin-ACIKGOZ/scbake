@@ -215,6 +215,64 @@ func TestExecuteAndFinalize_EmptyPlan(t *testing.T) {
 	}
 }
 
+func TestRunApplyMakefileWithoutProjectsFailsClearly(t *testing.T) {
+	rootDir := t.TempDir()
+	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
+	if err := os.WriteFile(manifestPath, nil, fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RunApply(RunContext{
+		WithFlag:        []string{"makefile"},
+		TargetPath:      rootDir,
+		ManifestPathArg: ".",
+	}, ui.NewPlainReporter(10, false))
+	if err != nil {
+		t.Fatalf("RunApply failed: %v", err)
+	}
+
+	generated, err := os.ReadFile(filepath.Join(rootDir, "Makefile")) //nolint:gosec // test temp path
+	if err != nil {
+		t.Fatalf("read generated Makefile: %v", err)
+	}
+	if !strings.Contains(string(generated), "No projects configured; set metadata.test_command to run root-level tests.") || !strings.Contains(string(generated), "@exit 1") {
+		t.Fatalf("fresh apply should generate a clearly failing test target:\n%s", generated)
+	}
+}
+
+func TestRunUpdateLegacyMakefileWithoutProjectsFailsClearly(t *testing.T) {
+	rootDir := t.TempDir()
+	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
+	legacyManifest := "[metadata]\ntest_command = \"go test ./...\"\n"
+	if err := os.WriteFile(manifestPath, []byte(legacyManifest), fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed the manifest's recorded template and managed file through a fresh
+	// apply, then exercise the manifest-driven update path used by legacy projects.
+	if err := RunApply(RunContext{
+		WithFlag:        []string{"makefile"},
+		TargetPath:      rootDir,
+		ManifestPathArg: ".",
+	}, ui.NewPlainReporter(10, false)); err != nil {
+		t.Fatalf("seed legacy project with RunApply: %v", err)
+	}
+	if err := RunUpdate(RunContext{
+		TargetPath:      rootDir,
+		ManifestPathArg: ".",
+	}, ui.NewPlainReporter(10, false)); err != nil {
+		t.Fatalf("RunUpdate failed: %v", err)
+	}
+
+	generated, err := os.ReadFile(filepath.Join(rootDir, "Makefile")) //nolint:gosec // test temp path
+	if err != nil {
+		t.Fatalf("read updated Makefile: %v", err)
+	}
+	if !strings.Contains(string(generated), "No projects configured; set metadata.test_command to run root-level tests.") || !strings.Contains(string(generated), "@exit 1") {
+		t.Fatalf("legacy update should generate a clearly failing test target:\n%s", generated)
+	}
+}
+
 func TestExecuteAndFinalize_Success(t *testing.T) {
 	rootDir := t.TempDir()
 

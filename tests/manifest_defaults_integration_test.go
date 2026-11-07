@@ -127,7 +127,8 @@ func assertExplicitCommandTarget(t *testing.T, target, command string) {
 
 // TestNewMakefileWithoutLanguageOmitsGoDefaults is a regression guard for #148:
 // creating a project with tooling but no language must not record Go build or
-// test defaults, and the generated Makefile must not assume a Go test.
+// test defaults, and the generated Makefile must fail clearly until tests are
+// configured for the root.
 func TestNewMakefileWithoutLanguageOmitsGoDefaults(t *testing.T) {
 	tmpDir := chdirToTempDir(t)
 
@@ -144,8 +145,9 @@ func TestNewMakefileWithoutLanguageOmitsGoDefaults(t *testing.T) {
 	if strings.Contains(makefile, "go test ./...") {
 		t.Errorf("no-language Makefile must not contain a Go test default:\n%s", makefile)
 	}
-	if !strings.Contains(manifestTestTarget(t, makefile), "No projects configured; nothing to test.") {
-		t.Errorf("no-language Makefile must explain that there is nothing to test:\n%s", makefile)
+	target := manifestTestTarget(t, makefile)
+	if !strings.Contains(target, "No projects configured; set metadata.test_command to run root-level tests.") || !strings.Contains(target, "@exit 1") {
+		t.Errorf("no-language Makefile must fail with guidance to configure root tests:\n%s", target)
 	}
 }
 
