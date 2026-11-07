@@ -48,80 +48,11 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 
 	if os.IsNotExist(checkErr) {
 		// --- Path 1: pom.xml does NOT exist (Initialization) ---
-
-		// Determine project name from target path.
-		projectName := filepath.Base(targetPath)
-
-		// URL-encode project name for query parameters.
-		encodedName := url.QueryEscape(projectName)
-
-		// Sanitize package name for Java conventions.
-		sanitizedPackage := strings.ReplaceAll(projectName, "-", "")
-		sanitizedPackage = strings.ReplaceAll(sanitizedPackage, " ", "")
-
-		// Construct Spring Initializr URL.
-		zipURL := fmt.Sprintf(
-			"https://start.spring.io/starter.zip?type=maven-project&language=java&groupId=com.example&artifactId=%s&name=%s&packageName=com.example.%s&packaging=jar&javaVersion=17&dependencies=web,lombok,actuator",
-			encodedName, encodedName, sanitizedPackage,
-		)
-
-		const zipFile = "spring-init.zip"
-
-		// Task 1: Download Spring Boot starter zip
-		p, err := langSeq.Next()
+		initPlan, err := initializationTasks(targetPath, langSeq)
 		if err != nil {
 			return nil, err
 		}
-		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd:         "curl",
-			Args:        []string{"-f", "-sS", "-o", zipFile, zipURL},
-			Desc:        fmt.Sprintf("Download Spring Boot starter for '%s'", projectName),
-			TaskPrio:    int(p), // Now 100
-			RunInTarget: true,
-		})
-
-		// Task 2: Extract the zip, preserving directory structure
-		p, err = langSeq.Next()
-		if err != nil {
-			return nil, err
-		}
-		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd: "unzip",
-			Args: []string{
-				"-q",
-				"-o",
-				zipFile,
-			},
-			Desc:        "Extract project files",
-			TaskPrio:    int(p), // Now 101
-			RunInTarget: true,
-		})
-
-		// Task 3: Remove the zip file after extraction.
-		p, err = langSeq.Next()
-		if err != nil {
-			return nil, err
-		}
-		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd:         "rm",
-			Args:        []string{zipFile},
-			Desc:        "Cleanup initialization artifacts",
-			TaskPrio:    int(p), // Now 102
-			RunInTarget: true,
-		})
-
-		// Task 4: Make Maven wrapper executable
-		p, err = langSeq.Next()
-		if err != nil {
-			return nil, err
-		}
-		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd:         "chmod",
-			Args:        []string{"+x", "mvnw"},
-			Desc:        "Make Maven wrapper executable",
-			TaskPrio:    int(p), // Now 103
-			RunInTarget: true,
-		})
+		plan = append(plan, initPlan...)
 	} else if checkErr != nil {
 		// Path 2 (pom.xml *does* exist, checkErr == nil) now falls through to return plan, nil.
 		// If no initialization tasks were run, plan contains only the CreateDirTask.
@@ -129,6 +60,92 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		// --- Path 3: Some other error ---
 		return nil, fmt.Errorf("could not check for pom.xml: %w", checkErr)
 	}
+
+	return plan, nil
+}
+
+// initializationTasks returns the tasks that download and unpack a new Spring Boot project into targetPath.
+func initializationTasks(targetPath string, langSeq *types.PrioritySequence) ([]types.Task, error) {
+	var plan []types.Task
+
+	// Determine project name from target path. A relative target such as "."
+	// has no name of its own, so resolve it first.
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve target path: %w", err)
+	}
+	projectName := filepath.Base(absTarget)
+
+	// URL-encode project name for query parameters.
+	encodedName := url.QueryEscape(projectName)
+
+	// Sanitize package name for Java conventions.
+	sanitizedPackage := strings.ReplaceAll(projectName, "-", "")
+	sanitizedPackage = strings.ReplaceAll(sanitizedPackage, " ", "")
+
+	// Construct Spring Initializr URL.
+	zipURL := fmt.Sprintf(
+		"https://start.spring.io/starter.zip?type=maven-project&language=java&groupId=com.example&artifactId=%s&name=%s&packageName=com.example.%s&packaging=jar&javaVersion=17&dependencies=web,lombok,actuator",
+		encodedName, encodedName, sanitizedPackage,
+	)
+
+	const zipFile = "spring-init.zip"
+
+	// Task 1: Download Spring Boot starter zip
+	p, err := langSeq.Next()
+	if err != nil {
+		return nil, err
+	}
+	plan = append(plan, &tasks.ExecCommandTask{
+		Cmd:         "curl",
+		Args:        []string{"-f", "-sS", "-o", zipFile, zipURL},
+		Desc:        fmt.Sprintf("Download Spring Boot starter for '%s'", projectName),
+		TaskPrio:    int(p), // Now 100
+		RunInTarget: true,
+	})
+
+	// Task 2: Extract the zip, preserving directory structure
+	p, err = langSeq.Next()
+	if err != nil {
+		return nil, err
+	}
+	plan = append(plan, &tasks.ExecCommandTask{
+		Cmd: "unzip",
+		Args: []string{
+			"-q",
+			"-o",
+			zipFile,
+		},
+		Desc:        "Extract project files",
+		TaskPrio:    int(p), // Now 101
+		RunInTarget: true,
+	})
+
+	// Task 3: Remove the zip file after extraction.
+	p, err = langSeq.Next()
+	if err != nil {
+		return nil, err
+	}
+	plan = append(plan, &tasks.ExecCommandTask{
+		Cmd:         "rm",
+		Args:        []string{zipFile},
+		Desc:        "Cleanup initialization artifacts",
+		TaskPrio:    int(p), // Now 102
+		RunInTarget: true,
+	})
+
+	// Task 4: Make Maven wrapper executable
+	p, err = langSeq.Next()
+	if err != nil {
+		return nil, err
+	}
+	plan = append(plan, &tasks.ExecCommandTask{
+		Cmd:         "chmod",
+		Args:        []string{"+x", "mvnw"},
+		Desc:        "Make Maven wrapper executable",
+		TaskPrio:    int(p), // Now 103
+		RunInTarget: true,
+	})
 
 	return plan, nil
 }
