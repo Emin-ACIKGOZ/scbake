@@ -318,28 +318,28 @@ func blockTempDirRemoval(t *testing.T, dir string) func() {
 	t.Helper()
 
 	if runtime.GOOS == osWindows {
-		var held *os.File
+		var backupPath string
 		err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() || held != nil {
+			if err != nil || d.IsDir() || backupPath != "" {
 				return err
 			}
-			f, openErr := os.Open(p) //nolint:gosec // p is yielded by WalkDir under the test temp directory
-			if openErr != nil {
-				return openErr
-			}
-			held = f
+			backupPath = p
 			return nil
 		})
-		if err != nil || held == nil {
+		if err != nil || backupPath == "" {
 			t.Fatalf("failed to hold a backup file open in %s: %v", dir, err)
+		}
+		held, openErr := os.Open(backupPath) // #nosec G304 -- path was discovered under the test temp directory
+		if openErr != nil {
+			t.Fatalf("failed to open backup file %s: %v", backupPath, openErr)
 		}
 		return func() { _ = held.Close() }
 	}
 
-	if err := os.Chmod(dir, 0o500); err != nil { //nolint:gosec // deliberately removes write permission for this test
+	if err := os.Chmod(dir, 0o500); err != nil { // #nosec G302 -- deliberately removes write permission for this test
 		t.Fatalf("failed to make %s read-only: %v", dir, err)
 	}
-	return func() { _ = os.Chmod(dir, 0o700) } //nolint:gosec // restore directory write access after the test
+	return func() { _ = os.Chmod(dir, 0o700) } // #nosec G302 -- restore directory write access after the test
 }
 
 // TestCommit_CleanupFailureAfterMarkerIsCommittedWithWarning is a regression
@@ -372,7 +372,7 @@ func TestCommit_CleanupFailureAfterMarkerIsCommittedWithWarning(t *testing.T) {
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback after committed Commit returned error: %v", err)
 	}
-	got, err := os.ReadFile(file) //nolint:gosec // file is created under t.TempDir with a fixed name
+	got, err := os.ReadFile(file) // #nosec G304 -- file is created under t.TempDir with a fixed name
 	if err != nil {
 		t.Fatal(err)
 	}
