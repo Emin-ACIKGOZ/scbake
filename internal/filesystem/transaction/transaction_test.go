@@ -323,7 +323,7 @@ func blockTempDirRemoval(t *testing.T, dir string) func() {
 			if err != nil || d.IsDir() || held != nil {
 				return err
 			}
-			f, openErr := os.Open(p)
+			f, openErr := os.Open(p) //nolint:gosec // p is yielded by WalkDir under the test temp directory
 			if openErr != nil {
 				return openErr
 			}
@@ -336,10 +336,10 @@ func blockTempDirRemoval(t *testing.T, dir string) func() {
 		return func() { _ = held.Close() }
 	}
 
-	if err := os.Chmod(dir, 0o500); err != nil {
+	if err := os.Chmod(dir, 0o500); err != nil { //nolint:gosec // deliberately removes write permission for this test
 		t.Fatalf("failed to make %s read-only: %v", dir, err)
 	}
-	return func() { _ = os.Chmod(dir, 0o700) }
+	return func() { _ = os.Chmod(dir, 0o700) } //nolint:gosec // restore directory write access after the test
 }
 
 // TestCommit_CleanupFailureAfterMarkerIsCommittedWithWarning is a regression
@@ -372,7 +372,7 @@ func TestCommit_CleanupFailureAfterMarkerIsCommittedWithWarning(t *testing.T) {
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback after committed Commit returned error: %v", err)
 	}
-	got, err := os.ReadFile(file)
+	got, err := os.ReadFile(file) //nolint:gosec // file is created under t.TempDir with a fixed name
 	if err != nil {
 		t.Fatal(err)
 	}
