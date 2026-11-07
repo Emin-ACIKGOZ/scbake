@@ -110,32 +110,8 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 		return nil
 	}
 
-	// Safety tracking for paths the command may create or modify. Track every
-	// prediction unconditionally: Track backs up existing files, records
-	// missing paths for deletion, and treats existing directories as no-ops.
-	// This must happen before the command runs so a crash or child failure
-	// cannot leave an untracked mutation behind.
-	if tc.Tx != nil {
-		cmdDir, err := commandWorkingDir(tc, t.RunInTarget)
-		if err != nil {
-			return err
-		}
-
-		for _, pred := range t.PredictedCreated {
-			fullPath := pred
-			if !filepath.IsAbs(fullPath) {
-				fullPath = filepath.Join(cmdDir, pred)
-			}
-			if err := tc.Tx.Track(fullPath); err != nil {
-				return fmt.Errorf("failed to track predicted path %s: %w", fullPath, err)
-			}
-		}
-
-		if t.ArchivePath != "" {
-			if err := trackArchiveEntries(tc, cmdDir, t.ArchivePath); err != nil {
-				return err
-			}
-		}
+	if err := t.trackSideEffects(tc); err != nil {
+		return err
 	}
 
 	// The command and arguments must be carefully controlled via the manifest to prevent injection.
@@ -162,6 +138,45 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 		return commandExecutionError(tc.Ctx, t.Cmd, t.Args, err, &stderr)
 	}
 
+	return nil
+}
+
+// trackSideEffects registers paths the command may create or modify before it
+// runs. Tracking every prediction unconditionally means Track backs up an
+// existing file, records a missing path for deletion, or no-ops an existing
+// directory. Archive entries are expanded separately so nested writes are also
+// covered.
+func (t *ExecCommandTask) trackSideEffects(tc types.TaskContext) error {
+	if tc.Tx == nil {
+		return nil
+	}
+
+	cmdDir, err := commandWorkingDir(tc, t.RunInTarget)
+	if err != nil {
+		return err
+	}
+	if err := trackPredictedPaths(tc, cmdDir, t.PredictedCreated); err != nil {
+		return err
+	}
+	if t.ArchivePath == "" {
+		return nil
+	}
+	return trackArchiveEntries(tc, cmdDir, t.ArchivePath)
+}
+
+// trackPredictedPaths resolves each prediction against the command's working
+// directory and registers it with the transaction. Absolute predictions are
+// validated by Track against the transaction root rather than joined again.
+func trackPredictedPaths(tc types.TaskContext, cmdDir string, paths []string) error {
+	for _, pred := range paths {
+		fullPath := pred
+		if !filepath.IsAbs(fullPath) {
+			fullPath = filepath.Join(cmdDir, pred)
+		}
+		if err := tc.Tx.Track(fullPath); err != nil {
+			return fmt.Errorf("failed to track predicted path %s: %w", fullPath, err)
+		}
+	}
 	return nil
 }
 

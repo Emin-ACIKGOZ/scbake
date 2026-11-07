@@ -17,8 +17,13 @@ import (
 //go:embed main.go.tpl gitignore.tpl schema.json
 var templates embed.FS
 
-// goModSubcommand is the `go mod` subcommand used for module management.
-const goModSubcommand = "mod"
+const (
+	// goModSubcommand is the `go mod` subcommand used for module management.
+	goModSubcommand = "mod"
+
+	goModFile = "go.mod"
+	goSumFile = "go.sum"
+)
 
 // Handler implements lang.Handler.
 type Handler struct{}
@@ -66,7 +71,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 	})
 
 	// Idempotency Check
-	goModPath := filepath.Join(targetPath, "go.mod")
+	goModPath := filepath.Join(targetPath, goModFile)
 	_, checkErr := os.Stat(goModPath)
 
 	if os.IsNotExist(checkErr) {
@@ -87,7 +92,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			Desc:             "Run go mod init " + moduleName,
 			TaskPrio:         int(p),
 			RunInTarget:      true,
-			PredictedCreated: []string{"go.mod"},
+			PredictedCreated: []string{goModFile},
 		})
 
 		// Task 4: Run 'go mod tidy'
@@ -101,7 +106,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			Desc:             "Run go mod tidy",
 			TaskPrio:         int(p),
 			RunInTarget:      true,
-			PredictedCreated: []string{"go.mod", "go.sum"},
+			PredictedCreated: []string{goModFile, goSumFile},
 		})
 	} else if checkErr == nil {
 		// --- Path 2: go.mod *does* exist (Maintenance) ---
@@ -116,7 +121,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			Desc:             "Run go mod tidy (project exists)",
 			TaskPrio:         int(p),
 			RunInTarget:      true,
-			PredictedCreated: []string{"go.mod", "go.sum"},
+			PredictedCreated: []string{goModFile, goSumFile},
 		})
 	} else {
 		// --- Path 3: Some other error ---

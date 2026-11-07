@@ -10,6 +10,12 @@ import (
 	"scbake/pkg/tasks"
 )
 
+const (
+	packageJSONFile = "package.json"
+	packageLockFile = "package-lock.json"
+	nodeModulesDir  = "node_modules"
+)
+
 //go:embed eslint.config.js.tpl
 var templates embed.FS
 
@@ -51,7 +57,7 @@ func (h *Handler) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 		},
 		Desc:             "Install Svelte ESLint dependencies",
 		TaskPrio:         int(p2),
-		PredictedCreated: []string{"package.json", "package-lock.json", "node_modules"},
+		PredictedCreated: []string{packageJSONFile, packageLockFile, nodeModulesDir},
 		RunInTarget:      true,
 	})
 
@@ -66,7 +72,7 @@ func (h *Handler) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 		},
 		Desc:             "Add standard lint scripts to package.json",
 		TaskPrio:         int(p3),
-		PredictedCreated: []string{"package.json"},
+		PredictedCreated: []string{packageJSONFile},
 		RunInTarget:      true,
 	})
 

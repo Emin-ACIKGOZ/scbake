@@ -11,8 +11,14 @@ import (
 	"scbake/pkg/tasks"
 )
 
-// npmCmd is the Node package manager executable invoked for setup tasks.
-const npmCmd = "npm"
+const (
+	// npmCmd is the Node package manager executable invoked for setup tasks.
+	npmCmd = "npm"
+
+	packageJSONFile = "package.json"
+	packageLockFile = "package-lock.json"
+	nodeModulesDir  = "node_modules"
+)
 
 // Handler implements lang.Handler.
 type Handler struct{}
@@ -44,7 +50,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		TaskPrio: int(p), // Now 50
 	})
 
-	packageJSONPath := filepath.Join(targetPath, "package.json")
+	packageJSONPath := filepath.Join(targetPath, packageJSONFile)
 	_, checkErr := os.Stat(packageJSONPath)
 
 	if os.IsNotExist(checkErr) {
@@ -70,7 +76,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			// absent. Declaring the files lets rollback restore same-named
 			// pre-existing content; the directories are removed when created.
 			PredictedCreated: []string{
-				".gitignore", "index.html", "jsconfig.json", "package.json",
+				".gitignore", "index.html", "jsconfig.json", packageJSONFile,
 				"README.md", "svelte.config.js", "vite.config.js",
 				"public", "src", ".vscode",
 			},
@@ -87,7 +93,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			Args:             []string{"install"},
 			Desc:             "Run npm install",
 			TaskPrio:         int(p), // Now 101
-			PredictedCreated: []string{"package.json", "package-lock.json", "node_modules"},
+			PredictedCreated: []string{packageJSONFile, packageLockFile, nodeModulesDir},
 			RunInTarget:      true,
 		})
 
@@ -110,7 +116,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			},
 			Desc:             "Ensure standard NPM scripts are set",
 			TaskPrio:         int(p), // Now 102
-			PredictedCreated: []string{"package.json"},
+			PredictedCreated: []string{packageJSONFile},
 			RunInTarget:      true,
 		})
 	} else if checkErr != nil {
