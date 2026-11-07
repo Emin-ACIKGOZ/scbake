@@ -24,7 +24,22 @@ const (
 	// process killed after the write can be recovered on the next run.
 	journalFileName = "journal.jsonl"
 
-	journalVersion = 1
+	// commitMarkerFileName is the commit point for journal version 2 and later.
+	// The marker appears only through an atomic rename of a fully written and
+	// fsynced commitMarkerTempName file, so it is either wholly present or
+	// absent.
+	commitMarkerFileName = "committed"
+	commitMarkerTempName = "committed.tmp"
+
+	// journalVersion is the format written for new journals. Version 2 moves
+	// the commit point from an appended journal record to an atomically renamed
+	// marker file.
+	journalVersion = 2
+
+	// legacyJournalVersion is the older format whose commit was a "committed"
+	// journal record. It is still parsed so existing journals remain
+	// recoverable.
+	legacyJournalVersion = 1
 
 	journalOpCreate    = "create"
 	journalOpBackup    = "backup"
@@ -52,6 +67,7 @@ type journalRecord struct {
 
 // transactionJournal is the parsed form of a journal file.
 type transactionJournal struct {
+	Version    int
 	PID        int
 	OwnerStart string
 	Started    time.Time
@@ -138,9 +154,9 @@ func (m *Manager) startJournal() error {
 	return nil
 }
 
-// journalFile is the subset of *os.File needed to append a durable journal
-// record. It is an interface only so tests can inject a Close failure that
-// happens after a successful Sync.
+// journalFile is the subset of *os.File needed to write and sync a durable
+// journal record or commit marker. It is an interface only so tests can inject
+// write, sync, and close failures.
 type journalFile interface {
 	io.Writer
 	Sync() error
@@ -211,6 +227,76 @@ func (m *Manager) appendJournalRecord(record journalRecord) (durable bool, err e
 		}
 	}
 	return true, nil
+}
+
+// openCommitMarker opens the temporary commit marker. It is a variable only so
+// tests can inject a create failure at the start of the commit point.
+var openCommitMarker = func(baseDir, targetPath string, flag int, perm os.FileMode) (journalFile, error) {
+	return fileutil.SafeOpenFile(baseDir, targetPath, flag, perm)
+}
+
+// renameCommitMarker is the atomic rename that publishes the commit marker. It
+// is a variable only so tests can inject a rename failure.
+var renameCommitMarker = os.Rename
+
+// writeCommitMarker makes the transaction's commit point durable without ever
+// exposing a partially written marker. It writes the marker to a temp file,
+// fsyncs it, closes it, and renames it into place. The rename is atomic: until
+// it succeeds no marker is visible, so a failed write, fsync, close, or rename
+// leaves the journal uncommitted and recovery preserves the backups.
+//
+// No directory fsync is added: losing the marker after a crash leaves an
+// uncommitted journal with its backups intact, which recovery handles safely.
+// The successful rename is the commit point.
+func writeCommitMarker(dir string) error {
+	tempPath := filepath.Join(dir, commitMarkerTempName)
+
+	// A temp marker can only be left behind by a crash between create and
+	// removal. Clear it so a retry is not blocked; O_EXCL still guards the new
+	// create.
+	_ = os.Remove(tempPath)
+
+	f, err := openCommitMarker(dir, commitMarkerTempName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileutil.PrivateFilePerms)
+	if err != nil {
+		return fmt.Errorf("failed to create commit marker: %w", err)
+	}
+
+	payload := []byte(fmt.Sprintf("{\"version\":%d}\n", journalVersion))
+	n, err := f.Write(payload)
+	if err == nil && n != len(payload) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		_ = f.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("failed to write commit marker: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("failed to sync commit marker: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("failed to close commit marker: %w", err)
+	}
+	if err := renameCommitMarker(tempPath, filepath.Join(dir, commitMarkerFileName)); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("failed to rename commit marker: %w", err)
+	}
+	return nil
+}
+
+// commitMarkerExists reports whether dir contains a published commit marker. A
+// regular file is required: the marker is created by rename, so a symlink or
+// other special file at that path is not a commit point. A leftover temp marker
+// is not a marker either.
+func commitMarkerExists(dir string) bool {
+	info, err := os.Lstat(filepath.Join(dir, commitMarkerFileName))
+	if err != nil {
+		return false
+	}
+	return info.Mode().IsRegular()
 }
 
 // writeJournalRecord writes one JSON object followed by a newline.
@@ -301,6 +387,13 @@ func readTransactionJournal(dir string) (*transactionJournal, error) {
 		return nil, fmt.Errorf("transaction journal %s is empty", dir)
 	}
 
+	// Version 2 moved the commit point out of the journal into an atomically
+	// renamed marker. Ignore any legacy committed record in such a journal and
+	// trust only the marker; version 1 keeps its record-based commit.
+	if journal.Version >= journalVersion {
+		journal.Committed = commitMarkerExists(dir)
+	}
+
 	return journal, nil
 }
 
@@ -340,12 +433,13 @@ func (j *transactionJournal) readHeader(line []byte, dir string) error {
 	if err := json.Unmarshal(line, &record); err != nil {
 		return fmt.Errorf("invalid transaction journal %s: %w", dir, err)
 	}
-	if record.Version != journalVersion {
+	if record.Version != journalVersion && record.Version != legacyJournalVersion {
 		return fmt.Errorf("unsupported transaction journal version %d in %s", record.Version, dir)
 	}
 	if record.PID <= 0 {
 		return fmt.Errorf("transaction journal %s has no owner pid", dir)
 	}
+	j.Version = record.Version
 	j.PID = record.PID
 	j.OwnerStart = record.OwnerStart
 	j.Started = record.Started
@@ -646,7 +740,7 @@ func readRecoveryJournal(ctx context.Context, dir string) (*transactionJournal, 
 	return journal, nil
 }
 
-// cleanCommittedTransaction removes a transaction whose committed record is
+// cleanCommittedTransaction removes a transaction whose commit marker is
 // already durable.
 func cleanCommittedTransaction(ctx context.Context, dir string) error {
 	if err := ctx.Err(); err != nil {

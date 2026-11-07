@@ -14,8 +14,8 @@ import (
 	"time"
 )
 
-// ErrCommitted marks a Commit error that happened after the committed journal
-// record became durable. The transaction's changes are permanent even though
+// ErrCommitted marks a Commit error that happened after the atomic commit
+// marker was published. The transaction's changes are permanent even though
 // cleanup reported an error; callers must not roll back or delete the result.
 var ErrCommitted = errors.New("transaction committed with cleanup error")
 
@@ -164,24 +164,18 @@ func (m *Manager) Commit() error {
 		return nil
 	}
 
-	// Record the commit durably before deleting the backups. If the process
-	// dies after this point, a later run knows the transaction succeeded and can
-	// reclaim the directory instead of treating it as interrupted.
+	// Publish the atomic commit marker before deleting the backups. If the
+	// marker write, fsync, close, or rename fails, no marker is visible, so the
+	// journal stays uncommitted: deferred rollback can still restore, and a
+	// later run preserves the backups instead of sweeping the only copy.
 	var commitErr error
 	if m.tempDir != "" {
-		durable, err := m.appendJournalRecord(journalRecord{Op: journalOpCommitted})
-		if durable {
-			// The committed record is on disk. A later Close error must not
-			// re-enable deferred rollback, but cleanup still has to run.
-			m.committed = true
-		}
-		if err != nil {
-			if !durable {
-				return err
-			}
-			commitErr = err
+		if err := writeCommitMarker(m.tempDir); err != nil {
+			return err
 		}
 	}
+	// The marker rename has succeeded (or there was nothing to commit), so the
+	// point of no return is behind us.
 	m.committed = true
 
 	// If tempDir was never created, there is nothing to clean up.
