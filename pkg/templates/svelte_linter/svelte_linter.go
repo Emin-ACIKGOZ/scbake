@@ -49,9 +49,10 @@ func (h *Handler) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 			"prettier",
 			"eslint-config-prettier",
 		},
-		Desc:        "Install Svelte ESLint dependencies",
-		TaskPrio:    int(p2),
-		RunInTarget: true,
+		Desc:             "Install Svelte ESLint dependencies",
+		TaskPrio:         int(p2),
+		PredictedCreated: []string{"package.json", "package-lock.json", "node_modules"},
+		RunInTarget:      true,
 	})
 
 	// Task 3: Add robust 'lint' and 'lint:fix' scripts to package.json
@@ -63,9 +64,10 @@ func (h *Handler) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 			"scripts.lint=npx eslint .",
 			"scripts.lint:fix=npx eslint . --fix",
 		},
-		Desc:        "Add standard lint scripts to package.json",
-		TaskPrio:    int(p3),
-		RunInTarget: true,
+		Desc:             "Add standard lint scripts to package.json",
+		TaskPrio:         int(p3),
+		PredictedCreated: []string{"package.json"},
+		RunInTarget:      true,
 	})
 
 	return plan, nil

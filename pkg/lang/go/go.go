@@ -82,11 +82,12 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			return nil, err
 		}
 		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd:         "go",
-			Args:        []string{goModSubcommand, "init", moduleName}, // Use sanitized name
-			Desc:        "Run go mod init " + moduleName,
-			TaskPrio:    int(p),
-			RunInTarget: true,
+			Cmd:              "go",
+			Args:             []string{goModSubcommand, "init", moduleName}, // Use sanitized name
+			Desc:             "Run go mod init " + moduleName,
+			TaskPrio:         int(p),
+			RunInTarget:      true,
+			PredictedCreated: []string{"go.mod"},
 		})
 
 		// Task 4: Run 'go mod tidy'
@@ -95,11 +96,12 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			return nil, err
 		}
 		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd:         "go",
-			Args:        []string{goModSubcommand, "tidy"},
-			Desc:        "Run go mod tidy",
-			TaskPrio:    int(p),
-			RunInTarget: true,
+			Cmd:              "go",
+			Args:             []string{goModSubcommand, "tidy"},
+			Desc:             "Run go mod tidy",
+			TaskPrio:         int(p),
+			RunInTarget:      true,
+			PredictedCreated: []string{"go.mod", "go.sum"},
 		})
 	} else if checkErr == nil {
 		// --- Path 2: go.mod *does* exist (Maintenance) ---
@@ -109,11 +111,12 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			return nil, err
 		}
 		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd:         "go",
-			Args:        []string{goModSubcommand, "tidy"},
-			Desc:        "Run go mod tidy (project exists)",
-			TaskPrio:    int(p),
-			RunInTarget: true,
+			Cmd:              "go",
+			Args:             []string{goModSubcommand, "tidy"},
+			Desc:             "Run go mod tidy (project exists)",
+			TaskPrio:         int(p),
+			RunInTarget:      true,
+			PredictedCreated: []string{"go.mod", "go.sum"},
 		})
 	} else {
 		// --- Path 3: Some other error ---

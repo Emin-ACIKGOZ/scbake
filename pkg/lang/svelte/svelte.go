@@ -64,9 +64,17 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 				"--template",
 				"svelte",
 			},
-			Desc:        "Run npm create vite@latest .",
-			TaskPrio:    int(p), // Now 100
-			RunInTarget: true,   // Runs inside targetPath
+			Desc:     "Run npm create vite@latest .",
+			TaskPrio: int(p), // Now 100
+			// create-vite writes these top-level entries when package.json is
+			// absent. Declaring the files lets rollback restore same-named
+			// pre-existing content; the directories are removed when created.
+			PredictedCreated: []string{
+				".gitignore", "index.html", "jsconfig.json", "package.json",
+				"README.md", "svelte.config.js", "vite.config.js",
+				"public", "src", ".vscode",
+			},
+			RunInTarget: true, // Runs inside targetPath
 		})
 
 		// Task 2: Run 'npm install'
@@ -75,11 +83,12 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			return nil, err
 		}
 		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd:         npmCmd,
-			Args:        []string{"install"},
-			Desc:        "Run npm install",
-			TaskPrio:    int(p), // Now 101
-			RunInTarget: true,
+			Cmd:              npmCmd,
+			Args:             []string{"install"},
+			Desc:             "Run npm install",
+			TaskPrio:         int(p), // Now 101
+			PredictedCreated: []string{"package.json", "package-lock.json", "node_modules"},
+			RunInTarget:      true,
 		})
 
 		// Task 3: Explicitly set standard NPM scripts.
@@ -99,9 +108,10 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 				"scripts.preview=vite preview",
 				"scripts.check=svelte-check --tsconfig ./tsconfig.json",
 			},
-			Desc:        "Ensure standard NPM scripts are set",
-			TaskPrio:    int(p), // Now 102
-			RunInTarget: true,
+			Desc:             "Ensure standard NPM scripts are set",
+			TaskPrio:         int(p), // Now 102
+			PredictedCreated: []string{"package.json"},
+			RunInTarget:      true,
 		})
 	} else if checkErr != nil {
 		return nil, fmt.Errorf("failed to check for existing Svelte project: %w", checkErr)

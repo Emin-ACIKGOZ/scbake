@@ -75,11 +75,22 @@ type ExecCommandTask struct {
 	// If true, run in TaskContext.TargetPath, else run in "."
 	RunInTarget bool
 
-	// PredictedCreated lists files or directories this command is expected to create.
-	// If a transaction is active, these paths are tracked *before* execution.
-	// This allows the rollback system to clean up artifacts (like node_modules)
-	// even if the command is opaque.
+	// PredictedCreated lists files or directories this command may create or
+	// modify. Despite the historical name, it is not limited to missing paths:
+	// when a transaction is active, every listed path is tracked before the
+	// command runs. Tracking records a missing path for deletion, backs up an
+	// existing regular file (content and mode), and leaves existing directories
+	// unchanged. Relative paths are resolved against the command's working
+	// directory. This lets rollback undo opaque command side effects such as
+	// `go mod tidy` rewriting go.mod or `npm install` changing package.json.
 	PredictedCreated []string
+
+	// ArchivePath is an optional zip archive whose entries are tracked before
+	// execution. It is intended for extraction commands such as `unzip`: each
+	// safe entry destination and its missing ancestors are registered with the
+	// transaction so nested files overwritten or created by the command can be
+	// restored or removed after a later failure.
+	ArchivePath string
 }
 
 // Description implements types.Task.
@@ -99,19 +110,30 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 		return nil
 	}
 
-	// Safety Tracking for Predicted Outputs
+	// Safety tracking for paths the command may create or modify. Track every
+	// prediction unconditionally: Track backs up existing files, records
+	// missing paths for deletion, and treats existing directories as no-ops.
+	// This must happen before the command runs so a crash or child failure
+	// cannot leave an untracked mutation behind.
 	if tc.Tx != nil {
-		for _, pred := range t.PredictedCreated {
-			// Resolve predicted path relative to TargetPath
-			// (Commands usually run relative to where they are invoked)
-			fullPath := filepath.Join(tc.TargetPath, pred)
+		cmdDir, err := commandWorkingDir(tc, t.RunInTarget)
+		if err != nil {
+			return err
+		}
 
-			// Only track if it does NOT exist.
-			// We want to clean up new artifacts, but avoiding backing up massive existing folders (like node_modules).
-			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-				if err := tc.Tx.Track(fullPath); err != nil {
-					return fmt.Errorf("failed to track predicted output %s: %w", fullPath, err)
-				}
+		for _, pred := range t.PredictedCreated {
+			fullPath := pred
+			if !filepath.IsAbs(fullPath) {
+				fullPath = filepath.Join(cmdDir, pred)
+			}
+			if err := tc.Tx.Track(fullPath); err != nil {
+				return fmt.Errorf("failed to track predicted path %s: %w", fullPath, err)
+			}
+		}
+
+		if t.ArchivePath != "" {
+			if err := trackArchiveEntries(tc, cmdDir, t.ArchivePath); err != nil {
+				return err
 			}
 		}
 	}
@@ -141,6 +163,25 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 	}
 
 	return nil
+}
+
+// commandWorkingDir returns the absolute directory the command will run in, so
+// relative predictions and archive paths are interpreted the same way the
+// child process interprets them.
+func commandWorkingDir(tc types.TaskContext, runInTarget bool) (string, error) {
+	if runInTarget {
+		abs, err := filepath.Abs(tc.TargetPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve target directory %s: %w", tc.TargetPath, err)
+		}
+		return abs, nil
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve process working directory: %w", err)
+	}
+	return cwd, nil
 }
 
 // commandExecutionError turns a child failure into a user-facing error. It also
