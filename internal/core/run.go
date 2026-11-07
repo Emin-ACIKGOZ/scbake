@@ -383,6 +383,14 @@ func persistManifestState(
 			m.ManagedFiles[k] = v
 		}
 	}
+	if tc.Manifest.ManagedInputs != nil {
+		if m.ManagedInputs == nil {
+			m.ManagedInputs = make(map[string]string)
+		}
+		for k, v := range tc.Manifest.ManagedInputs {
+			m.ManagedInputs[k] = v
+		}
+	}
 
 	// We track the manifest file itself before saving.
 	// This ensures that if the Save succeeds but a subsequent step crashes (unlikely),
