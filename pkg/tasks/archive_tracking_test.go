@@ -256,12 +256,10 @@ func TestTrackArchiveEntries_RestoresMvnwMode(t *testing.T) {
 	assertTestFileMode(t, mvnw, 0o644)
 }
 
-// TestSafeArchiveEntryName_RejectsDrivePrefixAfterCleaning pins a defect found
-// by FuzzSafeArchiveEntryName: the drive-prefix check runs before path.Clean,
-// so "./A:" is accepted and normalized to the drive-relative path "A:". On
-// Windows that result is not a local relative path, which violates the
-// validator's stated cross-platform contract. This test intentionally fails
-// until the validator re-checks the cleaned name; it must not be weakened.
+// TestSafeArchiveEntryName_RejectsDrivePrefixAfterCleaning is the regression
+// test for a drive-prefix bypass: the drive check runs on the raw name, while
+// path.Clean can turn "./A:" into the drive-relative path "A:". The validator
+// must reject the normalized form on every platform.
 func TestSafeArchiveEntryName_RejectsDrivePrefixAfterCleaning(t *testing.T) {
 	for _, name := range []string{"./A:", "./C:/escape.txt", ".//C:/escape.txt"} {
 		t.Run(name, func(t *testing.T) {

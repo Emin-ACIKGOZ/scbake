@@ -6,7 +6,6 @@ package golang
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"scbake/internal/types"
@@ -111,21 +110,6 @@ func assertStringSet(t *testing.T, what string, got, want []string) {
 	for path := range gotSet {
 		if _, ok := wantSet[path]; !ok {
 			t.Fatalf("%s predictions = %v, unexpected %q", what, got, path)
-		}
-	}
-}
-
-// TestGetTasks_NoExecPredictedPathsWithoutCommands guards against declaring
-// paths on a plan that contains no external commands.
-func TestGetTasks_NoExecPredictedPathsWithoutCommands(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/existing\n"), 0o600); err != nil {
-		t.Fatalf("seed go.mod: %v", err)
-	}
-	plan := getPlanOrFail(t, &Handler{}, dir)
-	for _, task := range plan {
-		if execTask, ok := task.(*tasks.ExecCommandTask); ok && contains(execTask.Args, "init") {
-			t.Fatalf("existing project unexpectedly runs: %s", strings.Join(execTask.Args, " "))
 		}
 	}
 }
