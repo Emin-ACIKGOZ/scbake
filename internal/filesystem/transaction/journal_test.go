@@ -436,13 +436,18 @@ func (f *closeFailFile) Close() error {
 	return errors.New("injected journal close failure")
 }
 
-// TestCommitRemainsCommittedAfterJournalCloseError verifies that a committed
-// record which was written and fsynced is treated as durable even when the
-// subsequent Close fails. Commit must return the error, but deferred rollback
-// must not undo the run or its backups.
+// TestCommitRemainsCommittedAfterJournalCloseError preserves the intent of the
+// pre-marker regression test: once the commit point is durable, a later
+// cleanup error must not re-enable deferred rollback. Version 2 no longer
+// appends a committed journal record, so the post-commit failure is now a
+// backup-directory cleanup failure rather than a journal Close error.
 //
-//nolint:cyclop // Sets up a backup, injects a close failure, and checks both durability and rollback.
+//nolint:cyclop // Sets up a backup, injects a cleanup failure, and checks durability, rollback, and sweeping.
 func TestCommitRemainsCommittedAfterJournalCloseError(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("permission-based cleanup failure is not portable to Windows")
+	}
+
 	root := t.TempDir()
 	existing := filepath.Join(root, "config.yml")
 	if err := os.WriteFile(existing, []byte("original"), fileutil.FilePerms); err != nil {
@@ -460,31 +465,27 @@ func TestCommitRemainsCommittedAfterJournalCloseError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	originalOpener := openJournalForAppend
-	t.Cleanup(func() { openJournalForAppend = originalOpener })
-	openJournalForAppend = func(baseDir, targetPath string, flag int, perm os.FileMode) (journalFile, error) {
-		f, err := originalOpener(baseDir, targetPath, flag, perm)
-		if err != nil {
-			return nil, err
-		}
-		return &closeFailFile{journalFile: f}, nil
-	}
-
 	tempDir := tx.tempDir
+	releaseCleanup := blockTransactionCleanup(t, tempDir)
+
+	// Record the state at the instant the atomic rename publishes the marker,
+	// before cleanup starts deleting the transaction directory.
+	markerPublished := observeCommitPoint(t, tempDir)
+
 	if err := tx.Commit(); err == nil {
-		t.Fatal("Commit did not report the injected journal close error")
+		t.Fatal("Commit did not report the injected cleanup failure")
 	} else if !errors.Is(err, ErrCommitted) {
 		t.Errorf("Commit error = %v, want ErrCommitted", err)
 	}
-	if !tx.committed {
-		t.Error("Commit did not treat the fsynced committed record as durable")
+	if !markerPublished() {
+		t.Fatal("Commit never published the commit marker")
 	}
-	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
-		t.Errorf("Commit left transaction state at %s after a durable close error: %v", tempDir, err)
+	if !tx.committed {
+		t.Error("Commit did not treat the published commit marker as durable")
 	}
 
 	if err := tx.Rollback(); err != nil {
-		t.Fatalf("Rollback after committed close error failed: %v", err)
+		t.Fatalf("Rollback after committed cleanup error failed: %v", err)
 	}
 	content, err := os.ReadFile(existing) //nolint:gosec // test-controlled path
 	if err != nil {
@@ -492,6 +493,20 @@ func TestCommitRemainsCommittedAfterJournalCloseError(t *testing.T) {
 	}
 	if string(content) != "committed" {
 		t.Errorf("Rollback undid a durably committed run: content = %q", content)
+	}
+
+	// The helper removes journal.jsonl first, then RemoveAll deletes the marker
+	// and backup up to the blocker. Only the blocker survives, so the directory
+	// is journal-less committed residue. Once the blocker is released and the
+	// residue is stale, the startup sweep reclaims it without any rollback
+	// opportunity.
+	releaseCleanup()
+	ageTransactionDir(t, tempDir)
+	if _, err := New(root); err != nil {
+		t.Fatalf("New() after a committed cleanup failure: %v", err)
+	}
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Errorf("startup sweep did not reclaim committed transaction %s: %v", tempDir, err)
 	}
 }
 
@@ -560,15 +575,27 @@ func TestTrackBackupCloseErrorKeepsRecoverableBackup(t *testing.T) {
 	}
 }
 
-// writeTestJournal writes a syntactically valid journal with the supplied
-// records and owner pid.
+// writeTestJournal writes a syntactically valid version 2 journal with the
+// supplied records and owner pid.
 func writeTestJournal(t *testing.T, dir string, pid int, records ...journalRecord) {
+	t.Helper()
+	writeTestJournalVersion(t, dir, journalVersion, pid, "", records...)
+}
+
+// writeTestJournalVersion writes a journal in the requested format version so
+// tests can exercise legacy (version 1) and marker-based (version 2) parsing.
+func writeTestJournalVersion(t *testing.T, dir string, version, pid int, ownerStart string, records ...journalRecord) {
 	t.Helper()
 	if err := os.MkdirAll(dir, fileutil.DirPerms); err != nil {
 		t.Fatal(err)
 	}
 
-	header := journalRecord{Version: journalVersion, PID: pid, Started: time.Now().UTC()}
+	header := journalRecord{
+		Version:    version,
+		PID:        pid,
+		OwnerStart: ownerStart,
+		Started:    time.Now().UTC(),
+	}
 	var lines []string
 	for _, record := range append([]journalRecord{header}, records...) {
 		data, err := json.Marshal(record)
