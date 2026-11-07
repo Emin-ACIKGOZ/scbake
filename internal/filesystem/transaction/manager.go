@@ -181,9 +181,11 @@ func (m *Manager) Commit() error {
 	// If tempDir was never created, there is nothing to clean up.
 	if m.tempDir != "" {
 		// Remove the temp directory and all backed-up files. Do this even when
-		// closing the committed journal failed: the record is durable, so the
-		// only remaining work is best-effort cleanup.
-		if err := os.RemoveAll(m.tempDir); err != nil {
+		// closing the committed journal failed: the marker is durable, so the
+		// only remaining work is best-effort cleanup. The journal is removed
+		// before the marker so a crash here cannot make the commit look
+		// uncommitted.
+		if err := removeCommittedTransaction(m.tempDir); err != nil {
 			commitErr = errors.Join(commitErr, fmt.Errorf("failed to cleanup transaction temp dir: %w", err))
 		} else {
 			// Prune parent scaffolding if empty (.scbake/tmp and .scbake)

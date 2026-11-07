@@ -299,6 +299,21 @@ func commitMarkerExists(dir string) bool {
 	return info.Mode().IsRegular()
 }
 
+// removeCommittedTransaction removes a committed transaction directory. It
+// deletes journal.jsonl before the marker (which os.RemoveAll removes along
+// with the rest of the directory): a crash during cleanup must never leave the
+// journal without its marker, or a committed transaction would look
+// uncommitted and recovery could roll it back. Once the journal is gone the
+// directory is no longer recoverable state, so removing the rest is safe. If
+// the journal cannot be removed, the error is returned and nothing else is
+// touched, leaving the committed state intact for a later retry.
+func removeCommittedTransaction(dir string) error {
+	if err := os.Remove(filepath.Join(dir, journalFileName)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
 // writeJournalRecord writes one JSON object followed by a newline.
 func writeJournalRecord(f io.Writer, record journalRecord) error {
 	data, err := json.Marshal(record)
@@ -345,7 +360,7 @@ func sweepTransactionEntry(tmpDir string, entry os.DirEntry, cutoff time.Time) {
 	switch {
 	case err == nil:
 		if journal.Committed && !processAlive(journal.PID, journal.OwnerStart) {
-			_ = os.RemoveAll(dir)
+			_ = removeCommittedTransaction(dir)
 		}
 		return
 	case !os.IsNotExist(err):
@@ -746,7 +761,7 @@ func cleanCommittedTransaction(ctx context.Context, dir string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	if err := removeCommittedTransaction(dir); err != nil {
 		return fmt.Errorf("failed to clean committed transaction %s: %w", dir, err)
 	}
 	return ctx.Err()
