@@ -5,6 +5,9 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +18,7 @@ import (
 	"scbake/pkg/templates/compliance"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestResolveUpdateSelection verifies I6: the manifest reproduces exactly the
@@ -214,6 +218,9 @@ func TestRunUpdateAppliesChangedLicense(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manifest.LoadWithOptions: %v", err)
 	}
+	if m.ManagedInputs["compliance.LICENSE"] == "" {
+		t.Fatal("RunUpdate did not persist the inputs used to generate LICENSE")
+	}
 	m.Metadata["license"] = "Apache-2.0"
 	if err := manifest.Save(m, root); err != nil {
 		t.Fatalf("manifest.Save: %v", err)
@@ -228,6 +235,58 @@ func TestRunUpdateAppliesChangedLicense(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "Apache License") {
 		t.Fatalf("LICENSE was not updated to Apache-2.0; starts with %q", firstLine(string(got)))
+	}
+}
+
+func TestRunUpdateSkipsSPDXFetchForCleanUnchangedLicenseOffline(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dry-run=%t", dryRun), func(t *testing.T) {
+			root := t.TempDir()
+			licenseText := []byte("previously generated, clean LICENSE\n")
+			year := time.Now().Year()
+			inputHash := sha256.Sum256([]byte(fmt.Sprintf("MIT\x00Acme\x00%d", year)))
+			m := &types.Manifest{
+				Templates: []types.Template{{Name: "compliance", Path: "."}},
+				Metadata:  map[string]string{"license": "MIT", "copyright_holder": "Acme"},
+				ManagedFiles: map[string]string{
+					"LICENSE": tasks.HashContent(licenseText),
+				},
+				ManagedInputs: map[string]string{
+					"compliance.LICENSE": hex.EncodeToString(inputHash[:]),
+				},
+			}
+			if err := manifest.Save(m, root); err != nil {
+				t.Fatalf("manifest.Save: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "LICENSE"), licenseText, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			// If LicenseTask attempts its network lookup, the local-only proxy makes
+			// the test fail deterministically instead of depending on external access.
+			t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+			t.Setenv("https_proxy", "http://127.0.0.1:1")
+			before, err := os.ReadFile(filepath.Join(root, "LICENSE")) //nolint:gosec // test temp directory
+			if err != nil {
+				t.Fatal(err)
+			}
+			rc := RunContext{
+				TargetPath:       root,
+				ManifestPathArg:  ".",
+				ConflictStrategy: types.ConflictMerge,
+				DryRun:           dryRun,
+			}
+			if err := RunUpdate(rc, ui.NewPlainReporter(1, dryRun)); err != nil {
+				t.Fatalf("RunUpdate should reuse clean LICENSE offline: %v", err)
+			}
+			after, err := os.ReadFile(filepath.Join(root, "LICENSE")) //nolint:gosec // test temp directory
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatalf("unchanged license was modified: got %q, want %q", after, before)
+			}
+		})
 	}
 }
 
