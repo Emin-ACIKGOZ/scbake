@@ -169,6 +169,34 @@ func TestRootLock_ReleaseRemovesState(t *testing.T) {
 	assertNotExist(t, filepath.Join(root, fileutil.InternalDir))
 }
 
+// TestAcquireRootLock_RecreatesPrunedStateDir is a regression guard for a
+// concurrent release pruning .scbake after another process resolved the lock
+// paths. Resolution must not require .scbake to exist; acquisition recreates it.
+func TestAcquireRootLock_RecreatesPrunedStateDir(t *testing.T) {
+	root := t.TempDir()
+
+	paths, err := resolveRootLockPaths(root, false)
+	if err != nil {
+		t.Fatalf("resolveRootLockPaths() failed for a project without .scbake: %v", err)
+	}
+	if err := os.RemoveAll(paths.stateDir); err != nil {
+		t.Fatalf("remove state dir: %v", err)
+	}
+
+	lock, retry, err := tryAcquireRootLock(paths)
+	if err != nil {
+		t.Fatalf("tryAcquireRootLock() failed after .scbake was pruned: %v", err)
+	}
+	if retry || lock == nil {
+		t.Fatalf("tryAcquireRootLock() = (%v, %v), want a held lock", lock, retry)
+	}
+	defer func() { _ = lock.Release() }()
+
+	if _, err := os.Stat(paths.lockPath); err != nil {
+		t.Fatalf("lock file missing after recreating state dir: %v", err)
+	}
+}
+
 // TestRootLock_ReleaseKeepsNonEmptyState verifies release never deletes state
 // that does not belong to the lock (the journal shares .scbake).
 func TestRootLock_ReleaseKeepsNonEmptyState(t *testing.T) {
