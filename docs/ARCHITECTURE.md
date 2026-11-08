@@ -411,14 +411,20 @@ hashing, so CRLF and LF hash identically and EOL-only edits are not drift. This
 also means NUL-free binary content containing CRLF is treated as text. NUL-bearing
 content is hashed byte-exact. The base tree itself keeps the render byte-exact;
 normalization applies only to hashing and to merge inputs. A legacy
-CRLF-recorded file can show one-time drift, but a migrated base is accepted by
-either its normalized hash or its raw legacy hash. A merged file is still
-recognized as locally modified on the next `apply` (SCB-056).
+CRLF-recorded file can show one-time drift. Base validation accepts a base whose
+normalized or raw hash matches the ledger, but a legacy CRLF ledger hash does not
+survive Git normalizing the migrated base to LF. Refresh the ledger with a clean
+`scbake update` (or otherwise re-record the normalized hash) before committing
+the migrated base, or keep the base byte-exact with `-text`. A merged file is
+still recognized as locally modified on the next `apply` (SCB-056).
 
 The move from `.scbake/base/` to `.scbake-base/` is a breaking change with no
 read fallback. Migration is manual: copy the old base, rename the two
 Git-special files, ensure the ignore block above, stage `.gitignore` and
-`.scbake-base`, and remove the old tracked or ignored directory. A plain
+`.scbake-base`, and remove the old tracked or ignored directory. If the legacy
+ledger holds raw CRLF hashes and Git normalized the migrated base to LF, run a
+clean `scbake update` to refresh the ledger before committing, or keep the base
+byte-exact with `-text`. A plain
 `git mv .scbake/base .scbake-base` is insufficient because the shadow names
 remain active. A missing or invalid base falls back to an artifact rather than a
 silent merge. Committing rendered bytes can expose ignored outputs or secrets

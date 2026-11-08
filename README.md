@@ -258,8 +258,11 @@ bytes immediately before LF is folded to one LF before hashing, so CRLF and LF
 hash the same. This also means NUL-free binary content containing CRLF is
 treated as text for hashing, and EOL-only edits are not drift. NUL-bearing
 content is hashed byte-exact. A legacy file recorded while rendered as CRLF can
-report one-time drift after upgrading, although a migrated base is accepted by
-either its normalized or its raw legacy hash.
+report one-time drift after upgrading. Base validation accepts a base whose
+normalized or raw hash matches the ledger, but a legacy CRLF ledger hash does not
+survive Git normalizing the migrated base to LF. Refresh the ledger with a clean
+`scbake update` (or otherwise re-record the normalized hash) before committing
+the migrated base, or keep the base byte-exact with `-text`.
 
 **Breaking change.** This release no longer reads the old `.scbake/base/` path.
 Migrate once by copying the base, renaming the two Git-special files, and
@@ -278,6 +281,10 @@ git add .gitignore .scbake-base
 git commit -m 'chore: migrate scbake merge base to .scbake-base'
 rm -rf .scbake/base
 ```
+
+If the legacy ledger holds raw CRLF hashes and Git normalizes the migrated base
+to LF, those hashes no longer match: run a clean `scbake update` to refresh the
+ledger before committing, or keep the base byte-exact with `-text`.
 
 `git mv .scbake/base .scbake-base` alone is insufficient: the copied
 `.gitignore` and `.gitattributes` would keep names Git applies to the base tree.
