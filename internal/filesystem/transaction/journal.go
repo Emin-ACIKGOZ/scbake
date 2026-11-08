@@ -844,48 +844,65 @@ func managerFromJournal(rootPath, dir string, journal *transactionJournal) (*Man
 	}
 
 	for _, record := range journal.Entries {
-		path, err := fileutil.SafePath(rootPath, filepath.FromSlash(record.Path))
+		path, err := journalEntryPath(rootPath, dir, record)
 		if err != nil {
-			return nil, fmt.Errorf("invalid path in transaction journal %s: %w", dir, err)
+			return nil, err
 		}
-		if err := requireStrictDescendant(rootPath, path); err != nil {
-			return nil, fmt.Errorf("invalid path in transaction journal %s: %w", dir, err)
-		}
-
-		switch record.Op {
-		case journalOpCreate:
-			// A later create record for an already-created path carries an
-			// updated hash (for example a TrackWrite after Track). Only a
-			// non-empty hash updates the recorded identity: an empty record
-			// must never erase a known hash.
-			if _, ok := manager.createdSet[path]; ok {
-				if record.Hash != "" {
-					manager.createdHashes[path] = record.Hash
-				}
-				continue
-			}
-			manager.created = append(manager.created, path)
-			manager.createdSet[path] = struct{}{}
-			if record.Hash != "" {
-				manager.createdHashes[path] = record.Hash
-			}
-
-		case journalOpBackup:
-			backupPath, err := backupPathFromJournal(dir, record.Backup)
-			if err != nil {
-				return nil, err
-			}
-			manager.backups[path] = backupEntry{
-				tempPath: backupPath,
-				mode:     os.FileMode(record.Mode),
-			}
-
-		default:
-			return nil, fmt.Errorf("unexpected journal operation %q", record.Op)
+		if err := manager.applyJournalRecord(record, path, dir); err != nil {
+			return nil, err
 		}
 	}
 
 	return manager, nil
+}
+
+// journalEntryPath revalidates a journal record's path against the root. No
+// path written by the journal is trusted.
+func journalEntryPath(rootPath, dir string, record journalRecord) (string, error) {
+	path, err := fileutil.SafePath(rootPath, filepath.FromSlash(record.Path))
+	if err != nil {
+		return "", fmt.Errorf("invalid path in transaction journal %s: %w", dir, err)
+	}
+	if err := requireStrictDescendant(rootPath, path); err != nil {
+		return "", fmt.Errorf("invalid path in transaction journal %s: %w", dir, err)
+	}
+	return path, nil
+}
+
+// applyJournalRecord folds one validated record into the reconstructed state.
+func (m *Manager) applyJournalRecord(record journalRecord, path, dir string) error {
+	switch record.Op {
+	case journalOpCreate:
+		m.recordCreated(path, record.Hash)
+
+	case journalOpBackup:
+		backupPath, err := backupPathFromJournal(dir, record.Backup)
+		if err != nil {
+			return err
+		}
+		m.backups[path] = backupEntry{
+			tempPath: backupPath,
+			mode:     os.FileMode(record.Mode),
+		}
+
+	default:
+		return fmt.Errorf("unexpected journal operation %q", record.Op)
+	}
+	return nil
+}
+
+// recordCreated records a created path and its content hash. A later create
+// record for an already-created path carries an updated hash (for example a
+// TrackWrite after Track). Only a non-empty hash updates the recorded identity:
+// an empty record must never erase a known hash.
+func (m *Manager) recordCreated(path, hash string) {
+	if _, ok := m.createdSet[path]; !ok {
+		m.created = append(m.created, path)
+		m.createdSet[path] = struct{}{}
+	}
+	if hash != "" {
+		m.createdHashes[path] = hash
+	}
 }
 
 // requireStrictDescendant rejects a journal path that resolves to the root

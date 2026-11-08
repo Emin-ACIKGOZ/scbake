@@ -112,16 +112,7 @@ func (m *Manager) track(path, hash string) error {
 
 	// Check if we have already tracked this file to avoid double-backup overhead.
 	if m.alreadyTracked(absPath) {
-		if hash == "" {
-			return nil
-		}
-		// A path already recorded as created (for example Track followed by
-		// TrackWrite in the append task) can still gain a content hash. A
-		// backed-up path is restored from its backup, so a hash adds nothing.
-		if _, created := m.createdSet[absPath]; created {
-			return m.trackCreated(absPath, hash)
-		}
-		return nil
+		return m.trackAlreadyTracked(absPath, hash)
 	}
 
 	info, err := os.Lstat(absPath)
@@ -135,6 +126,27 @@ func (m *Manager) track(path, hash string) error {
 		return fmt.Errorf("failed to stat %s: %w", absPath, err)
 	}
 
+	return m.trackExisting(absPath, info)
+}
+
+// trackAlreadyTracked handles a repeated Track/TrackWrite. A path already
+// recorded as created (for example Track followed by TrackWrite in the append
+// task) can still gain a content hash. A backed-up path is restored from its
+// backup, so a hash adds nothing.
+func (m *Manager) trackAlreadyTracked(absPath, hash string) error {
+	if hash == "" {
+		return nil
+	}
+	if _, created := m.createdSet[absPath]; created {
+		return m.trackCreated(absPath, hash)
+	}
+	return nil
+}
+
+// trackExisting handles a path that exists at tracking time: symlinks are
+// validated, directories are merged into without a backup, and regular files
+// are backed up before they are overwritten.
+func (m *Manager) trackExisting(absPath string, info os.FileInfo) error {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return checkTrackedSymlink(absPath)
 	}

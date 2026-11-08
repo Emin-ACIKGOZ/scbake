@@ -92,67 +92,98 @@ func (m *Manager) rollback(ctx context.Context, cleanup bool) error {
 // Warnings are deliberately not returned as errors: keeping residue must not
 // retain the journal or make recovery retry forever.
 func (m *Manager) deleteCreatedPaths(ctx context.Context) []error {
-	paths := append([]string(nil), m.created...)
-	sort.SliceStable(paths, func(i, j int) bool {
-		return pathDepth(paths[i]) > pathDepth(paths[j])
-	})
+	paths := m.createdPathsDeepestFirst()
 
 	var errs []error
 	for _, path := range paths {
 		if err := ctx.Err(); err != nil {
 			return errs
 		}
-
-		if _, err := fileutil.SafePath(m.rootPath, path); err != nil {
-			errs = append(errs, fmt.Errorf("refusing to delete created path %s: %w", path, err))
-			continue
-		}
-
-		info, err := os.Lstat(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			errs = append(errs, fmt.Errorf("failed to inspect created path %s: %w", path, err))
-			continue
-		}
-
-		hash := m.createdHashes[path]
-		switch {
-		case info.IsDir():
-			if hash != "" {
-				warnKeptCreatedPath(path, "created file was replaced by a directory")
-				continue
-			}
-			if err := m.removeCreatedDir(path); err != nil {
-				errs = append(errs, err)
-			}
-
-		case info.Mode().IsRegular():
-			if hash == "" {
-				warnKeptCreatedPath(path, "no recorded content hash")
-				continue
-			}
-			currentHash, err := hashFile(m.rootPath, path)
-			if err != nil {
-				warnKeptCreatedPath(path, fmt.Sprintf("could not verify content: %v", err))
-				continue
-			}
-			if currentHash != hash {
-				warnKeptCreatedPath(path, "content changed since this transaction wrote it")
-				continue
-			}
-			if err := os.Remove(path); err != nil {
-				errs = append(errs, fmt.Errorf("failed to delete created path %s: %w", path, err))
-			}
-
-		default:
-			// Symlinks and other special files are never followed or deleted:
-			// a recorded hash describes a regular file, not an arbitrary path.
-			warnKeptCreatedPath(path, "no longer a regular file")
+		if err := m.deleteCreatedPath(path); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errs
+}
+
+// createdPathsDeepestFirst returns a copy of the created paths ordered by path
+// depth descending, so children are handled before their parents.
+func (m *Manager) createdPathsDeepestFirst() []string {
+	paths := append([]string(nil), m.created...)
+	sort.SliceStable(paths, func(i, j int) bool {
+		return pathDepth(paths[i]) > pathDepth(paths[j])
+	})
+	return paths
+}
+
+// deleteCreatedPath removes one created path if its identity is verified.
+// Returning nil covers both removal and a deliberate keep; only containment and
+// I/O failures are reported as errors.
+func (m *Manager) deleteCreatedPath(path string) error {
+	if err := m.validateCreatedPath(path); err != nil {
+		return err
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to inspect created path %s: %w", path, err)
+	}
+
+	hash := m.createdHashes[path]
+	switch {
+	case info.IsDir():
+		return m.deleteCreatedDirectory(path, hash)
+	case info.Mode().IsRegular():
+		return m.deleteCreatedFile(path, hash)
+	default:
+		// Symlinks and other special files are never followed or deleted:
+		// a recorded hash describes a regular file, not an arbitrary path.
+		warnKeptCreatedPath(path, "no longer a regular file")
+		return nil
+	}
+}
+
+// validateCreatedPath revalidates containment before any rollback operation.
+func (m *Manager) validateCreatedPath(path string) error {
+	if _, err := fileutil.SafePath(m.rootPath, path); err != nil {
+		return fmt.Errorf("refusing to delete created path %s: %w", path, err)
+	}
+	return nil
+}
+
+// deleteCreatedDirectory removes a created directory only when it has no
+// recorded file hash and is empty.
+func (m *Manager) deleteCreatedDirectory(path, hash string) error {
+	if hash != "" {
+		warnKeptCreatedPath(path, "created file was replaced by a directory")
+		return nil
+	}
+	return m.removeCreatedDir(path)
+}
+
+// deleteCreatedFile removes a created regular file only when its current raw
+// bytes match the recorded hash.
+func (m *Manager) deleteCreatedFile(path, hash string) error {
+	if hash == "" {
+		warnKeptCreatedPath(path, "no recorded content hash")
+		return nil
+	}
+	currentHash, err := hashFile(m.rootPath, path)
+	if err != nil {
+		warnKeptCreatedPath(path, fmt.Sprintf("could not verify content: %v", err))
+		return nil
+	}
+	if currentHash != hash {
+		warnKeptCreatedPath(path, "content changed since this transaction wrote it")
+		return nil
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("failed to delete created path %s: %w", path, err)
+	}
+	return nil
 }
 
 // removeCreatedDir removes an unchanged created directory only when it is

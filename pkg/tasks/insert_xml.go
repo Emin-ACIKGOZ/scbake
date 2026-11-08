@@ -72,6 +72,12 @@ func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
 		return nil
 	}
 
+	return t.insertAndWrite(tc, absPath, contentStr)
+}
+
+// insertAndWrite splices the XML fragment into the existing content, records
+// the intended bytes for rollback, and writes the result.
+func (t *InsertXMLTask) insertAndWrite(tc types.TaskContext, absPath, contentStr string) error {
 	newContent, err := insertXMLElement(contentStr, t.ElementPath, t.XMLContent)
 	if err != nil {
 		return fmt.Errorf("failed to insert XML into %s: %w", t.FilePath, err)
@@ -79,16 +85,25 @@ func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
 
 	// If the file vanished between Track and this write, record the intended
 	// bytes so rollback can verify and remove only exactly what was written.
-	if tc.Tx != nil {
-		if err := tc.Tx.TrackWrite(absPath, []byte(newContent)); err != nil {
-			return fmt.Errorf("failed to track file %s: %w", t.FilePath, err)
-		}
+	if err := trackXMLWrite(tc, absPath, t.FilePath, []byte(newContent)); err != nil {
+		return err
 	}
 
 	if err := fileutil.SafeWriteFile(tc.TargetPath, t.FilePath, []byte(newContent), fileutil.FilePerms); err != nil {
 		return fmt.Errorf("failed to write modified XML file %s: %w", t.FilePath, err)
 	}
 
+	return nil
+}
+
+// trackXMLWrite registers the intended XML bytes when a transaction is active.
+func trackXMLWrite(tc types.TaskContext, absPath, relPath string, content []byte) error {
+	if tc.Tx == nil {
+		return nil
+	}
+	if err := tc.Tx.TrackWrite(absPath, content); err != nil {
+		return fmt.Errorf("failed to track file %s: %w", relPath, err)
+	}
 	return nil
 }
 
