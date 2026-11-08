@@ -23,26 +23,31 @@ import (
 
 // errDriftDetected signals a non-zero exit for CI. It is returned after the
 // findings have been printed; root.Execute maps any error to ExitError.
-var errDriftDetected = errors.New("managed files have drifted")
+var errDriftDetected = errors.New("drift detected")
 
 var (
-	driftRepairFlag   bool
-	driftStrategyFlag string
+	driftRepairFlag      bool
+	driftStrategyFlag    string
+	driftRequireBaseFlag bool
 )
 
 var driftCmd = &cobra.Command{
 	Use:   "drift [path]",
 	Short: "Detect local changes to managed files",
 	Long: `Compares the managed_files hashes recorded in scbake.toml against the
-working tree and lists any file that was modified or deleted since scbake wrote
-it. Detection always scans every managed file in the manifest, regardless of
-<path>, and exits non-zero when drift is found, so it can gate a CI pipeline.
-A missing scbake.toml is an error rather than a clean result.
+working tree and the committed base under .scbake-base, and lists any file that
+was modified or deleted since scbake wrote it and any base that is missing or no
+longer matches its recorded hash. Detection always scans every managed file in
+the manifest, regardless of <path>, and exits non-zero when blocking drift is
+found, so it can gate a CI pipeline. A missing base is advisory by default; pass
+--require-base to make it blocking. A missing scbake.toml is an error rather than
+a clean result.
 
 With --repair, the recorded templates are re-applied through the same
 reconciliation used by 'update', restoring generated content while preserving
 local edits according to --conflict-strategy. Because 'merge' preserves local
-edits it does not clear drift; use 'overwrite' to force restoration.`,
+edits it does not clear drift; use 'overwrite' to force restoration. On a clean
+tree, 'overwrite' also re-records a missing base; 'merge' does not backfill it.`,
 	Args:         cobra.MaximumNArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -56,6 +61,10 @@ edits it does not clear drift; use 'overwrite' to force restoration.`,
 		absPath, err := filepath.Abs(targetPath)
 		if err != nil {
 			return fmt.Errorf("resolving path: %w", err)
+		}
+
+		if driftRequireBaseFlag && driftRepairFlag {
+			return errors.New("--require-base cannot be combined with --repair")
 		}
 
 		if driftRepairFlag {
@@ -96,17 +105,73 @@ edits it does not clear drift; use 'overwrite' to force restoration.`,
 			return nil
 		}
 
-		fmt.Printf("Drift detected in %d managed file(s):\n", len(findings))
-		for _, f := range findings {
-			if f.Kind == drift.Missing {
-				fmt.Printf("  %-9s %s (recorded %s)\n", f.Kind, f.Path, shortHash(f.Recorded))
-				continue
+		blocking, advisory := partitionFindings(findings, driftRequireBaseFlag)
+		if len(blocking) == 0 {
+			fmt.Printf("No working-tree drift; %d merge base(s) missing (advisory):\n", len(advisory))
+			printFindings(findings)
+			fmt.Println("Run 'scbake drift --require-base' to make a missing base an error.")
+			return nil
+		}
+
+		var working, invalid int
+		for _, f := range blocking {
+			switch f.Kind {
+			case drift.Modified, drift.Missing:
+				working++
+			case drift.BaseInvalid:
+				invalid++
 			}
-			fmt.Printf("  %-9s %s (recorded %s, on disk %s)\n",
-				f.Kind, f.Path, shortHash(f.Recorded), shortHash(f.Actual))
+		}
+		switch {
+		case working > 0:
+			fmt.Printf("Drift detected in %d managed file(s):\n", len(blocking))
+		case invalid > 0:
+			fmt.Printf("Invalid committed merge base for %d managed file(s):\n", invalid)
+		default:
+			fmt.Printf("Missing committed merge base for %d managed file(s):\n", len(blocking))
+		}
+		printFindings(findings)
+		if len(advisory) > 0 {
+			fmt.Printf("%d missing merge base(s) reported as advisory; use --require-base to fail on them.\n",
+				len(advisory))
 		}
 		return errDriftDetected
 	},
+}
+
+// partitionFindings splits findings into blocking and advisory. A missing
+// committed base is advisory unless --require-base promotes it; every other
+// kind, including base-invalid, always blocks.
+func partitionFindings(findings []drift.Finding, requireBase bool) (blocking, advisory []drift.Finding) {
+	for _, f := range findings {
+		if f.Kind == drift.BaseMissing && !requireBase {
+			advisory = append(advisory, f)
+			continue
+		}
+		blocking = append(blocking, f)
+	}
+	return blocking, advisory
+}
+
+// printFindings prints the sorted finding list. Base findings include the
+// expected committed base path and the recorded hash; an invalid base also
+// shows the hash of the base on disk.
+func printFindings(findings []drift.Finding) {
+	for _, f := range findings {
+		switch f.Kind {
+		case drift.BaseMissing:
+			fmt.Printf("  %-12s %s (expected base %s, recorded %s)\n",
+				f.Kind, f.Path, f.BasePath, shortHash(f.Recorded))
+		case drift.BaseInvalid:
+			fmt.Printf("  %-12s %s (expected base %s, recorded %s, base %s)\n",
+				f.Kind, f.Path, f.BasePath, shortHash(f.Recorded), shortHash(f.Actual))
+		case drift.Missing:
+			fmt.Printf("  %-12s %s (recorded %s)\n", f.Kind, f.Path, shortHash(f.Recorded))
+		default:
+			fmt.Printf("  %-12s %s (recorded %s, on disk %s)\n",
+				f.Kind, f.Path, shortHash(f.Recorded), shortHash(f.Actual))
+		}
+	}
 }
 
 // repairDrift reuses 'update' so repair and update share one reconciliation and
@@ -139,6 +204,12 @@ func shortHash(h string) string {
 
 func init() {
 	driftCmd.Flags().BoolVar(&driftRepairFlag, "repair", false, "Re-apply recorded templates to repair drift")
+	driftCmd.Flags().BoolVar(
+		&driftRequireBaseFlag,
+		"require-base",
+		false,
+		"Exit non-zero when a committed merge base is missing",
+	)
 	driftCmd.Flags().StringVar(
 		&driftStrategyFlag,
 		"conflict-strategy",

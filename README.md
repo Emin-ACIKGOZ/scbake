@@ -297,15 +297,25 @@ partial clones that omit `.scbake-base/` cannot merge. Native Windows/macOS
 filters, LFS, and `working-tree-encoding` transformations remain unverified;
 plain CRLF is handled by hash and merge-input normalization.
 
+`drift` reports a base that is absent as `base-missing` (advisory by default)
+and a base whose normalized or raw hash no longer matches the ledger as
+`base-invalid` (blocking). Pass `--require-base` to make a missing base block,
+for example in CI that requires a complete committed base. Detection is
+read-only and lock-free and never backfills the base: a no-op `update` also does
+not backfill. On a clean tree,
+`scbake drift --repair --conflict-strategy overwrite` re-records the base as
+part of rewriting the file; preserve local edits first, because that strategy
+overwrites them and the default `merge` repair does not backfill.
+
 
 ### `drift`: Detect (and Repair) Changes to Managed Files
 
 Reports whether the files scbake generated still match the hashes recorded in
-`scbake.toml`, without writing anything. It exits non-zero when drift is found,
-so it can gate a CI pipeline.
+`scbake.toml`, without writing anything. It exits non-zero when blocking drift
+is found, so it can gate a CI pipeline.
 
 ```bash
-scbake drift [--repair] [--conflict-strategy <strategy>] [<path>]
+scbake drift [--repair] [--require-base] [--conflict-strategy <strategy>] [<path>]
 ```
 
 | Argument | Description      | Default |
@@ -313,22 +323,46 @@ scbake drift [--repair] [--conflict-strategy <strategy>] [<path>]
 | `<path>` | Target directory | `.`     |
 
 - **Detection is read-only.** No templates are rendered, no transaction is
-  opened, and the network is never touched. Detection always scans every
-  managed file recorded in the manifest, not just the `<path>` project.
+  opened, no lock is taken, and the network is never touched. Detection always
+  scans every managed file recorded in the manifest, not just the `<path>`
+  project.
 - **Modified vs. missing.** Each managed file is reported as `modified` (its
   normalized hash changed) or `missing` (deleted), with its recorded and
   on-disk hashes. Hashes are EOL-insensitive for NUL-free content, so an
   EOL-only change is not drift.
+- **Committed base.** For every current key, the pristine base under
+  `.scbake-base/` is compared with the recorded hash. An absent base is
+  `base-missing`; a base whose normalized or raw hash no longer matches is
+  `base-invalid`, with the expected base path and both hashes. Keys resolved
+  only through a legacy project path are skipped because no version wrote a
+  base for a flat pre-scoping key. An unreadable base (other than "not found")
+  is an error, not a finding.
 - **Repair** (`--repair`) reuses the same reconciliation as `update`, so local
   edits are preserved according to `--conflict-strategy` (`merge` by default).
   Because `merge` preserves local edits, it does not clear drift; use
-  `--conflict-strategy overwrite` to force generated content back.
+  `--conflict-strategy overwrite` to force generated content back. On a clean
+  tree that also re-records a missing base; `merge` does not backfill.
+
+Exit behavior:
+
+| Finding | Default | `--require-base` |
+| :------ | :------ | :--------------- |
+| `modified`, `missing`, `base-invalid` | exit 1 | exit 1 |
+| `base-missing` only | exit 0 (advisory) | exit 1 |
+
+`--require-base` promotes missing bases to blocking results and cannot be
+combined with `--repair`. A concurrent `update` can momentarily expose a
+partially written base, so detection remains lock-free and may report a
+transient `base-invalid` rather than taking the project lock.
 
 **Example:**
 
 ```bash
 # Fail a CI job if generated infrastructure was edited or deleted.
 scbake drift
+
+# Also fail when a committed merge base is missing.
+scbake drift --require-base
 
 # Force generated content back (discarding local edits).
 scbake drift --repair --conflict-strategy overwrite
