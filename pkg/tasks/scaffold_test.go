@@ -21,6 +21,8 @@ const scaffoldHelperMarker = "scaffold-helper-mode="
 // TestScaffoldHelperProcess is not a real test. It is the fake scaffolder used
 // by the ScaffoldTask tests: the test binary re-executes itself with a mode in
 // its arguments so the tests do not depend on a shell or an external tool.
+//
+//nolint:cyclop // fixture dispatch: one branch per scaffolding behavior under test
 func TestScaffoldHelperProcess(t *testing.T) {
 	mode := ""
 	for _, arg := range os.Args {
@@ -55,7 +57,7 @@ func TestScaffoldHelperProcess(t *testing.T) {
 		}
 		write(filepath.Join("public", "favicon.svg"), "<svg/>\n")
 	case "sentinel-missing":
-		write("README.md", "cancelled\n")
+		write("README.md", "canceled\n")
 	case "collision":
 		name := filepath.Base(mustGetwd())
 		write("package.json", `{"name":"`+name+`"}`+"\n")
@@ -72,7 +74,7 @@ func TestScaffoldHelperProcess(t *testing.T) {
 			os.Exit(2)
 		}
 		write(filepath.Join(locked, "keep.txt"), "locked\n")
-		if err := os.Chmod(locked, 0o500); err != nil {
+		if err := os.Chmod(locked, 0o500); err != nil { //nolint:gosec // fixture needs an undeletable staging sibling
 			os.Exit(2)
 		}
 	default:
@@ -252,6 +254,102 @@ func TestScaffoldTaskCollisionPreservesUserFile(t *testing.T) {
 	}
 }
 
+// stageMoveFixture creates a target and a populated staging leaf and returns
+// the staged top-level entries, mirroring what Execute sees after the
+// scaffolder runs.
+func stageMoveFixture(t *testing.T, root string) (target, stagingLeaf string, entries []os.DirEntry) {
+	t.Helper()
+	target = filepath.Join(root, "web")
+	stagingLeaf = filepath.Join(root, "stage", "web")
+	for _, dir := range []string{target, stagingLeaf} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("creating %s: %v", dir, err)
+		}
+	}
+	for name, content := range map[string]string{
+		"index.html":   "SCAFFOLD\n",
+		"package.json": `{"name":"web"}` + "\n",
+	} {
+		if err := os.WriteFile(filepath.Join(stagingLeaf, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("writing staged %s: %v", name, err)
+		}
+	}
+	entries, err := os.ReadDir(stagingLeaf)
+	if err != nil {
+		t.Fatalf("reading staging leaf: %v", err)
+	}
+	return target, stagingLeaf, entries
+}
+
+// TestMoveScaffoldEntriesRechecksDestination covers MF2 deterministically: a
+// destination created after the preflight (the preflight-to-rename window) is
+// rejected by the per-entry recheck instead of being overwritten untracked.
+func TestMoveScaffoldEntriesRechecksDestination(t *testing.T) {
+	target, stagingLeaf, entries := stageMoveFixture(t, t.TempDir())
+
+	// This is the state Execute sees at preflight: no destination exists yet.
+	if err := preflightDestinations(target, entries); err != nil {
+		t.Fatalf("preflight before the simulated race: %v", err)
+	}
+
+	// Simulate a concurrent writer landing the first destination in the window
+	// between preflight and rename.
+	const userContent = "USER CONTENT\n"
+	userFile := filepath.Join(target, "index.html")
+	if err := os.WriteFile(userFile, []byte(userContent), 0o600); err != nil {
+		t.Fatalf("writing late destination: %v", err)
+	}
+
+	err := moveScaffoldEntries(stagingLeaf, target, entries)
+	if err == nil {
+		t.Fatal("expected the per-entry destination recheck to fail")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("recheck error = %v, want an existing-destination error", err)
+	}
+	got, readErr := os.ReadFile(userFile) //nolint:gosec // test-controlled path
+	if readErr != nil {
+		t.Fatalf("reading user file: %v", readErr)
+	}
+	if string(got) != userContent {
+		t.Errorf("user file = %q, want %q", got, userContent)
+	}
+	if _, statErr := os.Stat(filepath.Join(target, "package.json")); !os.IsNotExist(statErr) {
+		t.Errorf("recheck failure still moved another entry: %v", statErr)
+	}
+}
+
+// TestScaffoldTaskRejectsEscapingTargetSymlink verifies that the lexical-target
+// fix preserves the security boundary: a target that is itself a symlink
+// resolving outside the transaction root is rejected before anything moves.
+func TestScaffoldTaskRejectsEscapingTargetSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires additional privileges on Windows")
+	}
+
+	root := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(root, "web")
+	if err := os.Symlink(outside, target); err != nil {
+		t.Fatalf("creating escaping target symlink: %v", err)
+	}
+
+	err := newScaffoldTask("success").Execute(newScaffoldContext(t, root, target))
+	if err == nil {
+		t.Fatal("expected an escaping target symlink to be rejected")
+	}
+	if !strings.Contains(err.Error(), "security violation") || !strings.Contains(err.Error(), "resolves outside") {
+		t.Errorf("error = %v, want a symlink containment security violation", err)
+	}
+	entries, readErr := os.ReadDir(outside)
+	if readErr != nil {
+		t.Fatalf("reading outside directory: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("escaping target received scaffold output: %v", entries)
+	}
+}
+
 // TestScaffoldTaskDryRunWritesNothing verifies that dry-run returns before any
 // staging directory or transaction journal is created.
 func TestScaffoldTaskDryRunWritesNothing(t *testing.T) {
@@ -306,7 +404,7 @@ func TestScaffoldTaskCleanupFailureIsNotFatal(t *testing.T) {
 	scbakeRoot := filepath.Join(root, ".scbake")
 	_ = filepath.WalkDir(scbakeRoot, func(path string, entry os.DirEntry, err error) error {
 		if err == nil && entry.IsDir() {
-			_ = os.Chmod(path, 0o700)
+			_ = os.Chmod(path, 0o700) //nolint:gosec // restore fixture permissions for cleanup
 		}
 		return nil
 	})

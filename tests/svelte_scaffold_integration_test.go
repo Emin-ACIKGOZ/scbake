@@ -26,7 +26,7 @@ case "${1:-}" in
 create)
 	entries=$(ls -A)
 	if [ -n "$entries" ]; then
-		echo "Operation cancelled"
+		echo "Operation canceled"
 		exit 0
 	fi
 	name=$(basename "$PWD")
@@ -61,7 +61,7 @@ const svelteIssue136WantName = "sv"
 // TestSvelteNewScaffoldsInNonEmptyTarget is the offline regression test for
 // issue #136. The scaffold target already contains scbake.toml and .scbake by
 // the time the language handler runs; before the fix create-vite saw a
-// non-empty directory, printed "Operation cancelled", exited 0, and the
+// non-empty directory, printed "Operation canceled", exited 0, and the
 // following npm install failed with ENOENT.
 func TestSvelteNewScaffoldsInNonEmptyTarget(t *testing.T) {
 	skipUnlessShellFixture(t)
@@ -101,6 +101,52 @@ func TestSvelteApplyStandaloneEmptyTarget(t *testing.T) {
 		t.Errorf("standalone apply wrote a repository-root manifest: %v", err)
 	}
 	assertNoScaffoldResidue(t, work)
+}
+
+// TestSvelteApplySymlinkedRepoRoot is the end-to-end regression for the
+// symlinked-root regression: the repository root is reached through link ->
+// real and apply must scaffold apps/web without the transaction rejecting the
+// resolved destinations as escaping the lexical root.
+func TestSvelteApplySymlinkedRepoRoot(t *testing.T) {
+	skipUnlessShellFixture(t)
+
+	work := t.TempDir()
+	binDir := installFakeNpm(t, work)
+	link, realDir := setupSymlinkedRepo(t, work)
+
+	output, err := runScbake(t, link, binDir, "apply", "--lang", "svelte", "apps/web")
+	if err != nil {
+		t.Fatalf("apply --lang svelte apps/web through a symlinked root failed: %v\n%s", err, output)
+	}
+
+	target := filepath.Join(realDir, "apps", "web")
+	assertScaffoldedSvelteFiles(t, target, "web")
+	assertManifestProject(t, filepath.Join(realDir, "scbake.toml"), "apps/web", "web")
+	assertNoScaffoldResidue(t, realDir)
+}
+
+// TestSvelteApplySymlinkedStandalone covers the same regression for
+// apply --lang svelte . when the standalone project root is reached through a
+// symlink.
+func TestSvelteApplySymlinkedStandalone(t *testing.T) {
+	skipUnlessShellFixture(t)
+
+	work := t.TempDir()
+	binDir := installFakeNpm(t, work)
+	link, realDir := setupSymlinkedRoot(t, work)
+	if err := os.WriteFile(filepath.Join(realDir, "scbake.toml"), nil, 0o600); err != nil {
+		t.Fatalf("writing starting manifest: %v", err)
+	}
+
+	output, err := runScbake(t, link, binDir, "apply", "--lang", "svelte", ".")
+	if err != nil {
+		t.Fatalf("apply --lang svelte . in a symlinked project failed: %v\n%s", err, output)
+	}
+
+	// The package name follows the resolved directory basename, while the
+	// manifest records the standalone project at path ".".
+	assertScaffoldedSvelteProject(t, realDir, "real", ".")
+	assertNoScaffoldResidue(t, realDir)
 }
 
 // TestSvelteApplyCollisionPreservesUserFile verifies the fail-closed collision
@@ -182,11 +228,45 @@ func installFakeNpm(t *testing.T, work string) string {
 	return binDir
 }
 
+// setupSymlinkedRoot creates work/real and a work/link symlink to it.
+func setupSymlinkedRoot(t *testing.T, work string) (link, realDir string) {
+	t.Helper()
+	realDir = filepath.Join(work, "real")
+	if err := os.Mkdir(realDir, 0o750); err != nil {
+		t.Fatalf("creating symlink target: %v", err)
+	}
+	link = filepath.Join(work, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Fatalf("creating root symlink: %v", err)
+	}
+	return link, realDir
+}
+
+// setupSymlinkedRepo creates a repository fixture reached through a symlink:
+// real/.git, real/scbake.toml, and an empty real/apps/web.
+func setupSymlinkedRepo(t *testing.T, work string) (link, realDir string) {
+	t.Helper()
+	link, realDir = setupSymlinkedRoot(t, work)
+	if err := os.MkdirAll(filepath.Join(realDir, "apps", "web"), 0o750); err != nil {
+		t.Fatalf("creating monorepo target: %v", err)
+	}
+	// An empty marker is enough for root discovery to treat realDir/ as the
+	// repository boundary; no Git command runs in this fixture.
+	if err := os.Mkdir(filepath.Join(realDir, ".git"), 0o750); err != nil {
+		t.Fatalf("creating git marker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "scbake.toml"), nil, 0o600); err != nil {
+		t.Fatalf("writing starting manifest: %v", err)
+	}
+	return link, realDir
+}
+
 func runScbake(t *testing.T, dir, binDir string, args ...string) (string, error) {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), binaryPath, args...)
+	cmd := exec.CommandContext(t.Context(), binaryPath, args...) //nolint:gosec // test-controlled binary and arguments
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
+		"PWD="+dir,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"GIT_AUTHOR_NAME=Test Runner",
 		"GIT_AUTHOR_EMAIL=runner@test.com",
@@ -200,7 +280,9 @@ func runScbake(t *testing.T, dir, binDir string, args ...string) (string, error)
 	return output.String(), err
 }
 
-func assertScaffoldedSvelteProject(t *testing.T, project, wantName, wantPath string) {
+// assertScaffoldedSvelteFiles checks the generated project files and package
+// name without assuming where the manifest lives.
+func assertScaffoldedSvelteFiles(t *testing.T, project, wantName string) {
 	t.Helper()
 
 	var pkg struct {
@@ -222,10 +304,23 @@ func assertScaffoldedSvelteProject(t *testing.T, project, wantName, wantPath str
 			t.Errorf("scaffolded project missing %s: %v", rel, err)
 		}
 	}
+}
 
-	manifest, err := os.ReadFile(filepath.Join(project, "scbake.toml")) //nolint:gosec // test-controlled path
+// assertScaffoldedSvelteProject checks the generated project and its manifest.
+func assertScaffoldedSvelteProject(t *testing.T, project, wantName, wantPath string) {
+	t.Helper()
+	assertScaffoldedSvelteFiles(t, project, wantName)
+	assertManifestProject(t, filepath.Join(project, "scbake.toml"), wantPath, "")
+}
+
+// assertManifestProject checks the svelte language and project path in a
+// manifest. A non-empty wantName additionally checks the recorded project name.
+func assertManifestProject(t *testing.T, manifestPath, wantPath, wantName string) {
+	t.Helper()
+
+	manifest, err := os.ReadFile(manifestPath) //nolint:gosec // test-controlled path
 	if err != nil {
-		t.Fatalf("reading scbake.toml: %v", err)
+		t.Fatalf("reading %s: %v", manifestPath, err)
 	}
 	text := string(manifest)
 	if !strings.Contains(text, `language = "svelte"`) {
@@ -233,6 +328,9 @@ func assertScaffoldedSvelteProject(t *testing.T, project, wantName, wantPath str
 	}
 	if !strings.Contains(text, `path = "`+wantPath+`"`) {
 		t.Errorf("manifest does not record path %s:\n%s", wantPath, text)
+	}
+	if wantName != "" && !strings.Contains(text, `name = "`+wantName+`"`) {
+		t.Errorf("manifest does not record project name %s:\n%s", wantName, text)
 	}
 }
 
