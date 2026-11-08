@@ -106,37 +106,104 @@ tree, 'overwrite' also re-records a missing base; 'merge' does not backfill it.`
 		}
 
 		blocking, advisory := partitionFindings(findings, driftRequireBaseFlag)
+		reportFindings(findings, blocking, advisory)
 		if len(blocking) == 0 {
-			fmt.Printf("No working-tree drift; %d merge base(s) missing (advisory):\n", len(advisory))
-			printFindings(findings)
-			fmt.Println("Run 'scbake drift --require-base' to make a missing base an error.")
 			return nil
-		}
-
-		var working, invalid int
-		for _, f := range blocking {
-			switch f.Kind {
-			case drift.Modified, drift.Missing:
-				working++
-			case drift.BaseInvalid:
-				invalid++
-			}
-		}
-		switch {
-		case working > 0:
-			fmt.Printf("Drift detected in %d managed file(s):\n", len(blocking))
-		case invalid > 0:
-			fmt.Printf("Invalid committed merge base for %d managed file(s):\n", invalid)
-		default:
-			fmt.Printf("Missing committed merge base for %d managed file(s):\n", len(blocking))
-		}
-		printFindings(findings)
-		if len(advisory) > 0 {
-			fmt.Printf("%d missing merge base(s) reported as advisory; use --require-base to fail on them.\n",
-				len(advisory))
 		}
 		return errDriftDetected
 	},
+}
+
+// advisoryBaseSampleLimit bounds the per-file advisory output when many
+// committed bases are missing at once. Detect still returns one finding per key
+// for programmatic consumers; only the human summary is capped.
+const advisoryBaseSampleLimit = 5
+
+// findingCounts holds distinct affected path counts per category, so a path
+// that yields both a working-tree and a base finding is counted once in each.
+type findingCounts struct {
+	working int
+	invalid int
+	missing int
+}
+
+// summarizeFindings counts distinct paths per finding category.
+func summarizeFindings(findings []drift.Finding) findingCounts {
+	working := make(map[string]struct{})
+	invalid := make(map[string]struct{})
+	missing := make(map[string]struct{})
+	for _, f := range findings {
+		switch f.Kind {
+		case drift.Modified, drift.Missing:
+			working[f.Path] = struct{}{}
+		case drift.BaseInvalid:
+			invalid[f.Path] = struct{}{}
+		case drift.BaseMissing:
+			missing[f.Path] = struct{}{}
+		}
+	}
+	return findingCounts{working: len(working), invalid: len(invalid), missing: len(missing)}
+}
+
+// reportFindings prints the sorted detail list plus accurate category summaries.
+// It does not decide the exit code.
+func reportFindings(findings, blocking, advisory []drift.Finding) {
+	blockingCounts := summarizeFindings(blocking)
+	advisoryCounts := summarizeFindings(advisory)
+
+	if len(blocking) == 0 {
+		fmt.Printf("No working-tree drift; %d merge base(s) missing (advisory):\n",
+			advisoryCounts.missing)
+		printAdvisoryMissing(findings)
+		fmt.Println("Run 'scbake drift --require-base' to make a missing base an error.")
+		return
+	}
+
+	fmt.Printf("%s:\n", blockingHeader(blockingCounts))
+	if len(advisory) > advisoryBaseSampleLimit {
+		printFindings(blocking)
+		printAdvisoryMissing(advisory)
+	} else {
+		printFindings(findings)
+	}
+	if advisoryCounts.missing > 0 {
+		fmt.Printf("%d missing merge base(s) reported as advisory; use --require-base to fail on them.\n",
+			advisoryCounts.missing)
+	}
+}
+
+// blockingHeader describes only blocking findings, using distinct path counts
+// for each category instead of a single conflated total.
+func blockingHeader(c findingCounts) string {
+	switch {
+	case c.working == 0 && c.invalid == 0:
+		return fmt.Sprintf("Missing committed merge base for %d managed file(s)", c.missing)
+	case c.working == 0 && c.missing == 0:
+		return fmt.Sprintf("Invalid committed merge base for %d managed file(s)", c.invalid)
+	case c.working == 0:
+		return fmt.Sprintf("Invalid committed merge base for %d managed file(s), and %d missing merge base(s)",
+			c.invalid, c.missing)
+	default:
+		header := fmt.Sprintf("Drift detected in %d managed file(s)", c.working)
+		if c.invalid > 0 {
+			header += fmt.Sprintf("; %d invalid merge base(s)", c.invalid)
+		}
+		if c.missing > 0 {
+			header += fmt.Sprintf("; %d missing merge base(s)", c.missing)
+		}
+		return header
+	}
+}
+
+// printAdvisoryMissing prints advisory base-missing findings, capping the
+// per-file detail so a large absent-base tree does not flood the output.
+func printAdvisoryMissing(findings []drift.Finding) {
+	if len(findings) <= advisoryBaseSampleLimit {
+		printFindings(findings)
+		return
+	}
+	printFindings(findings[:advisoryBaseSampleLimit])
+	fmt.Printf("  ... and %d more missing base(s)\n", len(findings)-advisoryBaseSampleLimit)
 }
 
 // partitionFindings splits findings into blocking and advisory. A missing
