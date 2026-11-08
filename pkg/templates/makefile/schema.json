@@ -4,14 +4,12 @@
     "build_tool": {
       "type": "string",
       "required": false,
-      "default": "go",
-      "description": "Primary build tool (go, npm, mvn)"
+      "description": "Optional build tool label recorded for integrations. The generated Makefile derives build commands from project languages; this value is not used by it."
     },
     "test_command": {
       "type": "string",
       "required": false,
-      "default": "go test ./...",
-      "description": "Command to run tests"
+      "description": "Optional override for the test target. When unset, tests run per project using language-specific commands."
     }
   }
 }

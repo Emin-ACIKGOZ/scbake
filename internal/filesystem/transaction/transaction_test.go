@@ -141,12 +141,13 @@ func TestRollback_CreatedFiles(t *testing.T) {
 	}
 
 	newFile := filepath.Join(rootDir, "new_feature.go")
+	const content = "package main"
 
-	if err := tx.Track(newFile); err != nil {
-		t.Fatalf("Track failed: %v", err)
+	if err := tx.TrackWrite(newFile, []byte(content)); err != nil {
+		t.Fatalf("TrackWrite failed: %v", err)
 	}
 
-	createFile(t, newFile, "package main", fileutil.FilePerms)
+	createFile(t, newFile, content, fileutil.FilePerms)
 
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback failed: %v", err)
@@ -200,7 +201,7 @@ func TestRollback_ModifiedFiles(t *testing.T) {
 	}
 }
 
-func TestRollback_NestedStructures_LIFO(t *testing.T) {
+func TestRollback_NestedStructures_DeepestFirst(t *testing.T) {
 	rootDir := t.TempDir()
 	tx, err := New(rootDir)
 	if err != nil {
@@ -225,7 +226,7 @@ func TestRollback_NestedStructures_LIFO(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := tx.Track(fileC); err != nil {
+	if err := tx.TrackWrite(fileC, []byte("content")); err != nil {
 		t.Fatal(err)
 	}
 	createFile(t, fileC, "content", fileutil.FilePerms)
@@ -321,7 +322,7 @@ func TestCommit_DisablesRollback_NoBackups(t *testing.T) {
 	// without finalizing the transaction and a subsequent Rollback() deleted
 	// the created file, silently discarding successful work.
 	created := filepath.Join(rootDir, "created.txt")
-	if err := tx.Track(created); err != nil {
+	if err := tx.TrackWrite(created, []byte("data")); err != nil {
 		t.Fatal(err)
 	}
 

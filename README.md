@@ -39,12 +39,32 @@ graph LR
 
 - **Built-in Rollback Safety**
   File and directory writes performed by scbake's file tasks are managed by a
-  transaction manager: created paths are removed in reverse order, and files
-  those tasks overwrite are restored from on-disk backups when a task or the
-  manifest save fails. External tool commands are opaque; only explicitly
-  predicted outputs that did not already exist are tracked, so their side
-  effects may remain. Rollback is process-level and best-effort, not crash or
-  interrupt recovery.
+  transaction manager. A created regular file is removed only when a content
+  hash recorded by the transaction still matches its raw bytes; file-task writes
+  record that hash before writing, while declared command outputs, archive
+  destinations, and the manifest are recorded after their write. Created
+  directories are removed deepest-first and only when empty. Files those tasks
+  overwrite are restored from on-disk backups when a task or the manifest save
+  fails. External tool commands are opaque, so handlers declare the paths a
+  command may create or modify. Those paths are tracked before the command runs:
+  missing regular files are snapshotted after the command and removed only when
+  their content still matches, and existing regular files are backed up with
+  their content and mode. Tracking an existing directory does not snapshot its
+  contents. Zip extraction commands can also declare an archive whose entries
+  are validated and tracked individually before extraction, including nested
+  destinations and missing ancestors. Rollback covers project files, declared
+  manifests, and declared zip entries, not build state. Pre-existing dependency
+  trees such as `node_modules`, `.git` internals, non-zip extraction, and writes
+  outside declared paths remain outside the transaction; custom handlers must
+  declare their own paths. Repeated opaque writers and legacy journals can
+  leave conservative residue: unverifiable regular files are kept rather than
+  deleted. If a dependency install fails, delete the affected tree (for example
+  `node_modules`) and reinstall from `package.json`/`package-lock.json`; the
+  manifests are restored by rollback. SIGINT and SIGTERM cancel running tasks,
+  stop the child process, run the same rollback as an in-process error, and exit
+  130/143. SIGKILL and other abrupt process termination bypass deferred cleanup,
+  but the next run reports the interrupted transaction instead of treating it as
+  clean; `scbake recover` rolls it back from the on-disk journal.
 
 - **Prioritized Execution**  
   Tasks run in a defined order using **Priority Bands** (e.g., directory creation → language setup → universal config) to ensure dependencies are met.
@@ -164,7 +184,7 @@ scbake new my-backend --lang go --with makefile,ci_github
 
 ### `apply`: Apply Templates to an Existing Project
 
-Applies new language packs or tooling templates to an existing path. Because `scbake` uses its own transaction logic, it does **not** require a clean Git tree to start; rollback and opaque-command caveats still apply.
+Applies new language packs or tooling templates to an existing path. Because `scbake` uses its own transaction logic, it does **not** require a clean Git tree to start; rollback and opaque-command caveats still apply. `apply`, `update`, and `drift --repair` require an existing project root and fail instead of creating a missing target directory; use `new` to bootstrap a new project.
 
 ```bash
 scbake apply [--lang <lang>] [--with <template...>] [--template-dir <dir>] [--conflict-strategy <strategy>] [<path>]
@@ -202,7 +222,7 @@ run repeatedly:
 
 - **Idempotent.** With no template change and no drift, it makes no writes.
 - **Three-way merge.** A pristine copy of each managed file is kept under
-  `.scbake/base/`; when both the template and your file changed, `update` merges
+  `.scbake-base/`; when both the template and your file changed, `update` merges
   non-overlapping edits. Overlapping edits are written to a `<file>.scbake-new`
   artifact instead of being applied.
 - **Policy.** `--conflict-strategy` accepts `merge` (default), `fail`,
@@ -215,15 +235,92 @@ cd my-backend
 scbake update
 ```
 
+#### Committed merge base and migration
+
+`.scbake-base/` is committed with the project, so a fresh clone has the common
+ancestor that `update` needs. The root `.gitignore` keeps private state ignored
+and re-includes the committed base:
+
+```gitignore
+.scbake/
+!.scbake-base/
+!.scbake-base/**
+!.gitignore
+```
+
+Keep this block at the end of `.gitignore`: a later pattern such as `*`
+overrides the re-includes and can hide the base. Scbake appends missing lines but
+does not move an existing block, so check the order after editing `.gitignore`.
+
+Run `git add .` from the manifest root, not a subdirectory, so new base files
+are staged. Inside `.scbake-base`, a managed `.gitignore` or `.gitattributes` is
+stored as `.gitignore.scbake-shadow` or `.gitattributes.scbake-shadow` so Git
+does not apply those rules to the base tree itself. Those two suffixed names are
+reserved.
+
+The base stores pristine rendered bytes, so it can duplicate ignored build
+outputs and any secret a template rendered. It also adds repository churn
+whenever generated content changes; review the committed tree before publishing.
+
+`managed_files` hashes are EOL-insensitive for NUL-free content: every run of CR
+bytes immediately before LF is folded to one LF before hashing, so CRLF and LF
+hash the same. This also means NUL-free binary content containing CRLF is
+treated as text for hashing, and EOL-only edits are not drift. NUL-bearing
+content is hashed byte-exact. A legacy file recorded while rendered as CRLF can
+report one-time drift after upgrading. Base validation accepts a base whose
+normalized or raw hash matches the ledger, but a legacy CRLF ledger hash does not
+survive Git normalizing the migrated base to LF. Refresh the ledger with a clean
+`scbake update` (or otherwise re-record the normalized hash) before committing
+the migrated base, or keep the base byte-exact with `-text`.
+
+**Breaking change.** This release no longer reads the old `.scbake/base/` path.
+Migrate once by copying the base, renaming the two Git-special files, and
+committing the result:
+
+```sh
+mkdir -p .scbake-base
+cp -a .scbake/base/. .scbake-base/
+find .scbake-base -type f -name .gitignore \
+  -exec sh -c 'mv -n "$1" "$1.scbake-shadow"' _ {} \;
+find .scbake-base -type f -name .gitattributes \
+  -exec sh -c 'mv -n "$1" "$1.scbake-shadow"' _ {} \;
+# Ensure the ignore block above is present at the end of .gitignore.
+git rm -r --cached .scbake/base 2>/dev/null || true
+git add .gitignore .scbake-base
+git commit -m 'chore: migrate scbake merge base to .scbake-base'
+rm -rf .scbake/base
+```
+
+If the legacy ledger holds raw CRLF hashes and Git normalizes the migrated base
+to LF, those hashes no longer match: run a clean `scbake update` to refresh the
+ledger before committing, or keep the base byte-exact with `-text`.
+
+`git mv .scbake/base .scbake-base` alone is insufficient: the copied
+`.gitignore` and `.gitattributes` would keep names Git applies to the base tree.
+A missing or invalid base fails closed to a `.scbake-new` artifact, but sparse or
+partial clones that omit `.scbake-base/` cannot merge. Native Windows/macOS
+filters, LFS, and `working-tree-encoding` transformations remain unverified;
+plain CRLF is handled by hash and merge-input normalization.
+
+`drift` reports a base that is absent as `base-missing` (advisory by default)
+and a base whose normalized or raw hash no longer matches the ledger as
+`base-invalid` (blocking). Pass `--require-base` to make a missing base block,
+for example in CI that requires a complete committed base. Detection is
+read-only and lock-free and never backfills the base: a no-op `update` also does
+not backfill. On a clean tree,
+`scbake drift --repair --conflict-strategy overwrite` re-records the base as
+part of rewriting the file; preserve local edits first, because that strategy
+overwrites them and the default `merge` repair does not backfill.
+
 
 ### `drift`: Detect (and Repair) Changes to Managed Files
 
 Reports whether the files scbake generated still match the hashes recorded in
-`scbake.toml`, without writing anything. It exits non-zero when drift is found,
-so it can gate a CI pipeline.
+`scbake.toml`, without writing anything. It exits non-zero when blocking drift
+is found, so it can gate a CI pipeline.
 
 ```bash
-scbake drift [--repair] [--conflict-strategy <strategy>] [<path>]
+scbake drift [--repair] [--require-base] [--conflict-strategy <strategy>] [<path>]
 ```
 
 | Argument | Description      | Default |
@@ -231,14 +328,37 @@ scbake drift [--repair] [--conflict-strategy <strategy>] [<path>]
 | `<path>` | Target directory | `.`     |
 
 - **Detection is read-only.** No templates are rendered, no transaction is
-  opened, and the network is never touched. Detection always scans every
-  managed file recorded in the manifest, not just the `<path>` project.
-- **Modified vs. missing.** Each managed file is reported as `modified` (bytes
-  changed) or `missing` (deleted), with its recorded and on-disk hashes.
+  opened, no lock is taken, and the network is never touched. Detection always
+  scans every managed file recorded in the manifest, not just the `<path>`
+  project.
+- **Modified vs. missing.** Each managed file is reported as `modified` (its
+  normalized hash changed) or `missing` (deleted), with its recorded and
+  on-disk hashes. Hashes are EOL-insensitive for NUL-free content, so an
+  EOL-only change is not drift.
+- **Committed base.** For every current key, the pristine base under
+  `.scbake-base/` is compared with the recorded hash. An absent base is
+  `base-missing`; a base whose normalized or raw hash no longer matches is
+  `base-invalid`, with the expected base path and both hashes. Keys resolved
+  only through a legacy project path are skipped because no version wrote a
+  base for a flat pre-scoping key. An unreadable base (other than "not found")
+  is an error, not a finding.
 - **Repair** (`--repair`) reuses the same reconciliation as `update`, so local
   edits are preserved according to `--conflict-strategy` (`merge` by default).
   Because `merge` preserves local edits, it does not clear drift; use
-  `--conflict-strategy overwrite` to force generated content back.
+  `--conflict-strategy overwrite` to force generated content back. On a clean
+  tree that also re-records a missing base; `merge` does not backfill.
+
+Exit behavior:
+
+| Finding | Default | `--require-base` |
+| :------ | :------ | :--------------- |
+| `modified`, `missing`, `base-invalid` | exit 1 | exit 1 |
+| `base-missing` only | exit 0 (advisory) | exit 1 |
+
+`--require-base` promotes missing bases to blocking results and cannot be
+combined with `--repair`. A concurrent `update` can momentarily expose a
+partially written base, so detection remains lock-free and may report a
+transient `base-invalid` rather than taking the project lock.
 
 **Example:**
 
@@ -246,12 +366,75 @@ scbake drift [--repair] [--conflict-strategy <strategy>] [<path>]
 # Fail a CI job if generated infrastructure was edited or deleted.
 scbake drift
 
+# Also fail when a committed merge base is missing.
+scbake drift --require-base
+
 # Force generated content back (discarding local edits).
 scbake drift --repair --conflict-strategy overwrite
 
 # Re-apply template changes, keeping non-overlapping local edits.
 scbake drift --repair --conflict-strategy merge
 ```
+
+
+### `recover`: Roll Back an Interrupted Transaction
+
+A crash or `SIGKILL` can leave a transaction journal under
+`.scbake/tmp/`. The next `apply`, `update`, `drift --repair`, or `drift` refuses
+to treat that tree as clean. Roll the interrupted run back with:
+
+```bash
+scbake recover [--discard] [<path>]
+```
+
+| Argument    | Description                                      | Default |
+| :---------- | :----------------------------------------------- | :------ |
+| `<path>`    | Project directory inside the manifest root       | `.`     |
+| `--discard` | Delete the transaction without restoring backups | `false` |
+
+Recovery refuses to touch a transaction whose process is still running. Use
+`--discard` only when the backups are known to be unusable; it deletes the
+transaction directory without restoring files. An interrupted `new` is removed
+as a whole after a successful recovery, matching the command's handled-error
+cleanup.
+
+
+### Concurrent Runs and Exit 75
+
+Mutating commands (`new`, `apply`, `update`, `drift --repair`, `recover`, and
+`recover --discard`) take a non-blocking exclusive advisory lock on
+`<root>/.scbake/lock` before loading the manifest and hold it through commit or
+rollback. The lock is scoped to the manifest root, so parallel subproject runs
+under one root serialize on the same file. If another scbake process already
+holds the lock, the command fails fast with exit **75** (`EX_TEMPFAIL`) and
+makes no project changes; retry after the active run finishes. `new` is the
+exception: it creates the project directory and an empty manifest before locking,
+so a busy failure can leave that bootstrap residue for you to retry or remove.
+
+Read-only commands (`drift`, `list`, and template registry/cache commands) and
+every `--dry-run` run do not take the lock, so they remain usable while a writer
+is active. `drift` and `apply --dry-run` still refuse a tree with an interrupted
+transaction journal; `list` and template commands do not read project
+transaction state.
+
+The kernel releases the lock when the process exits, including a crash or
+`SIGKILL`; a leftover `.scbake/lock` file is harmless because the lock is kernel
+state, not file existence. Normal release removes the file and prunes an empty
+`.scbake` directory. The manifest modification-time check is retained as a
+fallback for non-scbake writers; the root lock is the primary scbake-vs-scbake
+concurrency guard.
+
+Rollback verifies created paths before removing them. A created regular file is
+deleted only when a content hash recorded by the transaction still matches the
+file's current raw bytes. File-task writes record that hash before writing;
+declared command outputs, archive extraction destinations, and a newly saved
+manifest are snapshotted after their write, so a file created once by an opaque
+writer remains removable. A created directory is removed deepest-first, and only
+when it is empty. Created regular files with no recorded hash, such as entries
+from a legacy journal, an interrupted write, or undeclared opaque output, are
+kept with a warning instead of being deleted. Non-empty directories are kept,
+and repeated opaque writers can make the recorded hash stale, leaving
+conservative residue rather than deleting unverified content.
 
 
 ### `template registry`: Manage Remote Registries
@@ -300,7 +483,7 @@ Discovery is bounded by the nearest Git root: a manifest at or below that root w
 - **Fleet-wide Governance**: Run `scbake apply --with makefile` at the root to generate a unified build system that orchestrates all sub-projects.
 - **Non-Git Monorepos**: If the central manifest lives in a tree without a Git root, pass `--allow-ancestor-search` to `apply`, `update`, `drift`, or `list` so an ancestor manifest can be adopted. The flag never crosses a `.git` root. It is not a security boundary: a principal that can write an ancestor directory can also plant a `.git` marker there.
 
-**Note:** `--allow-ancestor-search` is an explicit opt-in for non-Git monorepos. Without it, applying to a marker-less subproject creates a nested manifest in that subproject instead of updating the central one. `update`, `drift`, and `list` also need the flag in a non-Git monorepo; without it, `drift` evaluates the local (possibly absent) manifest and can report no drift.
+**Note:** `--allow-ancestor-search` is an explicit opt-in for non-Git monorepos. Without it, applying to a marker-less subproject creates a nested manifest in that subproject instead of updating the central one. `update`, `drift`, and `list` also need the flag in a non-Git monorepo; without it, `drift` finds no local manifest and fails instead of evaluating the central one.
 
 
 ## Supported Language Packs
@@ -309,7 +492,9 @@ Discovery is bounded by the nearest Git root: a manifest at or below that root w
 | :--------- | :------------------------------------------------------------------------------ | :---------------------- |
 | **Go**     | Creates `.gitignore`, `main.go`; runs `go mod init`, `go mod tidy`              | `go`                    |
 | **Svelte** | Runs `npm create vite@latest`, installs dependencies, sets NPM scripts          | `npm`                   |
-| **Spring** | Downloads starter zip from `start.spring.io`, extracts, makes `mvnw` executable | `curl`, `unzip`, `java` |
+| **Spring** | Downloads starter zip from `start.spring.io`, extracts, makes `mvnw` executable | `curl`, `unzip` |
+
+**Note:** Spring scaffolding only requires `curl` and `unzip`. Java is required later to build the generated project, not to create it.
 
 
 ## Tooling Templates

@@ -64,7 +64,7 @@ func collectDirectoryState(t *testing.T, rootDir string) map[string]bool {
 // and transaction manager across different execution priority bands (PrioLangSetup, PrioLinter, PrioDevEnv, PrioVersionControl).
 //
 // Verifies:
-// 1. All created files and directories are deleted in reverse LIFO order.
+// 1. All created files and directories are deleted deepest-first.
 // 2. Any modified files are restored to their exact pre-transaction byte content.
 // 3. No orphan backup files or lockfiles remain on disk when an ExecCommandTask fails.
 func TestPriorityBandFailures_Integration(t *testing.T) {
@@ -431,7 +431,7 @@ func buildVersionControlTasks(rootDir string, preExisting []fileSnapshot) (*type
 }
 
 // TestStrictLIFOOrder_Integration explicitly asserts that directory trees are created in order
-// and deleted in strict reverse LIFO order (deepest child path first, top-level directory last).
+// and created directories are deleted deepest-first (deepest child path first, top-level directory last).
 func TestStrictLIFOOrder_Integration(t *testing.T) {
 	rootDir := t.TempDir()
 

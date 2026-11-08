@@ -54,6 +54,11 @@ type RunContext struct {
 	CopyrightHolder  string
 	SetVars          map[string]string
 
+	// Ctx is the caller's cancellation context. It is typically the CLI signal
+	// context; nil means context.Background(). buildTaskContext derives the
+	// per-run timeout from it, so signals reach running tasks.
+	Ctx context.Context
+
 	// AllowAncestorSearch permits finding scbake.toml above a marker-less
 	// start directory. It is set by the global --allow-ancestor-search flag.
 	AllowAncestorSearch bool
@@ -62,6 +67,11 @@ type RunContext struct {
 	// `apply`. It restricts execution to managed file writes and skips
 	// environment prerequisites, so re-running a project is safe.
 	Update bool
+
+	// NewProject marks the initial `new` run. If it is interrupted before
+	// commit, recovery removes the bootstrap project directory as well as the
+	// transaction's tracked files.
+	NewProject bool
 }
 
 // A struct to hold all proposed manifest changes
@@ -72,6 +82,14 @@ type manifestChanges struct {
 
 // RunApply orchestrates the template application process.
 func RunApply(rc RunContext, reporter types.Reporter) error {
+	return withRootLock(rc, func() error {
+		return runApply(rc, reporter)
+	})
+}
+
+// runApply is RunApply without the root lock so RunUpdate can share one lock
+// across its manifest load and the nested apply.
+func runApply(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
 	// 1. Root Discovery & Manifest Load
@@ -83,7 +101,14 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	}
 
 	// 2. Initialize Transaction Engine
-	tx, cleanupTx, err := setupTransaction(rootPath, rc.DryRun)
+	if rc.DryRun {
+		// A dry run opens no transaction, but it must not plan against a tree
+		// left half-written by an interrupted run.
+		if err := transaction.CheckPending(rootPath); err != nil {
+			return err
+		}
+	}
+	tx, cleanupTx, err := setupTransaction(rootPath, rc.DryRun, rc.NewProject)
 	if err != nil {
 		return err
 	}
@@ -122,6 +147,14 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 // already-generated project. It is `apply` driven by the manifest instead of by
 // flags, which is what makes it idempotent and non-interactive.
 func RunUpdate(rc RunContext, reporter types.Reporter) error {
+	return withRootLock(rc, func() error {
+		return runUpdate(rc, reporter)
+	})
+}
+
+// runUpdate is RunUpdate without the root lock; it calls runApply so the
+// update's initial manifest load and the apply run under the same lock.
+func runUpdate(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
 	m, rootPath, err := manifest.LoadWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
@@ -144,7 +177,37 @@ func RunUpdate(rc RunContext, reporter types.Reporter) error {
 	rc.ManifestPathArg = relPath
 	rc.Update = true
 
-	return RunApply(rc, reporter)
+	return runApply(rc, reporter)
+}
+
+// withRootLock serializes mutating runs against the same project root. Only
+// `new` may create a missing root; apply/update must fail before creating an
+// empty directory. Dry runs stay lock-free so they can inspect a project while
+// another process writes; their existing pending-transaction check remains the
+// consistency guard. The deferred release is registered before runApply/runUpdate
+// defer their rollback, so commit or rollback finishes before the lock is
+// released.
+func withRootLock(rc RunContext, fn func() error) error {
+	if rc.DryRun {
+		return fn()
+	}
+
+	root, err := manifest.FindProjectRootWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
+		AllowAncestorSearch: rc.AllowAncestorSearch,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to find project root: %w", err)
+	}
+
+	lock, err := transaction.AcquireRootLock(root, rc.NewProject)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = lock.Release()
+	}()
+
+	return fn()
 }
 
 // resolveUpdateSelection derives the language and tooling templates that were
@@ -193,12 +256,14 @@ func managedWriteTasks(plan []types.Task) []types.Task {
 // Handled errors and panics on the main goroutine trigger rollback of tracked changes; external
 // command side effects may remain, and crashes bypass deferred cleanup.
 // Calling tx.Commit() explicitly at the end disables the rollback safety net.
-func setupTransaction(rootPath string, dryRun bool) (*transaction.Manager, func(), error) {
+func setupTransaction(rootPath string, dryRun, removeRootOnRecovery bool) (*transaction.Manager, func(), error) {
 	if dryRun {
 		return nil, func() {}, nil
 	}
 
-	tx, err := transaction.New(rootPath)
+	tx, err := transaction.NewWithOptions(rootPath, transaction.Options{
+		RemoveRootOnRecovery: removeRootOnRecovery,
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize transaction manager: %w", err)
 	}
@@ -213,6 +278,17 @@ func setupTransaction(rootPath string, dryRun bool) (*transaction.Manager, func(
 		}
 	}
 	return tx, cleanup, nil
+}
+
+// taskContextWithTimeout derives the per-run timeout from the caller's signal
+// context. A nil RunContext.Ctx means a background context, preserving the
+// library behavior for callers that do not supply one.
+func taskContextWithTimeout(rc RunContext) (context.Context, context.CancelFunc) {
+	parent := rc.Ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, defaultTimeout)
 }
 
 // buildTaskContext constructs future manifest state and validates template schemas against metadata.
@@ -256,8 +332,10 @@ func buildTaskContext(
 		return types.TaskContext{}, nil, err
 	}
 
-	// Prepare task context with default timeout
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	// Prepare task context with default timeout, derived from the caller's
+	// context so SIGINT/SIGTERM cancellation reaches exec.CommandContext and
+	// the executor's cancellation checks.
+	ctx, cancel := taskContextWithTimeout(rc)
 	tc := types.TaskContext{
 		Ctx:              ctx,
 		DryRun:           rc.DryRun,
@@ -284,18 +362,36 @@ func executeAndFinalize(
 	tx *transaction.Manager,
 ) error {
 	reporter.Step("🚀", "Executing plan...")
-	if err := Execute(plan, tc, reporter); err != nil {
+	// Persist the manifest before the version-control band so the initial Git
+	// commit captures the final manifest instead of leaving the repository
+	// dirty. Version-control tasks are explicitly last, so nothing after them
+	// changes tracked files.
+	if err := executePlan(plan, tc, reporter, int(types.PrioVersionControl), func() error {
+		// A signal can arrive after the last task returns. Do not persist or
+		// commit a run that was canceled while it still had work left.
+		if err := contextError(tc.Ctx); err != nil {
+			return fmt.Errorf("execution interrupted before updating manifest: %w", err)
+		}
+
+		reporter.Step("✍️", "Updating manifest...")
+		return persistManifestState(m, tc, changes, rootPath, tx)
+	}); err != nil {
 		return err
 	}
 
-	reporter.Step("✍️", "Updating manifest...")
-	if err := persistManifestState(m, tc, changes, rootPath, tx); err != nil {
-		return err
+	if err := contextError(tc.Ctx); err != nil {
+		return fmt.Errorf("execution interrupted before commit: %w", err)
 	}
 
 	reporter.Step("✅", "Committing transaction...")
 	// Point of No Return: We delete the backups.
 	if err := tx.Commit(); err != nil {
+		if errors.Is(err, transaction.ErrCommitted) {
+			// The committed record is durable. A cleanup failure cannot undo
+			// the scaffold, so report it without failing the command.
+			fmt.Fprintf(os.Stderr, "⚠️  Transaction committed with warning: %v\n", err)
+			return nil
+		}
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -314,25 +410,8 @@ func persistManifestState(
 		return err
 	}
 
-	// Persist metadata
-	if tc.Manifest.Metadata != nil {
-		if m.Metadata == nil {
-			m.Metadata = make(map[string]string)
-		}
-		for k, v := range tc.Manifest.Metadata {
-			m.Metadata[k] = v
-		}
-	}
-
-	// Persist managed files state
-	if tc.Manifest.ManagedFiles != nil {
-		if m.ManagedFiles == nil {
-			m.ManagedFiles = make(map[string]string)
-		}
-		for k, v := range tc.Manifest.ManagedFiles {
-			m.ManagedFiles[k] = v
-		}
-	}
+	persistManifestMetadata(m, tc)
+	persistManagedFiles(m, tc)
 
 	// We track the manifest file itself before saving.
 	// This ensures that if the Save succeeds but a subsequent step crashes (unlikely),
@@ -345,7 +424,45 @@ func persistManifestState(
 	if err := manifest.Save(m, rootPath); err != nil {
 		return fmt.Errorf("manifest save failed: %w", err)
 	}
+
+	snapshotManifestContent(tx, manifestPath)
 	return nil
+}
+
+// persistManifestMetadata copies the context's metadata into the manifest.
+func persistManifestMetadata(m *types.Manifest, tc types.TaskContext) {
+	if tc.Manifest.Metadata == nil {
+		return
+	}
+	if m.Metadata == nil {
+		m.Metadata = make(map[string]string)
+	}
+	for k, v := range tc.Manifest.Metadata {
+		m.Metadata[k] = v
+	}
+}
+
+// persistManagedFiles copies the context's managed-file state into the
+// manifest.
+func persistManagedFiles(m *types.Manifest, tc types.TaskContext) {
+	if tc.Manifest.ManagedFiles == nil {
+		return
+	}
+	if m.ManagedFiles == nil {
+		m.ManagedFiles = make(map[string]string)
+	}
+	for k, v := range tc.Manifest.ManagedFiles {
+		m.ManagedFiles[k] = v
+	}
+}
+
+// snapshotManifestContent records a newly created manifest's bytes so rollback
+// removes it only when they are unchanged. Best-effort: a failure keeps the
+// manifest on rollback rather than risking unverified content.
+func snapshotManifestContent(tx *transaction.Manager, manifestPath string) {
+	if err := tx.SnapshotCreatedContent(manifestPath); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Could not snapshot manifest content for rollback: %v\n", err)
+	}
 }
 
 // updateManifest merges new projects and templates into the existing manifest
@@ -669,15 +786,17 @@ func buildPlan(rc RunContext, rootPath string) (*types.Plan, string, *manifestCh
 	return plan, commitMessage, changes, nil
 }
 
-// checkLangPrerequisites validates that required binaries are available for the language.
-func checkLangPrerequisites(langFlag string) error {
+// CheckLangPrerequisites validates that required binaries are available for the language.
+func CheckLangPrerequisites(langFlag string) error {
 	switch langFlag {
 	case "go":
 		return preflight.CheckBinaries("go")
 	case "svelte":
 		return preflight.CheckBinaries("npm")
 	case "spring":
-		return preflight.CheckBinaries("curl", "unzip", "java")
+		// Scaffolding only downloads and unpacks the starter archive. Java is
+		// needed later to build the generated project, not to create it.
+		return preflight.CheckBinaries("curl", "unzip")
 	}
 	return nil
 }
@@ -685,10 +804,13 @@ func checkLangPrerequisites(langFlag string) error {
 // handleLangFlag processes the --lang flag, adding language tasks and project info.
 func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *manifestChanges) (string, error) {
 	// `update` only writes managed files, so language toolchains (go, npm,
-	// java) need not be installed.
+	// java) need not be installed. A dry run only warns, so the plan still prints.
 	if !rc.Update {
-		if err := checkLangPrerequisites(rc.LangFlag); err != nil {
-			return "", err
+		if err := CheckLangPrerequisites(rc.LangFlag); err != nil {
+			if !rc.DryRun {
+				return "", err
+			}
+			fmt.Fprintf(os.Stderr, "⚠️  %v\n", err)
 		}
 	}
 

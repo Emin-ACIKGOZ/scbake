@@ -4,6 +4,147 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.11.2] - 2026-11-08
+
+### Bug Fixes
+
+- **transaction:** Retry pruned state dir instead of missing root
+
+### Documentation
+
+- Correct rollback verification wording
+
+## [0.11.1] - 2026-11-08
+
+### Bug Fixes
+
+- **transaction:** Verify created paths before rollback
+
+## [0.11.0] - 2026-11-08
+
+### Documentation
+
+- Clarify rollback scope for dependency trees
+
+### Features
+
+- **drift:** Report missing or invalid committed bases
+
+## [0.10.1] - 2026-11-08
+
+### Bug Fixes
+
+- **transaction:** Recreate pruned lock state directory
+
+## [0.10.0] - 2026-11-08
+
+### Bug Fixes
+
+- **tasks:** Store merge base under .scbake-base
+
+## [0.9.17] - 2026-11-08
+
+### Bug Fixes
+
+- **transaction:** Serialize runs with a per-root lock
+
+## [0.9.16] - 2026-11-08
+
+### Bug Fixes
+
+- **tasks:** Track external command side effects
+
+## [0.9.15] - 2026-11-07
+
+### Bug Fixes
+
+- **tasks:** Reject stale merge base shadows
+
+## [0.9.14] - 2026-11-07
+
+### Bug Fixes
+
+- **transaction:** Make the commit point an atomic marker
+
+## [0.9.13] - 2026-11-06
+
+### Bug Fixes
+
+- **manifest:** Stop recording Go defaults for non-Go projects
+
+## [0.9.12] - 2026-11-06
+
+### Bug Fixes
+
+- **tasks:** Ignore scbake state in every generated project
+
+## [0.9.11] - 2026-11-06
+
+### Bug Fixes
+
+- **cmd:** Fail drift when no manifest exists
+
+## [0.9.10] - 2026-11-06
+
+### Bug Fixes
+
+- **templates:** Emit valid devcontainer and dependabot files
+
+## [0.9.9] - 2026-11-06
+
+### Bug Fixes
+
+- **templates:** Use golangci-lint v2 configuration schema
+
+### Documentation
+
+- **lang:** Correct rust handler template field access
+
+## [0.9.8] - 2026-11-06
+
+### Bug Fixes
+
+- **core:** Stop requiring java for spring scaffolding
+
+## [0.9.7] - 2026-11-06
+
+### Bug Fixes
+
+- **transaction:** Recover interrupted runs on signals and crashes
+- **transaction:** Close the journal after each append
+- **core:** Persist the manifest before version-control tasks
+- **git:** Keep transaction state out of the initial commit
+- **git:** Use a glob exclude for transaction state
+- **transaction:** Keep committed runs committed after close error
+- **recover:** Honor cancellation and signal exit status
+- **transaction:** Keep backups after durable record close errors
+- **core:** Keep committed projects after journal close errors
+- **transaction:** Retain the recovery journal until root removal
+- **transaction:** Resolve recovery roots canonically
+- **git:** Ignore transaction state in the worktree
+- **git:** Create info directory before writing exclude
+
+### Documentation
+
+- **git:** Clarify exclude path lifecycle
+
+### Refactor
+
+- **recover:** Drop redundant dry-run root canonicalization
+
+### Testing
+
+- **cmd:** Make rollback test platform-neutral
+- **cmd:** Use discovered root path in rollback test
+- **transaction:** Verify rollback restores backups on signal
+- **core:** Remove unused nolint directive
+
+## [0.9.6] - 2026-11-06
+
+### Bug Fixes
+
+- **cli:** Check language toolchain before creating the project directory (#155)
+
 ## [0.9.5] - 2026-11-06
 
 ### Bug Fixes

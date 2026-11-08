@@ -122,7 +122,7 @@ Use --registry to specify which registry to pull from.
 Authentication uses the stored token or the SCBAKE_REGISTRY_TOKEN_<NAME> env var.
 The template is then available as an override for scbake new/apply.`,
 	Args: cobra.ExactArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		templateName := args[0]
 		if err := templateregistry.ValidateName(templateName); err != nil {
 			return fmt.Errorf("invalid template name: %w", err)
@@ -139,7 +139,7 @@ The template is then available as an override for scbake new/apply.`,
 		}
 
 		if pullRegistryName != "" {
-			if err := m.Pull(pullRegistryName, templateName); err != nil {
+			if err := m.PullContext(cmd.Context(), pullRegistryName, templateName); err != nil {
 				return fmt.Errorf("pulling template %q from registry %q: %w", templateName, pullRegistryName, err)
 			}
 			fmt.Printf("Pulled template %q from registry %q\n", templateName, pullRegistryName)
@@ -150,7 +150,7 @@ The template is then available as an override for scbake new/apply.`,
 			}
 			var lastErr error
 			for _, r := range registries {
-				if err := m.Pull(r.Name, templateName); err != nil {
+				if err := m.PullContext(cmd.Context(), r.Name, templateName); err != nil {
 					lastErr = err
 					continue
 				}

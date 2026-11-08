@@ -97,11 +97,12 @@ func initializationTasks(targetPath string, langSeq *types.PrioritySequence) ([]
 		return nil, err
 	}
 	plan = append(plan, &tasks.ExecCommandTask{
-		Cmd:         "curl",
-		Args:        []string{"-f", "-sS", "-o", zipFile, zipURL},
-		Desc:        fmt.Sprintf("Download Spring Boot starter for '%s'", projectName),
-		TaskPrio:    int(p), // Now 100
-		RunInTarget: true,
+		Cmd:              "curl",
+		Args:             []string{"-f", "-sS", "-o", zipFile, zipURL},
+		Desc:             fmt.Sprintf("Download Spring Boot starter for '%s'", projectName),
+		TaskPrio:         int(p), // Now 100
+		PredictedCreated: []string{zipFile},
+		RunInTarget:      true,
 	})
 
 	// Task 2: Extract the zip, preserving directory structure
@@ -118,6 +119,7 @@ func initializationTasks(targetPath string, langSeq *types.PrioritySequence) ([]
 		},
 		Desc:        "Extract project files",
 		TaskPrio:    int(p), // Now 101
+		ArchivePath: zipFile,
 		RunInTarget: true,
 	})
 
@@ -140,11 +142,12 @@ func initializationTasks(targetPath string, langSeq *types.PrioritySequence) ([]
 		return nil, err
 	}
 	plan = append(plan, &tasks.ExecCommandTask{
-		Cmd:         "chmod",
-		Args:        []string{"+x", "mvnw"},
-		Desc:        "Make Maven wrapper executable",
-		TaskPrio:    int(p), // Now 103
-		RunInTarget: true,
+		Cmd:              "chmod",
+		Args:             []string{"+x", "mvnw"},
+		Desc:             "Make Maven wrapper executable",
+		TaskPrio:         int(p), // Now 103
+		PredictedCreated: []string{"mvnw"},
+		RunInTarget:      true,
 	})
 
 	return plan, nil

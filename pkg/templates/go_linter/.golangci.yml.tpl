@@ -1,7 +1,7 @@
 # .golangci.yml - Standardized Go Linter Configuration
 
-# Using modern config format (Version 2+)
-Version: 2
+# golangci-lint v2 configuration schema.
+version: "2"
 
 run:
   # Default timeout for linter
@@ -9,13 +9,9 @@ run:
   # Include test files
   tests: true
 
-output:
-  format: colored-line-number
-  print-issued-lines: true
-  print-linter-name: true
-
 linters:
-  disable-all: true
+  # Start from no linters and enable only the set below.
+  default: none
   enable:
     ## Core & Bugs
     - errcheck      # Checking for unchecked errors
@@ -35,6 +31,12 @@ linters:
     - gosec         # Inspects source code for security problems
 
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-issued-lines: true
+      print-linter-name: true

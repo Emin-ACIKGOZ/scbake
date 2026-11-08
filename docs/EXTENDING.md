@@ -186,6 +186,11 @@ plan = append(plan, &tasks.ExecCommandTask{
 **Important fields**:
 - `RunInTarget: true` - Run in the project directory (not scbake's directory)
 - `Cmd` and `Args` - The command to execute (no shell interpretation, so it's safe)
+- `PredictedCreated` - Files or directories this command may create or modify. Missing regular files are snapshotted after the command and removed on rollback only when their bytes still match. Existing regular files are restored with their content and mode. A missing directory is removed on rollback only when empty, so a directory populated by the command is kept as residue; declare individual files rather than a parent directory. Existing directories are not snapshotted.
+- `ArchivePath` - Optional zip archive whose entries, and any missing ancestor directories, are tracked before extraction.
+
+Commands that write outside declared paths, pre-existing dependency trees such
+as `node_modules`, and tool caches remain outside the transaction.
 
 ### 3. **CreateDirTask** - Create directories
 
@@ -450,7 +455,7 @@ cat scbake.toml  # Check that your handler is registered
 
 ### 3. **Test rollback**
 
-If your handler fails partway through (e.g., a command not found), scbake should roll back all changes:
+If your handler fails partway through (e.g., a command not found), scbake should roll back all tracked changes:
 
 ```bash
 # Create a handler that fails intentionally
@@ -600,7 +605,7 @@ if err != nil {
 }
 ```
 
-scbake will catch this and roll back all changes.
+scbake will catch this and roll back all tracked changes.
 
 ### 5. **Embed template files**
 

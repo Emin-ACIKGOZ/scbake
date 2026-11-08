@@ -10,7 +10,7 @@ help:
 	@echo "Available commands (Targets dynamically generated from scbake.toml):"
 	@echo "------------------------------------------------------------------"
 	@echo "  build         : Builds all tracked projects."
-	@echo "  test          : Runs tests using configured test command."
+	@echo "  test          : Runs per-project language tests, or test_command override; skips unsupported/no-project cases."
 	@echo "  clean         : Cleans all tracked projects."
 	@echo "  lint          : Runs linting/formatting on all tracked projects."
 	@echo "  lint-fix      : Runs linting/formatting with auto-fix on all tracked projects."
@@ -29,8 +29,17 @@ test:
 	@echo "Running tests..."
 	{{- if index .Metadata "test_command" }}
 	{{ index .Metadata "test_command" }}
+	{{- else if .Projects }}
+	{{- range .Projects }}
+	{{- if or (eq .Language "go") (eq .Language "svelte") (eq .Language "spring") }}
+	@echo {{ printf "Testing %s (%s)..." .Name .Language | quote }}
+	(cd {{.Path}} && $(MAKE_TEST_COMMAND_{{.Language}}))
 	{{- else }}
-	go test ./...
+	@echo {{ printf "No test command configured for %s (%s); skipping." .Name .Language | quote }}
+	{{- end }}
+	{{- end }}
+	{{- else }}
+	@echo "No projects configured; nothing to test."
 	{{- end }}
 
 # --- Main Clean Target ---
@@ -56,6 +65,7 @@ lint-fix:
 	@echo {{ printf "Fixing %s..." .Name | quote }}
 	(cd {{.Path}} && $(MAKE_LINT_FIX_COMMAND_{{.Language}}))
 {{- end }}
+{{- if .Projects }}
 
 # -----------------------------------------------------------
 #  Language Specific Command Definitions (Internal Use)
@@ -65,17 +75,22 @@ lint-fix:
 # FIX: Corrected LINT and LINT_FIX commands to use 'run' and include './...'
 MAKE_BUILD_COMMAND_go := go build -v .
 MAKE_CLEAN_COMMAND_go := go clean
+MAKE_TEST_COMMAND_go := go test ./...
 MAKE_LINT_COMMAND_go := golangci-lint run ./...
 MAKE_LINT_FIX_COMMAND_go := golangci-lint run --fix --timeout=5m ./...
 
 # Svelte/Node Commands (Uses ESLint/Prettier setup assumed to be present)
 MAKE_BUILD_COMMAND_svelte := npm run build
 MAKE_CLEAN_COMMAND_svelte := rm -rf dist node_modules
+# create-vite does not install a test script; --if-present keeps make test green without one.
+MAKE_TEST_COMMAND_svelte := npm test --if-present
 MAKE_LINT_COMMAND_svelte := npm run lint
 MAKE_LINT_FIX_COMMAND_svelte := npm run lint -- --fix
 
 # Spring/Java Commands (Uses Maven Checkstyle plugin, assumed to be present)
 MAKE_BUILD_COMMAND_spring := ./mvnw clean package -DskipTests
 MAKE_CLEAN_COMMAND_spring := ./mvnw clean
+MAKE_TEST_COMMAND_spring := ./mvnw test
 MAKE_LINT_COMMAND_spring := ./mvnw checkstyle:check
 MAKE_LINT_FIX_COMMAND_spring := echo "Fix command not applicable for Maven Checkstyle"
+{{- end }}

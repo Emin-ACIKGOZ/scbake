@@ -20,7 +20,7 @@ func TestSchemaValidation_New(t *testing.T) {
 
 	// The makefile template has optional variables only, so it should succeed
 	t.Run("OptionalVarsOnly_Succeeds", func(t *testing.T) {
-		// Even without --set, optional vars with defaults should work
+		// Even without --set, optional vars without defaults should be accepted
 		output, err := runCLI("new", "proj-opt", "--with", "makefile")
 		if err != nil {
 			t.Fatalf("expected success, got error: %v\nOutput: %s", err, output)

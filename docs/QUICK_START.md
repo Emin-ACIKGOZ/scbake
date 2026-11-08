@@ -59,8 +59,8 @@ cat scbake.toml
 > **Non-Git monorepos:** root discovery is bounded by the nearest Git root by
 > default, so a central manifest in a tree without `.git` needs
 > `--allow-ancestor-search` when applying to a subproject. `update`, `drift`, and
-> `list` also need the flag; without it, `drift` evaluates the local (possibly
-> absent) manifest and can report no drift. Run
+> `list` also need the flag; without it, `drift` finds no local manifest and
+> fails instead of evaluating the central one. Run
 > `scbake new <root-name> --with git` (or `git init`) to avoid the flag.
 
 If something goes wrong:
@@ -103,8 +103,10 @@ git log  # Already has initial commit!
 | Language | Use case | Requires |
 |----------|----------|----------|
 | **go** | Backend, CLI, services | `go` binary |
-| **spring** | Java backends, services | `curl`, `unzip`, `java` |
+| **spring** | Java backends, services | `curl`, `unzip` |
 | **svelte** | Frontends, web apps | `npm` |
+
+**Note:** Spring scaffolding only requires `curl` and `unzip`. Java is required later to build the generated project, not to create it.
 
 ## Available Templates
 
@@ -158,7 +160,7 @@ TL;DR:
 - Use `--force` to overwrite
 
 **"Transaction rollback"**
-- If a task fails, scbake automatically rolls back all changes
+- If a task fails, scbake rolls back tracked project-file changes. Tool-managed dependency trees such as `node_modules` may be left partially updated; delete and reinstall from the lockfile if needed.
 - Fix the issue and try again
 
 ## Next Steps
