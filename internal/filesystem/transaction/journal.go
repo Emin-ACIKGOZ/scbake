@@ -599,11 +599,28 @@ func RecoverContext(ctx context.Context, rootPath string, discard bool) (int, er
 		return 0, fmt.Errorf("failed to resolve root path: %w", err)
 	}
 
+	// A clean project has no transaction state. Return before acquiring the
+	// lock so `recover` does not create .scbake just to inspect it.
+	if _, ok := resolvedTmpDir(absRoot); !ok {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+
+	lock, err := AcquireRootLock(absRoot)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = lock.Release()
+	}()
+
 	if discard {
 		return discardTransactions(ctx, absRoot)
 	}
 
-	return recoverPendingTransactions(ctx, absRoot)
+	return recoverPendingTransactions(ctx, absRoot, lock.Release)
 }
 
 // CanonicalRoot returns rootPath as an absolute, symlink-resolved path so
@@ -627,8 +644,9 @@ func CanonicalRoot(rootPath string) (string, error) {
 }
 
 // recoverPendingTransactions refuses live transactions, then recovers each dead
-// one while checking the context between directories.
-func recoverPendingTransactions(ctx context.Context, rootPath string) (int, error) {
+// one while checking the context between directories. release is called before
+// the staged bootstrap root is deleted so Windows can remove the lock file.
+func recoverPendingTransactions(ctx context.Context, rootPath string, release func() error) (int, error) {
 	pending, err := ListPendingContext(ctx, rootPath)
 	if err != nil {
 		return 0, err
@@ -649,7 +667,7 @@ func recoverPendingTransactions(ctx context.Context, rootPath string) (int, erro
 		if err := ctx.Err(); err != nil {
 			return recovered, err
 		}
-		if err := recoverTransaction(ctx, rootPath, p.Dir); err != nil {
+		if err := recoverTransaction(ctx, rootPath, p.Dir, release); err != nil {
 			return recovered, err
 		}
 		recovered++
@@ -705,7 +723,7 @@ func refuseLiveTransactions(ctx context.Context, dirs []string) error {
 
 // recoverTransaction replays the journal in reverse, then removes the
 // transaction directory.
-func recoverTransaction(ctx context.Context, rootPath, dir string) error {
+func recoverTransaction(ctx context.Context, rootPath, dir string, release func() error) error {
 	journal, err := readRecoveryJournal(ctx, dir)
 	if err != nil {
 		return err
@@ -727,7 +745,7 @@ func recoverTransaction(ctx context.Context, rootPath, dir string) error {
 		if err := manager.rollbackChanges(ctx); err != nil {
 			return fmt.Errorf("failed to recover transaction %s: %w", dir, err)
 		}
-		return removeBootstrappedRoot(context.WithoutCancel(ctx), rootPath)
+		return removeBootstrappedRoot(context.WithoutCancel(ctx), rootPath, release)
 	}
 	if err := manager.RollbackContext(ctx); err != nil {
 		return fmt.Errorf("failed to recover transaction %s: %w", dir, err)
@@ -775,8 +793,9 @@ var renameRootForRemoval = os.Rename
 // `new`. It first renames the root into a sibling staging directory. The rename
 // is atomic: if it fails, the original root and its transaction journal are
 // untouched, so recovery can be retried. Once the rename succeeds the original
-// root path is gone and the staged tree is deleted.
-func removeBootstrappedRoot(ctx context.Context, rootPath string) error {
+// root path is gone, so release is called before the staged tree is deleted;
+// this lets Windows remove the still-open lock file with the rest of the tree.
+func removeBootstrappedRoot(ctx context.Context, rootPath string, release func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -790,8 +809,16 @@ func removeBootstrappedRoot(ctx context.Context, rootPath string) error {
 		_ = os.Remove(staging)
 		return fmt.Errorf("failed to remove bootstrapped project root %s: %w", rootPath, err)
 	}
+
+	var releaseErr error
+	if release != nil {
+		releaseErr = release()
+	}
 	if err := os.RemoveAll(staging); err != nil {
-		return fmt.Errorf("removed bootstrapped project root %s but failed to clean staging directory %s: %w", rootPath, staging, err)
+		return errors.Join(releaseErr, fmt.Errorf("removed bootstrapped project root %s but failed to clean staging directory %s: %w", rootPath, staging, err))
+	}
+	if releaseErr != nil {
+		return fmt.Errorf("removed bootstrapped project root %s but failed to release its lock: %w", rootPath, releaseErr)
 	}
 	return nil
 }

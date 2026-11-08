@@ -82,6 +82,14 @@ type manifestChanges struct {
 
 // RunApply orchestrates the template application process.
 func RunApply(rc RunContext, reporter types.Reporter) error {
+	return withRootLock(rc, func() error {
+		return runApply(rc, reporter)
+	})
+}
+
+// runApply is RunApply without the root lock so RunUpdate can share one lock
+// across its manifest load and the nested apply.
+func runApply(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
 	// 1. Root Discovery & Manifest Load
@@ -139,6 +147,14 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 // already-generated project. It is `apply` driven by the manifest instead of by
 // flags, which is what makes it idempotent and non-interactive.
 func RunUpdate(rc RunContext, reporter types.Reporter) error {
+	return withRootLock(rc, func() error {
+		return runUpdate(rc, reporter)
+	})
+}
+
+// runUpdate is RunUpdate without the root lock; it calls runApply so the
+// update's initial manifest load and the apply run under the same lock.
+func runUpdate(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
 	m, rootPath, err := manifest.LoadWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
@@ -161,7 +177,35 @@ func RunUpdate(rc RunContext, reporter types.Reporter) error {
 	rc.ManifestPathArg = relPath
 	rc.Update = true
 
-	return RunApply(rc, reporter)
+	return runApply(rc, reporter)
+}
+
+// withRootLock serializes mutating runs against the same project root. Dry runs
+// stay lock-free so they can inspect a project while another process writes;
+// their existing pending-transaction check remains the consistency guard. The
+// deferred release is registered before runApply/runUpdate defer their rollback,
+// so commit or rollback finishes before the lock is released.
+func withRootLock(rc RunContext, fn func() error) error {
+	if rc.DryRun {
+		return fn()
+	}
+
+	root, err := manifest.FindProjectRootWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
+		AllowAncestorSearch: rc.AllowAncestorSearch,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to find project root: %w", err)
+	}
+
+	lock, err := transaction.AcquireRootLock(root)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = lock.Release()
+	}()
+
+	return fn()
 }
 
 // resolveUpdateSelection derives the language and tooling templates that were

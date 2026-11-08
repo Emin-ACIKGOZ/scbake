@@ -5,9 +5,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"scbake/internal/core"
+	"scbake/internal/filesystem/transaction"
 	"scbake/internal/templateregistry"
 	"scbake/internal/types"
 	"scbake/internal/ui"
@@ -43,8 +45,10 @@ var newCmd = &cobra.Command{
 		dirCreated := false
 
 		if err := runNew(cmd.Context(), projectName, &dirCreated); err != nil {
-			// Cleanup: Only remove the directory if it was created during this session.
-			if dirCreated {
+			// Cleanup: Only remove the directory if it was created during this
+			// session. Never remove it when another process won the root lock
+			// and is now working inside it.
+			if dirCreated && !errors.Is(err, transaction.ErrBusy) {
 				fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
 				_ = os.RemoveAll(projectName)
 			}
