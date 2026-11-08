@@ -472,8 +472,9 @@ func trackBaseAncestors(tc types.TaskContext, absPath string) error {
 		}
 		missing = append(missing, dir)
 	}
-	// Register shallowest-first so reverse-order rollback removes the deepest
-	// first; RemoveAll on .scbake-base is safe and leaves the root intact.
+	// Register shallowest-first so rollback removes the deepest created
+	// directory first, and only when empty; the project root is never
+	// registered.
 	for i := len(missing) - 1; i >= 0; i-- {
 		if err := tc.Tx.Track(missing[i]); err != nil {
 			return fmt.Errorf("failed to track base shadow ancestor %s: %w", missing[i], err)

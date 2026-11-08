@@ -14,7 +14,7 @@ import (
 )
 
 // Rollback undoes all tracked changes.
-// 1. Deletes created files/directories (LIFO order).
+// 1. Deletes verified created files and empty created directories deepest-first.
 // 2. Restores backed-up files (overwriting current state).
 // 3. Deletes the temp directory and structural scaffolding.
 //

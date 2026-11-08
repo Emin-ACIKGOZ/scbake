@@ -13,7 +13,7 @@ project with best-effort rollback**, driven by a manifest (`scbake.toml`) as the
 Core does one thing well:
 
 1. **Plan** — turn a manifest plus flags into an ordered list of tasks.
-2. **Execute** — run those tasks with a transaction that deletes created paths in reverse order and restores backups on failure.
+2. **Execute** — run those tasks with a transaction that restores backups on failure and deletes created regular files only when recorded content still matches, plus created directories deepest-first only when empty.
 3. **Extend** — dispatch to handlers (language packs and tooling templates) through a
    small, stable interface.
 4. **Distribute** — resolve templates through the override → registry → embedded chain,

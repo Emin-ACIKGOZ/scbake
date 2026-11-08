@@ -51,7 +51,7 @@ type Manager struct {
 	backups map[string]backupEntry
 
 	// created tracks absolute paths of files/dirs created during the transaction.
-	// They are stored in order of creation (append-only) for LIFO deletion.
+	// They are stored in creation order; rollback reorders them deepest-first.
 	created []string
 
 	// createdSet mirrors created for O(1) membership tests in alreadyTracked.
