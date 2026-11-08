@@ -39,46 +39,78 @@ type RootLock struct {
 // one at the same path; the post-acquire SameFile check discards a handle whose
 // path no longer names it and retries.
 func AcquireRootLock(root string) (*RootLock, error) {
+	paths, err := resolveRootLockPaths(root)
+	if err != nil {
+		return nil, err
+	}
+
+	for attempt := 0; attempt < maxRootLockAttempts; attempt++ {
+		lock, retry, err := tryAcquireRootLock(paths)
+		if err != nil {
+			return nil, err
+		}
+		if !retry {
+			return lock, nil
+		}
+	}
+	return nil, fmt.Errorf("failed to acquire project lock %s: lock path kept changing", paths.lockPath)
+}
+
+// rootLockPaths holds the canonical root and its lock locations.
+type rootLockPaths struct {
+	root     string
+	stateDir string
+	lockPath string
+}
+
+// resolveRootLockPaths canonicalizes the root and validates both lock paths.
+func resolveRootLockPaths(root string) (rootLockPaths, error) {
 	absRoot, err := CanonicalRoot(root)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve root path: %w", err)
+		return rootLockPaths{}, fmt.Errorf("failed to resolve root path: %w", err)
 	}
 	stateDir := filepath.Join(absRoot, fileutil.InternalDir)
 	lockPath := filepath.Join(stateDir, fileutil.LockFileName)
 	if _, err := fileutil.SafePath(absRoot, stateDir); err != nil {
-		return nil, fmt.Errorf("invalid lock directory: %w", err)
+		return rootLockPaths{}, fmt.Errorf("invalid lock directory: %w", err)
 	}
 	if _, err := fileutil.SafePath(absRoot, lockPath); err != nil {
-		return nil, fmt.Errorf("invalid lock path: %w", err)
+		return rootLockPaths{}, fmt.Errorf("invalid lock path: %w", err)
+	}
+	return rootLockPaths{root: absRoot, stateDir: stateDir, lockPath: lockPath}, nil
+}
+
+// tryAcquireRootLock makes one acquisition attempt. retry reports that .scbake
+// was pruned or the lock path was replaced, so the caller should reopen it.
+func tryAcquireRootLock(paths rootLockPaths) (lock *RootLock, retry bool, err error) {
+	if err := os.MkdirAll(paths.stateDir, rootLockDirPerm); err != nil {
+		// A releasing process may have pruned .scbake; recreate and retry.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, true, nil
+		}
+		return nil, false, fmt.Errorf("failed to create lock directory %s: %w", paths.stateDir, err)
 	}
 
-	for attempt := 0; attempt < maxRootLockAttempts; attempt++ {
-		if err := os.MkdirAll(stateDir, rootLockDirPerm); err != nil {
-			// A releasing process may have pruned .scbake; recreate and retry.
-			if errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			return nil, fmt.Errorf("failed to create lock directory %s: %w", stateDir, err)
+	f, err := acquireLockFile(paths.root, paths.lockPath)
+	if err != nil {
+		if errors.Is(err, ErrBusy) {
+			return nil, false, fmt.Errorf("%w: %s", ErrBusy, paths.root)
 		}
-		f, err := acquireLockFile(absRoot, lockPath)
-		if err != nil {
-			if errors.Is(err, ErrBusy) {
-				return nil, fmt.Errorf("%w: %s", ErrBusy, absRoot)
-			}
-			// The same prune race can remove the directory before the open.
-			if errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			return nil, err
+		// The same prune race can remove the directory before the open.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, true, nil
 		}
-		if lockPathMatches(f, lockPath) {
-			return &RootLock{file: f, path: lockPath, root: absRoot}, nil
-		}
-		// The path was unlinked or replaced between open and lock: drop the
-		// stale handle and retry from open.
-		_ = closeLockFile(f)
+		return nil, false, err
 	}
-	return nil, fmt.Errorf("failed to acquire project lock %s: lock path kept changing", lockPath)
+
+	if lockPathMatches(f, paths.lockPath) {
+		return &RootLock{file: f, path: paths.lockPath, root: paths.root}, false, nil
+	}
+
+	// The path was unlinked or replaced between open and lock: drop the stale
+	// handle and retry from open.
+	_ = closeLockFile(f)
+	return nil, true, nil
 }
 
 // Release removes the lock file while the lock is still held, then unlocks and
