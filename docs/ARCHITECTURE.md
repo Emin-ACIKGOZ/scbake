@@ -294,7 +294,7 @@ scbake_version = "v0.3.0"
 | `[[projects]]` | One table per applied language pack. `path` is relative to the manifest root (`"."` for the root project). |
 | `[[templates]]` | One table per applied tooling template, recording its `name` and the `path` it was applied to. |
 | `[metadata]` | Inputs declared by template schemas (including defaults), values passed with `--set`, and `--license`/`--copyright-holder`. Omitted when empty. |
-| `[managed_files]` | SHA-256 of every template-rendered file scbake manages, keyed by path relative to the manifest root. Drives `update` and `drift`. Omitted when empty. |
+| `[managed_files]` | SHA-256 of every template-rendered file scbake manages, EOL-insensitive for NUL-free content, keyed by path relative to the manifest root. Drives `update` and `drift`. Omitted when empty. |
 
 The hashes above are real values from the current embedded templates; they change
 whenever a rendered template changes. `[metadata]` and `[managed_files]` are omitted
@@ -395,19 +395,24 @@ contain:
 
 The directory and glob re-includes are both required under broad patterns such
 as `.*` or `*.out`; `!.gitignore` keeps the rules file itself stageable. The
-base must be staged from the manifest root (`git add .`), because a
-subdirectory add cannot reach a root-level directory. Inside `.scbake-base`,
+block must remain last: a later pattern such as `*` overrides the re-includes.
+Scbake appends missing lines but does not move an existing block, so a reordered
+file is only repaired by restoring the block order. The base must be staged from
+the manifest root (`git add .`), because a subdirectory add cannot reach a
+root-level directory. Inside `.scbake-base`,
 managed `.gitignore` and `.gitattributes` files are renamed to
 `.gitignore.scbake-shadow` and `.gitattributes.scbake-shadow` at every depth;
 otherwise Git would apply those copies to the base tree and hide or transform
 sibling payloads. Those suffixes are reserved names.
 
-`managed_files` records the hash of the pristine render, computed with CRLF
-normalized to LF for text. Content containing a NUL byte is hashed byte-exact,
-so binary payloads are unaffected. The base tree itself keeps the render
-byte-exact; normalization applies only to hashing and to the inputs of
-`merge.Merge`. Consequently EOL-only edits are not project content, and a
-legacy CRLF-recorded file can show one-time drift. A merged file is still
+`managed_files` records the hash of the pristine render. For NUL-free content,
+every run of CR bytes immediately before LF is folded to a single LF before
+hashing, so CRLF and LF hash identically and EOL-only edits are not drift. This
+also means NUL-free binary content containing CRLF is treated as text. NUL-bearing
+content is hashed byte-exact. The base tree itself keeps the render byte-exact;
+normalization applies only to hashing and to merge inputs. A legacy
+CRLF-recorded file can show one-time drift, but a migrated base is accepted by
+either its normalized hash or its raw legacy hash. A merged file is still
 recognized as locally modified on the next `apply` (SCB-056).
 
 The move from `.scbake/base/` to `.scbake-base/` is a breaking change with no
@@ -424,8 +429,10 @@ unverified; hash and merge-input normalization cover plain CRLF only.
 ### 6. Drift Detection
 
 `scbake drift` is the read-only projection of the same `managed_files` ledger
-that `update` writes. For every recorded key it hashes the working-tree file and
-classifies it `modified` (bytes differ), `missing` (absent), or clean. It opens
+that `update` writes. For every recorded key it hashes the working-tree file with
+the EOL-insensitive contract and classifies it `modified` (normalized hash
+differs), `missing` (absent), or clean. EOL-only changes to NUL-free content are
+therefore not drift. It opens
 no transaction, renders no template, and never touches the network, so it is
 safe as a CI gate; it exits non-zero when any finding remains. `--repair`
 delegates to `core.RunUpdate`, so detection and repair share one reconciliation

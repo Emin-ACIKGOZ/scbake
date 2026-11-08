@@ -506,6 +506,10 @@ const internalStateIgnoreEntry = ".scbake/"
 // under hostile directories. The last line keeps the rules file itself
 // stageable when the user's patterns include ".*" or "*" and .gitignore is not
 // tracked yet.
+//
+// Order matters: the re-includes must remain at the end of the file. A later
+// matching pattern such as "*" overrides them and can hide the base. The helper
+// appends missing lines but deliberately does not move an existing block.
 var committedBaseIgnoreEntries = []string{"!.scbake-base/", "!.scbake-base/**", "!.gitignore"}
 
 // ensureInternalStateIgnored guarantees that <root>/.gitignore ignores the

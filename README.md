@@ -239,6 +239,10 @@ and re-includes the committed base:
 !.gitignore
 ```
 
+Keep this block at the end of `.gitignore`: a later pattern such as `*`
+overrides the re-includes and can hide the base. Scbake appends missing lines but
+does not move an existing block, so check the order after editing `.gitignore`.
+
 Run `git add .` from the manifest root, not a subdirectory, so new base files
 are staged. Inside `.scbake-base`, a managed `.gitignore` or `.gitattributes` is
 stored as `.gitignore.scbake-shadow` or `.gitattributes.scbake-shadow` so Git
@@ -249,9 +253,13 @@ The base stores pristine rendered bytes, so it can duplicate ignored build
 outputs and any secret a template rendered. It also adds repository churn
 whenever generated content changes; review the committed tree before publishing.
 
-`managed_files` hashes are EOL-insensitive for text: CRLF and LF hash the same,
-while content containing a NUL byte is hashed byte-exact. A legacy file recorded
-while rendered as CRLF can report one-time drift after upgrading.
+`managed_files` hashes are EOL-insensitive for NUL-free content: every run of CR
+bytes immediately before LF is folded to one LF before hashing, so CRLF and LF
+hash the same. This also means NUL-free binary content containing CRLF is
+treated as text for hashing, and EOL-only edits are not drift. NUL-bearing
+content is hashed byte-exact. A legacy file recorded while rendered as CRLF can
+report one-time drift after upgrading, although a migrated base is accepted by
+either its normalized or its raw legacy hash.
 
 **Breaking change.** This release no longer reads the old `.scbake/base/` path.
 Migrate once by copying the base, renaming the two Git-special files, and
@@ -296,8 +304,10 @@ scbake drift [--repair] [--conflict-strategy <strategy>] [<path>]
 - **Detection is read-only.** No templates are rendered, no transaction is
   opened, and the network is never touched. Detection always scans every
   managed file recorded in the manifest, not just the `<path>` project.
-- **Modified vs. missing.** Each managed file is reported as `modified` (bytes
-  changed) or `missing` (deleted), with its recorded and on-disk hashes.
+- **Modified vs. missing.** Each managed file is reported as `modified` (its
+  normalized hash changed) or `missing` (deleted), with its recorded and
+  on-disk hashes. Hashes are EOL-insensitive for NUL-free content, so an
+  EOL-only change is not drift.
 - **Repair** (`--repair`) reuses the same reconciliation as `update`, so local
   edits are preserved according to `--conflict-strategy` (`merge` by default).
   Because `merge` preserves local edits, it does not clear drift; use
