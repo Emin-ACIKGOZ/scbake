@@ -122,6 +122,12 @@ created paths. This protects against process crashes; it is not a power-loss
 durability guarantee. External commands are tracked only when their outputs are
 predicted.
 
+Rollback covers declared project files and declared manifests, not tool-managed
+build state. `Track` backs up an existing regular file but treats an existing
+directory as a no-op, so a pre-existing dependency tree such as `node_modules`
+is not snapshotted; a failed install can add, update, or prune packages. Treat
+such trees as disposable and reinstall from the manifest and lockfile.
+
 **Per-root locking**: Before loading the manifest, `new`, `apply`, `update`,
 `drift --repair`, and `recover` acquire a non-blocking exclusive advisory lock
 on `<root>/.scbake/lock` and hold it through commit or rollback. The lock is
