@@ -189,8 +189,8 @@ plan = append(plan, &tasks.ExecCommandTask{
 - `PredictedCreated` - Files or directories this command may create or modify. Missing paths are removed on rollback, and existing regular files are restored with their content and mode. Existing directories are not snapshotted, so declare individual files rather than a parent directory.
 - `ArchivePath` - Optional zip archive whose entries, and any missing ancestor directories, are tracked before extraction.
 
-Commands that write outside declared paths, dependency trees such as
-`node_modules`, and tool caches remain outside the transaction.
+Commands that write outside declared paths, pre-existing dependency trees such
+as `node_modules`, and tool caches remain outside the transaction.
 
 ### 3. **CreateDirTask** - Create directories
 

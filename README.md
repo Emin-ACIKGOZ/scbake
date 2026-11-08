@@ -48,7 +48,7 @@ graph LR
   mode. Tracking an existing directory does not snapshot its contents. Zip
   extraction commands can also declare an archive whose entries are validated
   and tracked individually before extraction, including nested destinations and
-  missing ancestors. Rollback covers project files, authored manifests, and
+  missing ancestors. Rollback covers project files, declared manifests, and
   declared zip entries, not build state. Pre-existing dependency trees such as
   `node_modules`, `.git` internals, non-zip extraction, and writes outside
   declared paths remain outside the transaction; custom handlers must declare
