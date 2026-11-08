@@ -103,6 +103,9 @@ func TestAcquireRootLock_MissingRootPolicy(t *testing.T) {
 		if !errors.Is(err, fs.ErrNotExist) {
 			t.Fatalf("AcquireRootLock error = %v, want fs.ErrNotExist", err)
 		}
+		if !strings.Contains(err.Error(), "project root") {
+			t.Errorf("AcquireRootLock error = %v, want a missing-root message", err)
+		}
 		assertNotExist(t, root)
 	})
 
@@ -120,6 +123,40 @@ func TestAcquireRootLock_MissingRootPolicy(t *testing.T) {
 		}
 		assertNotExist(t, filepath.Join(root, fileutil.InternalDir))
 	})
+}
+
+// TestAcquireRootLock_PrunedStateDirDoesNotReportMissingRoot verifies that an
+// ENOENT from the post-Mkdir containment check is retried while the project
+// root exists. A dangling .scbake symlink deterministically produces the same
+// ENOENT shape as a concurrent prune between Lstat and EvalSymlinks.
+func TestAcquireRootLock_PrunedStateDirDoesNotReportMissingRoot(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	root := t.TempDir()
+	stateDir := filepath.Join(root, fileutil.InternalDir)
+	if err := os.Symlink(filepath.Join(root, "missing-target"), stateDir); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := AcquireRootLock(root)
+	if lock != nil {
+		_ = lock.Release()
+		t.Fatal("AcquireRootLock returned a lock for an unresolvable state dir")
+	}
+	if err == nil {
+		t.Fatal("AcquireRootLock succeeded for an unresolvable state dir")
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("AcquireRootLock error = %v, want a retry/contention error, not fs.ErrNotExist", err)
+	}
+	if strings.Contains(err.Error(), "project root") {
+		t.Fatalf("AcquireRootLock error = %v, want no missing-root claim", err)
+	}
+	if _, statErr := os.Stat(root); statErr != nil {
+		t.Fatalf("project root disappeared: %v", statErr)
+	}
 }
 
 // TestAcquireRootLock_CreatesPrivateState verifies the state directory and lock

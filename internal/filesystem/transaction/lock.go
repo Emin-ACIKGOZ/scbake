@@ -95,14 +95,8 @@ func resolveRootLockPaths(root string, createRoot bool) (rootLockPaths, error) {
 // was pruned or the lock path was replaced, so the caller should reopen it.
 func tryAcquireRootLock(paths rootLockPaths) (lock *RootLock, retry bool, err error) {
 	if err := ensureRootLockDir(paths); err != nil {
-		// A releasing process may have pruned .scbake; recreate and retry.
-		if errors.Is(err, fs.ErrNotExist) && paths.createRoot {
-			return nil, true, nil
-		}
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, false, fmt.Errorf("project root %s does not exist: %w", paths.root, fs.ErrNotExist)
-		}
-		return nil, false, fmt.Errorf("failed to create lock directory %s: %w", paths.stateDir, err)
+		retry, classifiedErr := classifyRootLockDirError(paths, err)
+		return nil, retry, classifiedErr
 	}
 
 	f, err := acquireLockFile(paths.root, paths.lockPath)
@@ -125,6 +119,26 @@ func tryAcquireRootLock(paths rootLockPaths) (lock *RootLock, retry bool, err er
 	// handle and retry from open.
 	_ = closeLockFile(f)
 	return nil, true, nil
+}
+
+// classifyRootLockDirError maps a failed ensureRootLockDir call to a retry or a
+// terminal error. A releasing process may prune .scbake; for existing-project
+// commands an ENOENT can also come from the post-Mkdir containment check racing
+// that prune. Retry while the project root still exists so a pruned state
+// directory is not reported as a missing root.
+func classifyRootLockDirError(paths rootLockPaths, err error) (bool, error) {
+	if !errors.Is(err, fs.ErrNotExist) {
+		return false, fmt.Errorf("failed to create lock directory %s: %w", paths.stateDir, err)
+	}
+	if paths.createRoot {
+		return true, nil
+	}
+	if _, statErr := os.Stat(paths.root); statErr == nil {
+		return true, nil
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return false, fmt.Errorf("failed to stat project root %s: %w", paths.root, statErr)
+	}
+	return false, fmt.Errorf("project root %s does not exist: %w", paths.root, fs.ErrNotExist)
 }
 
 // ensureRootLockDir creates .scbake. For existing-project commands it uses
