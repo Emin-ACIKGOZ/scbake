@@ -60,7 +60,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 		if err != nil {
 			return nil, err
 		}
-		plan = append(plan, &tasks.ExecCommandTask{
+		plan = append(plan, &tasks.ScaffoldTask{
 			Cmd: npmCmd,
 			Args: []string{
 				"create",
@@ -70,18 +70,12 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 				"--template",
 				"svelte",
 			},
-			Desc:     "Run npm create vite@latest .",
+			Desc:     "Run npm create vite@latest . (staged)",
 			TaskPrio: int(p), // Now 100
-			// create-vite writes these top-level entries when package.json is
-			// absent. Declaring the files lets rollback restore same-named
-			// pre-existing content. A created directory is removed only when
-			// empty, so a populated one is kept as residue.
-			PredictedCreated: []string{
-				".gitignore", "index.html", "jsconfig.json", packageJSONFile,
-				"README.md", "svelte.config.js", "vite.config.js",
-				"public", "src", ".vscode",
-			},
-			RunInTarget: true, // Runs inside targetPath
+			// create-vite refuses a target containing scbake.toml/.scbake, so
+			// the task scaffolds into an empty staging leaf and moves the
+			// output into the target. package.json proves it did not cancel.
+			Sentinel: packageJSONFile,
 		})
 
 		// Task 2: Run 'npm install'
