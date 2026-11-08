@@ -287,6 +287,32 @@ as a whole after a successful recovery, matching the command's handled-error
 cleanup.
 
 
+### Concurrent Runs and Exit 75
+
+Mutating commands (`new`, `apply`, `update`, `drift --repair`, `recover`, and
+`recover --discard`) take a non-blocking exclusive advisory lock on
+`<root>/.scbake/lock` before loading the manifest and hold it through commit or
+rollback. The lock is scoped to the manifest root, so parallel subproject runs
+under one root serialize on the same file. If another scbake process already
+holds the lock, the command fails fast with exit **75** (`EX_TEMPFAIL`) and
+makes no project changes; retry after the active run finishes.
+
+Read-only commands (`drift`, `list`, and template registry/cache commands) and
+every `--dry-run` run do not take the lock, so they remain usable while a writer
+is active. They still refuse a tree with an interrupted transaction journal.
+
+The kernel releases the lock when the process exits, including a crash or
+`SIGKILL`; a leftover `.scbake/lock` file is harmless because the lock is kernel
+state, not file existence. Normal release removes the file and prunes an empty
+`.scbake` directory. The manifest modification-time check is retained as a
+fallback for non-scbake writers; the root lock is the primary scbake-vs-scbake
+concurrency guard.
+
+Rollback's content-hash check (delete a created file only if it still contains
+what this transaction wrote) is deferred to follow-up work, so #133 remains
+open.
+
+
 ### `template registry`: Manage Remote Registries
 
 Define and manage remote template registries for sharing templates across teams.

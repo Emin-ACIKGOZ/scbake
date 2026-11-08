@@ -109,6 +109,7 @@ sequenceDiagram
 - ✅ Reverse-order deletion of created paths; backups restored from the transaction directory
 - ✅ Atomic rename for manifest updates
 - ✅ Cleanup of orphaned backups
+- ✅ Non-blocking per-root advisory lock (`.scbake/lock`) for mutating runs
 
 Rollback is process-level and best-effort. SIGINT and SIGTERM are diverted into
 the command context: the running child process is stopped, the normal rollback
@@ -120,6 +121,18 @@ tree clean, and `scbake recover` replays it to restore backups and remove
 created paths. This protects against process crashes; it is not a power-loss
 durability guarantee. External commands are tracked only when their outputs are
 predicted.
+
+**Per-root locking**: Before loading the manifest, `new`, `apply`, `update`,
+`drift --repair`, and `recover` acquire a non-blocking exclusive advisory lock
+on `<root>/.scbake/lock` and hold it through commit or rollback. The lock is
+scoped to the manifest root, not a subproject, so parallel runs under one root
+serialize. A second mutator fails fast with exit 75 (`EX_TEMPFAIL`) before any
+project mutation; callers should retry after the active run finishes. Read-only
+commands and all `--dry-run` runs do not acquire the lock. The kernel releases
+the lock when the process exits or crashes, so a leftover lock file is harmless;
+normal release removes the file and prunes an empty `.scbake` directory. The
+manifest mtime check remains as a fallback for non-scbake writers. The rollback
+content-hash check is deferred and #133 remains open.
 
 ---
 
@@ -323,9 +336,10 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir)
 4. On subsequent pulls, the cache is reused only when its manifest hash, version, and source URL match; a version or URL change (or a manifest without provenance) forces a re-download
 5. Token auth supported via stored config or `SCBAKE_REGISTRY_TOKEN_<NAME>` env var
 
-### 4. Optimistic Locking
+### 4. Optimistic Locking (Fallback)
 
-scbake detects concurrent modifications via file modification time:
+scbake still detects concurrent manifest modifications via file modification
+time, as a fallback for non-scbake writers and older scbake versions:
 
 ```go
 // internal/manifest/io.go
@@ -345,7 +359,10 @@ func Save(m *types.Manifest, rootPath string) error {
 }
 ```
 
-**Why**: Detects TOCTOU (Time-Of-Check-Time-Of-Use) bugs. If two scbake processes run simultaneously, one detects the conflict and fails.
+**Why**: This check runs after task execution and catches TOCTOU
+(Time-Of-Check-Time-Of-Use) changes from external editors or writers. It is no
+longer the primary scbake-vs-scbake guard; the per-root lock serializes mutating
+scbake processes before the manifest is loaded.
 
 ### 5. Updating Generated Projects
 
