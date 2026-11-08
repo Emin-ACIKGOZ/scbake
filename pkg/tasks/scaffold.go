@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"scbake/internal/filesystem/transaction"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 )
@@ -34,6 +35,16 @@ type ScaffoldTask struct {
 	Sentinel string
 }
 
+// scaffoldStaging is the transaction-owned staging tree for one scaffold run.
+type scaffoldStaging struct {
+	// root is the stage-* directory removed after the run.
+	root string
+
+	// leaf is the empty directory the scaffolder runs in, named after the
+	// canonical target basename.
+	leaf string
+}
+
 // Description implements types.Task.
 func (t *ScaffoldTask) Description() string { return t.Desc }
 
@@ -52,25 +63,86 @@ func (t *ScaffoldTask) Execute(tc types.TaskContext) error {
 		return errors.New("scaffold task requires an active transaction")
 	}
 
-	target, err := canonicalTarget(tc.TargetPath)
+	target, err := resolveScaffoldTarget(tc.TargetPath)
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(target)
+	staging, err := t.prepareStaging(tc, target)
 	if err != nil {
-		return fmt.Errorf("scaffold target %s is not accessible: %w", target, err)
+		return err
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("scaffold target %s is not a directory", target)
+	defer staging.remove()
+
+	if err := t.runScaffolder(tc, staging.leaf); err != nil {
+		return err
 	}
 
+	entries, err := readScaffoldEntries(staging.leaf)
+	if err != nil {
+		return err
+	}
+
+	// Preflight every top-level destination before tracking or moving anything
+	// so a collision cannot leave tracked state or a partially moved project.
+	if err := preflightDestinations(target, entries); err != nil {
+		return err
+	}
+
+	// Track destinations before the move so rollback can remove exactly the
+	// bytes this transaction moved. Files are hashed; directories are tracked
+	// as creates and removed only when empty.
+	if err := trackScaffoldOutput(tc.Tx, staging.leaf, target); err != nil {
+		return fmt.Errorf("failed to track scaffold output: %w", err)
+	}
+
+	return moveScaffoldEntries(staging.leaf, target, entries)
+}
+
+// resolveScaffoldTarget resolves the task target to an absolute, symlink-free
+// directory and validates it.
+func resolveScaffoldTarget(targetPath string) (string, error) {
+	if targetPath == "" {
+		targetPath = "."
+	}
+	abs, err := filepath.Abs(targetPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve scaffold target %q: %w", targetPath, err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("failed to canonicalize scaffold target %q: %w", targetPath, err)
+	}
+	if err := validateScaffoldTarget(resolved); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+// validateScaffoldTarget rejects the filesystem root and targets that are not
+// accessible directories.
+func validateScaffoldTarget(resolved string) error {
+	if filepath.Dir(resolved) == resolved {
+		return fmt.Errorf("refusing to scaffold into filesystem root %s", resolved)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("scaffold target %s is not accessible: %w", resolved, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("scaffold target %s is not a directory", resolved)
+	}
+	return nil
+}
+
+// prepareStaging creates the empty staging tree under the transaction temp dir.
+func (t *ScaffoldTask) prepareStaging(tc types.TaskContext, target string) (*scaffoldStaging, error) {
 	root := tc.Tx.Root()
 	txTemp, err := tc.Tx.TempDir()
 	if err != nil {
-		return fmt.Errorf("failed to prepare transaction staging area: %w", err)
+		return nil, fmt.Errorf("failed to prepare transaction staging area: %w", err)
 	}
 	if _, err := fileutil.SafePath(root, txTemp); err != nil {
-		return fmt.Errorf("refusing to stage scaffold outside transaction root: %w", err)
+		return nil, fmt.Errorf("refusing to stage scaffold outside transaction root: %w", err)
 	}
 
 	// Staging lives under the transaction's own temp dir. The journal already
@@ -79,23 +151,34 @@ func (t *ScaffoldTask) Execute(tc types.TaskContext) error {
 	// dir, so no separate staging prefix or sweep is needed.
 	stagingRoot, err := os.MkdirTemp(txTemp, "stage-*")
 	if err != nil {
-		return fmt.Errorf("failed to create scaffold staging directory: %w", err)
+		return nil, fmt.Errorf("failed to create scaffold staging directory: %w", err)
 	}
-	defer func() {
-		// Staging is inside the transaction temp dir, so Commit/Rollback remove
-		// it even if this best-effort cleanup fails. A failure here must never
-		// become a task error: after a successful move that would roll back a
-		// completed project.
-		if rmErr := os.RemoveAll(stagingRoot); rmErr != nil {
-			fmt.Fprintf(os.Stderr, "⚠️  Could not remove scaffold staging %s: %v\n", stagingRoot, rmErr)
-		}
-	}()
+	staging := &scaffoldStaging{root: stagingRoot}
 
-	stagingLeaf := filepath.Join(stagingRoot, filepath.Base(target))
-	if err := os.Mkdir(stagingLeaf, fileutil.DirPerms); err != nil {
-		return fmt.Errorf("failed to create scaffold staging leaf %s: %w", stagingLeaf, err)
+	// Use the resolved basename so generators that derive a package name from
+	// the cwd keep the same name a direct invocation would have produced.
+	staging.leaf = filepath.Join(stagingRoot, filepath.Base(target))
+	if err := os.Mkdir(staging.leaf, fileutil.DirPerms); err != nil {
+		staging.remove()
+		return nil, fmt.Errorf("failed to create scaffold staging leaf %s: %w", staging.leaf, err)
 	}
+	return staging, nil
+}
 
+// remove best-effort deletes the staging tree. Staging is inside the
+// transaction temp dir, so Commit/Rollback remove it even if this cleanup
+// fails. A failure here must never become a task error: after a successful
+// move that would roll back a completed project.
+func (s *scaffoldStaging) remove() {
+	if err := os.RemoveAll(s.root); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Could not remove scaffold staging %s: %v\n", s.root, err)
+	}
+}
+
+// runScaffolder executes the generator in the staging leaf and, when a sentinel
+// is configured, verifies that it produced the expected regular file. The
+// sentinel turns a silent "canceled, wrote nothing" exit into a clear error.
+func (t *ScaffoldTask) runScaffolder(tc types.TaskContext, stagingLeaf string) error {
 	//nolint:gosec // Command and args are defined by the language handler.
 	cmd := exec.CommandContext(tc.Ctx, t.Cmd, t.Args...)
 	cmd.Dir = stagingLeaf
@@ -108,64 +191,90 @@ func (t *ScaffoldTask) Execute(tc types.TaskContext) error {
 		return commandExecutionError(tc.Ctx, t.Cmd, t.Args, runErr, &stderr)
 	}
 
-	if t.Sentinel != "" {
-		sentinel := filepath.Join(stagingLeaf, t.Sentinel)
-		sentinelInfo, statErr := os.Lstat(sentinel)
-		if statErr != nil {
-			return fmt.Errorf("scaffold command did not create %s in %s (the scaffolder may have cancelled): %w", t.Sentinel, stagingLeaf, statErr)
-		}
-		if !sentinelInfo.Mode().IsRegular() {
-			return fmt.Errorf("scaffold sentinel %s is not a regular file", sentinel)
-		}
+	if t.Sentinel == "" {
+		return nil
 	}
+	sentinel := filepath.Join(stagingLeaf, t.Sentinel)
+	sentinelInfo, statErr := os.Lstat(sentinel)
+	if statErr != nil {
+		return fmt.Errorf("scaffold command did not create %s in %s (the scaffolder may have canceled): %w", t.Sentinel, stagingLeaf, statErr)
+	}
+	if !sentinelInfo.Mode().IsRegular() {
+		return fmt.Errorf("scaffold sentinel %s is not a regular file", sentinel)
+	}
+	return nil
+}
 
+// readScaffoldEntries returns the top-level entries the scaffolder produced.
+func readScaffoldEntries(stagingLeaf string) ([]os.DirEntry, error) {
 	entries, err := os.ReadDir(stagingLeaf)
 	if err != nil {
-		return fmt.Errorf("failed to read scaffold output %s: %w", stagingLeaf, err)
+		return nil, fmt.Errorf("failed to read scaffold output %s: %w", stagingLeaf, err)
 	}
+	return entries, nil
+}
 
-	// Preflight every top-level destination before tracking or moving anything
-	// so a collision cannot leave tracked state or a partially moved project.
+// preflightDestinations fails before any tracked state or move if a top-level
+// destination already exists.
+func preflightDestinations(target string, entries []os.DirEntry) error {
 	for _, entry := range entries {
-		dest := filepath.Join(target, entry.Name())
-		if _, statErr := os.Lstat(dest); statErr == nil {
-			return fmt.Errorf("refusing to move scaffold entry %q: destination %s already exists", entry.Name(), dest)
-		} else if !os.IsNotExist(statErr) {
-			return fmt.Errorf("failed to inspect scaffold destination %s: %w", dest, statErr)
+		if err := ensureDestinationAbsent(filepath.Join(target, entry.Name()), entry.Name()); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
-	// Track destinations before the move so rollback can remove exactly the
-	// bytes this transaction moved. Files are hashed; directories are tracked
-	// as creates and removed only when empty.
-	err = filepath.WalkDir(stagingLeaf, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, relErr := filepath.Rel(stagingLeaf, path)
-		if relErr != nil {
-			return relErr
-		}
-		if rel == "." {
-			return nil
-		}
-		dest := filepath.Join(target, rel)
-		if entry.IsDir() {
-			return tc.Tx.Track(dest)
-		}
-		if !entry.Type().IsRegular() {
-			return fmt.Errorf("unsupported scaffold entry %s: not a regular file or directory", path)
-		}
-		content, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return fmt.Errorf("failed to read scaffold file %s: %w", path, readErr)
-		}
-		return tc.Tx.TrackWrite(dest, content)
+// ensureDestinationAbsent refuses an existing destination, or reports an
+// inspection error that is not simple non-existence.
+func ensureDestinationAbsent(dest, entryName string) error {
+	if _, statErr := os.Lstat(dest); statErr == nil {
+		return fmt.Errorf("refusing to move scaffold entry %q: destination %s already exists", entryName, dest)
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("failed to inspect scaffold destination %s: %w", dest, statErr)
+	}
+	return nil
+}
+
+// trackScaffoldOutput recursively records every staged entry at its eventual
+// destination before anything moves.
+func trackScaffoldOutput(tx *transaction.Manager, stagingLeaf, target string) error {
+	return filepath.WalkDir(stagingLeaf, func(path string, entry os.DirEntry, walkErr error) error {
+		return trackScaffoldEntry(tx, stagingLeaf, target, path, entry, walkErr)
 	})
-	if err != nil {
-		return fmt.Errorf("failed to track scaffold output: %w", err)
-	}
+}
 
+// trackScaffoldEntry records one staged directory or file. Files are read
+// through the symlink-safe helper so the walk cannot follow a planted link out
+// of the staging tree.
+func trackScaffoldEntry(tx *transaction.Manager, stagingLeaf, target, path string, entry os.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		return walkErr
+	}
+	rel, relErr := filepath.Rel(stagingLeaf, path)
+	if relErr != nil {
+		return relErr
+	}
+	if rel == "." {
+		return nil
+	}
+	dest := filepath.Join(target, rel)
+	if entry.IsDir() {
+		return tx.Track(dest)
+	}
+	if !entry.Type().IsRegular() {
+		return fmt.Errorf("unsupported scaffold entry %s: not a regular file or directory", path)
+	}
+	content, readErr := fileutil.SafeReadFile(stagingLeaf, path)
+	if readErr != nil {
+		return fmt.Errorf("failed to read scaffold file %s: %w", path, readErr)
+	}
+	return tx.TrackWrite(dest, content)
+}
+
+// moveScaffoldEntries renames each top-level staged entry into the lexical
+// target.
+func moveScaffoldEntries(stagingLeaf, target string, entries []os.DirEntry) error {
 	for _, entry := range entries {
 		source := filepath.Join(stagingLeaf, entry.Name())
 		dest := filepath.Join(target, entry.Name())
@@ -175,10 +284,8 @@ func (t *ScaffoldTask) Execute(tc types.TaskContext) error {
 		// be overwritten untracked. No portable no-replace rename exists in the
 		// standard library, so a single-writer assumption still bounds the
 		// remaining window.
-		if _, statErr := os.Lstat(dest); statErr == nil {
-			return fmt.Errorf("refusing to move scaffold entry %q: destination %s already exists", entry.Name(), dest)
-		} else if !os.IsNotExist(statErr) {
-			return fmt.Errorf("failed to inspect scaffold destination %s: %w", dest, statErr)
+		if err := ensureDestinationAbsent(dest, entry.Name()); err != nil {
+			return err
 		}
 
 		if err := os.Rename(source, dest); err != nil {
@@ -186,24 +293,4 @@ func (t *ScaffoldTask) Execute(tc types.TaskContext) error {
 		}
 	}
 	return nil
-}
-
-// canonicalTarget resolves the target to an absolute, symlink-free directory
-// so the staging leaf basename matches what a direct invocation would see.
-func canonicalTarget(targetPath string) (string, error) {
-	if targetPath == "" {
-		targetPath = "."
-	}
-	abs, err := filepath.Abs(targetPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve scaffold target %q: %w", targetPath, err)
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", fmt.Errorf("failed to canonicalize scaffold target %q: %w", targetPath, err)
-	}
-	if filepath.Dir(resolved) == resolved {
-		return "", fmt.Errorf("refusing to scaffold into filesystem root %s", resolved)
-	}
-	return resolved, nil
 }
