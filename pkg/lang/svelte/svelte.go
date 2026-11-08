@@ -74,7 +74,8 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			TaskPrio: int(p), // Now 100
 			// create-vite writes these top-level entries when package.json is
 			// absent. Declaring the files lets rollback restore same-named
-			// pre-existing content; the directories are removed when created.
+			// pre-existing content. A created directory is removed only when
+			// empty, so a populated one is kept as residue.
 			PredictedCreated: []string{
 				".gitignore", "index.html", "jsconfig.json", packageJSONFile,
 				"README.md", "svelte.config.js", "vite.config.js",

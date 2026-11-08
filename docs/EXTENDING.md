@@ -186,7 +186,7 @@ plan = append(plan, &tasks.ExecCommandTask{
 **Important fields**:
 - `RunInTarget: true` - Run in the project directory (not scbake's directory)
 - `Cmd` and `Args` - The command to execute (no shell interpretation, so it's safe)
-- `PredictedCreated` - Files or directories this command may create or modify. Missing paths are removed on rollback, and existing regular files are restored with their content and mode. Existing directories are not snapshotted, so declare individual files rather than a parent directory.
+- `PredictedCreated` - Files or directories this command may create or modify. Missing regular files are snapshotted after the command and removed on rollback only when their bytes still match. Existing regular files are restored with their content and mode. A missing directory is removed on rollback only when empty, so a directory populated by the command is kept as residue; declare individual files rather than a parent directory. Existing directories are not snapshotted.
 - `ArchivePath` - Optional zip archive whose entries, and any missing ancestor directories, are tracked before extraction.
 
 Commands that write outside declared paths, pre-existing dependency trees such

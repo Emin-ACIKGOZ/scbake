@@ -89,7 +89,9 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 	noHooks := "core.hooksPath=" + os.DevNull
 
 	// Task 1: Initialize Git repository (only for a fresh target).
-	// We predict creation of GitDir so the transaction system can rollback the entire repo creation on failure.
+	// We predict creation of GitDir so the transaction tracks it. Rollback
+	// removes a created GitDir only when it is empty; a populated repository is
+	// kept as conservative residue rather than deleted.
 	prio, err := seq.Next()
 	if err != nil {
 		return nil, err

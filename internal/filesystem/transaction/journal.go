@@ -727,7 +727,7 @@ func refuseLiveTransactions(ctx context.Context, dirs []string) error {
 	return nil
 }
 
-// recoverTransaction replays the journal in reverse, then removes the
+// recoverTransaction replays the journal deepest-first, then removes the
 // transaction directory.
 func recoverTransaction(ctx context.Context, rootPath, dir string, release func() error) error {
 	journal, err := readRecoveryJournal(ctx, dir)
