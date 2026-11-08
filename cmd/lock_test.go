@@ -204,12 +204,13 @@ func assertNoFailedProjectStaging(t *testing.T, dir string) {
 	}
 }
 
-// TestRemoveFailedProjectStagesWhileLockedThenReleases verifies failed-new
-// cleanup renames the project while the lock is held, releases it, and only
-// then removes the staged tree, leaving no staging residue.
+// TestRemoveFailedProjectReleasesLockBeforeRename verifies failed-new cleanup
+// creates the staging directory, releases the lock while the original project
+// is still in place and staging is empty, then renames and deletes the staged
+// tree. Windows cannot rename a directory while its lock handle is open.
 //
-//nolint:cyclop // Lock setup, staging inspection from the release callback, and cleanup assertions.
-func TestRemoveFailedProjectStagesWhileLockedThenReleases(t *testing.T) {
+//nolint:cyclop // Lock setup, ordering assertions from the release callback, and cleanup checks.
+func TestRemoveFailedProjectReleasesLockBeforeRename(t *testing.T) {
 	parent := t.TempDir()
 	project := filepath.Join(parent, "demo")
 	if err := os.Mkdir(project, fileutil.DirPerms); err != nil {
@@ -227,6 +228,9 @@ func TestRemoveFailedProjectStagesWhileLockedThenReleases(t *testing.T) {
 	released := false
 	err = removeFailedProject(project, func() error {
 		released = true
+		if _, statErr := os.Stat(project); statErr != nil {
+			t.Errorf("project was renamed before the lock was released: %v", statErr)
+		}
 		entries, readErr := os.ReadDir(parent)
 		if readErr != nil {
 			return readErr
@@ -235,13 +239,17 @@ func TestRemoveFailedProjectStagesWhileLockedThenReleases(t *testing.T) {
 			if !strings.HasPrefix(entry.Name(), ".scbake-remove-") {
 				continue
 			}
-			staged := filepath.Join(parent, entry.Name(), filepath.Base(project))
-			if _, statErr := os.Stat(filepath.Join(staged, "partial.txt")); statErr != nil {
-				t.Errorf("staged project is missing its content at release: %v", statErr)
+			staging := filepath.Join(parent, entry.Name())
+			staged, readErr := os.ReadDir(staging)
+			if readErr != nil {
+				return readErr
+			}
+			if len(staged) != 0 {
+				t.Errorf("project was moved into staging before the lock was released: %v", staged)
 			}
 			return lock.Release()
 		}
-		return errors.New("staging directory was deleted before release")
+		return errors.New("staging directory was missing at release")
 	})
 	if err != nil {
 		_ = lock.Release()

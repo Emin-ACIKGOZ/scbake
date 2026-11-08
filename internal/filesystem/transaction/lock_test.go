@@ -572,12 +572,13 @@ func TestRecoverInterruptedNewRemovesRootWhileLocked(t *testing.T) {
 	}
 }
 
-// TestRemoveBootstrappedRootReleasesBeforeDeletingStaging verifies the release
-// callback runs after the rename but before the staged tree is deleted, which
-// is what lets Windows remove the still-open lock file.
+// TestRemoveBootstrappedRootReleasesBeforeRename verifies the release callback
+// runs before renameRootForRemoval: Windows cannot rename a directory while the
+// lock handle is open. Staging is created empty first and deleted after the
+// rename.
 //
-//nolint:cyclop // Sets up a root, inspects staging from the callback, then asserts cleanup.
-func TestRemoveBootstrappedRootReleasesBeforeDeletingStaging(t *testing.T) {
+//nolint:cyclop // Sets up a root, asserts ordering through the rename seam, then checks cleanup.
+func TestRemoveBootstrappedRootReleasesBeforeRename(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "demo")
 	if err := os.Mkdir(root, fileutil.DirPerms); err != nil {
@@ -587,25 +588,57 @@ func TestRemoveBootstrappedRootReleasesBeforeDeletingStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	originalRename := renameRootForRemoval
+	t.Cleanup(func() { renameRootForRemoval = originalRename })
+
 	released := false
+	renamed := false
+	renameRootForRemoval = func(oldPath, newPath string) error {
+		renamed = true
+		if !released {
+			t.Error("renameRootForRemoval ran before the lock was released")
+		}
+		if _, statErr := os.Stat(root); statErr != nil {
+			t.Errorf("original root is missing at rename time: %v", statErr)
+		}
+		return originalRename(oldPath, newPath)
+	}
+
 	err := removeBootstrappedRoot(context.Background(), root, func() error {
 		released = true
+		if renamed {
+			t.Error("release ran after renameRootForRemoval")
+		}
+		if _, statErr := os.Stat(root); statErr != nil {
+			t.Errorf("original root is missing at release time: %v", statErr)
+		}
 		entries, readErr := os.ReadDir(parent)
 		if readErr != nil {
 			return readErr
 		}
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), ".scbake-remove-") {
-				return nil
+			if !strings.HasPrefix(entry.Name(), ".scbake-remove-") {
+				continue
 			}
+			staged, readErr := os.ReadDir(filepath.Join(parent, entry.Name()))
+			if readErr != nil {
+				return readErr
+			}
+			if len(staged) != 0 {
+				t.Errorf("root was moved into staging before release: %v", staged)
+			}
+			return nil
 		}
-		return errors.New("staging directory was deleted before release")
+		return errors.New("staging directory was missing at release")
 	})
 	if err != nil {
 		t.Fatalf("removeBootstrappedRoot failed: %v", err)
 	}
 	if !released {
 		t.Fatal("removeBootstrappedRoot did not call release")
+	}
+	if !renamed {
+		t.Fatal("removeBootstrappedRoot did not call renameRootForRemoval")
 	}
 	assertNotExist(t, root)
 
