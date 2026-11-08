@@ -55,9 +55,11 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 
 	// A file created earlier in this transaction may already carry a hash from
 	// its first write. The append changes the whole file, so record the
-	// post-append bytes and replace that stale hash before writing. TrackWrite
-	// only updates paths this transaction created; a pre-existing user file is
-	// restored from its backup, which remains authoritative.
+	// post-append bytes before writing. TrackWrite only updates paths this
+	// transaction created, and only when the current bytes still match the
+	// existing hash; an externally edited file keeps its old identity and is
+	// retained on rollback. A pre-existing user file is restored from its
+	// backup, which remains authoritative.
 	fullContent := appendResultBytes(existingContent, t.Content)
 	if err := trackAppendWrite(tc, absPath, t.FilePath, fullContent); err != nil {
 		return err

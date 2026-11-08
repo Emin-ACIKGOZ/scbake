@@ -131,16 +131,37 @@ func (m *Manager) track(path, hash string) error {
 
 // trackAlreadyTracked handles a repeated Track/TrackWrite. A path already
 // recorded as created (for example Track followed by TrackWrite in the append
-// task) can still gain a content hash. A backed-up path is restored from its
-// backup, so a hash adds nothing.
+// task) can still gain or update a content hash. A backed-up path is restored
+// from its backup, so a hash adds nothing.
 func (m *Manager) trackAlreadyTracked(absPath, hash string) error {
 	if hash == "" {
 		return nil
 	}
-	if _, created := m.createdSet[absPath]; created {
+	if _, created := m.createdSet[absPath]; !created {
+		return nil
+	}
+
+	recorded := m.createdHashes[absPath]
+	if recorded == "" {
 		return m.trackCreated(absPath, hash)
 	}
-	return nil
+
+	// A repeated write may replace the recorded identity only while the file
+	// still contains what this transaction last recorded. If an external
+	// writer changed it, keep the old hash so rollback retains the file
+	// instead of deleting external bytes as if they were ours.
+	if !m.createdBytesMatch(absPath, recorded) {
+		return nil
+	}
+	return m.trackCreated(absPath, hash)
+}
+
+// createdBytesMatch reports whether the current raw bytes of a created path
+// still match the recorded hash. A missing or unreadable path cannot be proven
+// identical and therefore does not match.
+func (m *Manager) createdBytesMatch(absPath, recorded string) bool {
+	current, err := hashFile(m.rootPath, absPath)
+	return err == nil && current == recorded
 }
 
 // trackExisting handles a path that exists at tracking time: symlinks are
