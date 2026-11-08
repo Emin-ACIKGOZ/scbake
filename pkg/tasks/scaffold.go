@@ -22,6 +22,12 @@ import (
 // The staging leaf is named after the canonical target basename so generators
 // that derive a package/project name from the cwd's basename keep the name the
 // direct invocation would have produced.
+//
+// Staging removal after a successful move is deliberately best-effort (MF1).
+// A cleanup failure is reported as a warning and never returned as a task
+// error: returning an error after the move would roll back a project that was
+// already completed. Commit/Rollback own the transaction temp dir that
+// contains the staging tree and remove it on the normal paths.
 type ScaffoldTask struct {
 	// Cmd and Args are the command to run (e.g. npm create vite@latest ...).
 	Cmd  string
@@ -89,6 +95,9 @@ func (t *ScaffoldTask) Execute(tc types.TaskContext) error {
 	if err != nil {
 		return err
 	}
+	// MF1: cleanup is best-effort. By the time the deferred call runs the
+	// project may already be moved into place, so a removal failure only warns
+	// and must never be converted into a task error that triggers rollback.
 	defer staging.remove()
 
 	if err := t.runScaffolder(tc, staging.leaf); err != nil {
@@ -183,10 +192,11 @@ func (t *ScaffoldTask) prepareStaging(tc types.TaskContext, target scaffoldTarge
 	return staging, nil
 }
 
-// remove best-effort deletes the staging tree. Staging is inside the
-// transaction temp dir, so Commit/Rollback remove it even if this cleanup
-// fails. A failure here must never become a task error: after a successful
-// move that would roll back a completed project.
+// remove best-effort deletes the staging tree. It intentionally returns no
+// error (MF1): a cleanup failure after a successful move must only warn, not
+// fail the task and roll back a completed project. Staging is inside the
+// transaction temp dir, so Commit/Rollback remove it even when this attempt
+// fails.
 func (s *scaffoldStaging) remove() {
 	if err := os.RemoveAll(s.root); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Could not remove scaffold staging %s: %v\n", s.root, err)

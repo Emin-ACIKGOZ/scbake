@@ -54,8 +54,9 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 	_, checkErr := os.Stat(packageJSONPath)
 
 	if os.IsNotExist(checkErr) {
-		// Task 1: Run 'npm create vite@latest .' inside the target directory.
-		// This initializes the project into the existing (empty) directory.
+		// Task 1: Run 'npm create vite@latest .' in an empty staging leaf,
+		// then move the generated project into the target. create-vite refuses
+		// the target because it already contains scbake.toml and .scbake.
 		p, err := langSeq.Next()
 		if err != nil {
 			return nil, err

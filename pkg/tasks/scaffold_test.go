@@ -378,6 +378,12 @@ func TestScaffoldTaskDryRunWritesNothing(t *testing.T) {
 // TestScaffoldTaskCleanupFailureIsNotFatal verifies MF1: after a successful
 // move, an undeletable staging tree only warns; it must not turn the completed
 // scaffold into a task error.
+//
+// The fixture uses directory permissions to force the failure. On systems that
+// allow the owner to remove such a tree anyway (for example when tests run as
+// root), cleanup succeeds and the test passes without exercising the warning
+// path. The production guarantee is documented on scaffoldStaging.remove and
+// at the deferred call in ScaffoldTask.Execute.
 func TestScaffoldTaskCleanupFailureIsNotFatal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permission bits do not block removal on Windows")
