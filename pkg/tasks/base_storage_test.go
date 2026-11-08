@@ -190,9 +190,9 @@ func TestCommittedBaseRollback(t *testing.T) { //nolint:cyclop // assertion-heav
 	}
 }
 
-// TestHashContentEOLContract pins the manifest hash contract: text is
-// EOL-insensitive, binary (NUL-containing) content is byte-exact, only CRLF is
-// folded, and repeated normalization is idempotent.
+// TestHashContentEOLContract pins the manifest hash contract: NUL-free text is
+// EOL-insensitive, a run of CR bytes before LF projects to one LF, NUL-bearing
+// binary content is byte-exact, and repeated normalization is idempotent.
 func TestHashContentEOLContract(t *testing.T) { //nolint:cyclop // assertion-heavy contract test
 	lf := []byte("alpha\nshared\nomega\n")
 	crlf := []byte("alpha\r\nshared\r\nomega\r\n")
@@ -211,6 +211,35 @@ func TestHashContentEOLContract(t *testing.T) { //nolint:cyclop // assertion-hea
 		t.Fatal("a lone CR is content and must remain distinct")
 	}
 
+	// CR runs immediately before LF are one line ending and project to a single
+	// LF. Runs that are not followed by LF are literal CR content.
+	crRuns := map[string]string{
+		"\r\r\n":     "\n",
+		"\r\r\r\n":   "\n",
+		"x\r\r\ny\r": "x\ny\r",
+		"\r\r":       "\r\r",
+		"\r":         "\r",
+	}
+	for in, want := range crRuns {
+		if got := string(normalizeEOL([]byte(in))); got != want {
+			t.Errorf("normalizeEOL(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if HashContent([]byte("a\r\r\nb\r\r\r\n")) != HashContent([]byte("a\nb\n")) {
+		t.Fatal("a CR run before LF must hash like a single LF")
+	}
+
+	// NUL-free binary that happens to contain CRLF is treated as text by the
+	// documented contract: only NUL is the binary marker.
+	nulFreeBinary := []byte("\x89PNG\r\n\x1a\npayload\r\n")
+	nulFreeBinaryLF := []byte("\x89PNG\n\x1a\npayload\n")
+	if got, want := string(normalizeEOL(nulFreeBinary)), string(nulFreeBinaryLF); got != want {
+		t.Fatalf("NUL-free binary normalization = %q, want %q", got, want)
+	}
+	if HashContent(nulFreeBinary) != HashContent(nulFreeBinaryLF) {
+		t.Fatal("NUL-free binary containing CRLF must follow the text hash contract")
+	}
+
 	binary := []byte("head\x00body\r\n")
 	if got, want := HashContent(binary), rawSHA256(binary); got != want {
 		t.Fatalf("NUL content hash = %q, want byte-exact %q", got, want)
@@ -224,7 +253,10 @@ func TestHashContentEOLContract(t *testing.T) { //nolint:cyclop // assertion-hea
 		t.Fatal("non-ASCII text CRLF must hash like LF")
 	}
 
-	for _, content := range [][]byte{lf, crlf, mixed, binary, unicode, nil} {
+	for _, content := range [][]byte{
+		lf, crlf, mixed, nulFreeBinary, binary, unicode,
+		[]byte("\r\r\n"), []byte("x\r\r\ny\r"), nil,
+	} {
 		normalized := normalizeEOL(content)
 		if !bytes.Equal(normalized, normalizeEOL(normalized)) {
 			t.Fatalf("normalizeEOL is not idempotent for %q", content)
