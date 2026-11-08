@@ -82,6 +82,25 @@ func Detect(m *types.Manifest, root string) ([]Finding, error) {
 		return nil, nil
 	}
 
+	findings, err := collectFindings(m, root)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].Path != findings[j].Path {
+			return findings[i].Path < findings[j].Path
+		}
+		return findings[i].Kind < findings[j].Kind
+	})
+	return findings, nil
+}
+
+// collectFindings classifies every ledger entry and, for each current
+// non-legacy key, validates its committed base. It only reads: inspect and
+// inspectBase use the containment-safe reader, and any error aborts the scan so
+// detection never reports a false clean.
+func collectFindings(m *types.Manifest, root string) ([]Finding, error) {
 	findings := make([]Finding, 0, len(m.ManagedFiles))
 	for key, recorded := range m.ManagedFiles {
 		finding, drifted, legacyResolved, err := inspect(m, root, key, recorded)
@@ -102,13 +121,6 @@ func Detect(m *types.Manifest, root string) ([]Finding, error) {
 			findings = append(findings, baseFinding)
 		}
 	}
-
-	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].Path != findings[j].Path {
-			return findings[i].Path < findings[j].Path
-		}
-		return findings[i].Kind < findings[j].Kind
-	})
 	return findings, nil
 }
 
