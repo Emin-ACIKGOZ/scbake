@@ -41,12 +41,20 @@ graph LR
   File and directory writes performed by scbake's file tasks are managed by a
   transaction manager: created paths are removed in reverse order, and files
   those tasks overwrite are restored from on-disk backups when a task or the
-  manifest save fails. External tool commands are opaque; only explicitly
-  predicted outputs that did not already exist are tracked, so their side
-  effects may remain. SIGINT and SIGTERM cancel running tasks, stop the child
-  process, run the same rollback as an in-process error, and exit 130/143.
-  SIGKILL and other abrupt process termination bypass deferred cleanup, but the
-  next run reports the interrupted transaction instead of treating it as clean;
+  manifest save fails. External tool commands are opaque, so handlers declare
+  the paths a command may create or modify. Those paths are tracked before the
+  command runs, whether or not they already exist: missing paths are removed on
+  rollback, existing regular files are backed up with their content and mode,
+  and existing directories are left in place. Zip extraction commands can also
+  declare an archive whose entries are validated and tracked individually
+  before extraction, including nested destinations and missing ancestors.
+  Coverage is limited to declared paths: custom handlers must declare their own;
+  pre-existing dependency trees such as `node_modules`, `.git` internals,
+  non-zip extraction, and writes outside declared paths remain outside the
+  transaction. SIGINT and SIGTERM cancel running tasks, stop the child process,
+  run the same rollback as an in-process error, and exit 130/143. SIGKILL and
+  other abrupt process termination bypass deferred cleanup, but the next run
+  reports the interrupted transaction instead of treating it as clean;
   `scbake recover` rolls it back from the on-disk journal.
 
 - **Prioritized Execution**  
