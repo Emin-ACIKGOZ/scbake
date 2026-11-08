@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"scbake/internal/core"
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/templateregistry"
@@ -67,15 +68,54 @@ func cleanupFailedProject(projectName string) {
 	lock, err := transaction.AcquireRootLock(projectName, false)
 	if err == nil {
 		defer func() { _ = lock.Release() }()
-	} else if errors.Is(err, transaction.ErrBusy) {
+		fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
+		if err := removeFailedProject(projectName, lock.Release); err != nil {
+			fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", projectName, err)
+		}
+		return
+	}
+	if errors.Is(err, transaction.ErrBusy) {
 		fmt.Fprintf(os.Stderr, "Not removing '%s': another scbake process is using it.\n", projectName)
 		return
-	} else if !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintf(os.Stderr, "Locking '%s' for cleanup failed: %v\n", projectName, err)
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return
 	}
 
+	fmt.Fprintf(os.Stderr, "Locking '%s' for cleanup failed: %v\n", projectName, err)
 	fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
-	_ = os.RemoveAll(projectName)
+	if removeErr := removeFailedProject(projectName, nil); removeErr != nil {
+		fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", projectName, removeErr)
+	}
+}
+
+// removeFailedProject mirrors removeBootstrappedRoot: rename the directory to a
+// unique sibling staging path while the lock is held, release, then delete the
+// staged tree so Windows can remove the lock file. If the rename fails, the
+// original directory is left untouched and no deletion runs under the lock.
+func removeFailedProject(projectName string, release func() error) error {
+	parent := filepath.Dir(projectName)
+	staging, err := os.MkdirTemp(parent, ".scbake-remove-*")
+	if err != nil {
+		return fmt.Errorf("failed to stage failed project directory %s for removal: %w", projectName, err)
+	}
+	destination := filepath.Join(staging, filepath.Base(projectName))
+	if err := os.Rename(projectName, destination); err != nil {
+		_ = os.Remove(staging)
+		return fmt.Errorf("failed to remove failed project directory %s: %w", projectName, err)
+	}
+
+	var releaseErr error
+	if release != nil {
+		releaseErr = release()
+	}
+	if err := os.RemoveAll(staging); err != nil {
+		return errors.Join(releaseErr, fmt.Errorf("removed failed project directory %s but failed to clean staging directory %s: %w", projectName, staging, err))
+	}
+	if releaseErr != nil {
+		return fmt.Errorf("removed failed project directory %s but failed to release its lock: %w", projectName, releaseErr)
+	}
+	return nil
 }
 
 // runNew coordinates the project directory setup and delegates template application to the core engine.
