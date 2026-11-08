@@ -216,6 +216,37 @@ func TestDetect_BaseMissing(t *testing.T) {
 	}
 }
 
+// TestDetect_BaseMissingPerKeyWhenTreeAbsent: an absent .scbake-base tree still
+// yields one BaseMissing finding per current ledger key, not a collapsed
+// directory-level result.
+func TestDetect_BaseMissingPerKeyWhenTreeAbsent(t *testing.T) {
+	root := t.TempDir()
+	m := &types.Manifest{ManagedFiles: map[string]string{}}
+	for i := range 7 {
+		key := fmt.Sprintf("file%d.txt", i)
+		content := []byte(key + "\n")
+		mustWrite(t, filepath.Join(root, key), content)
+		m.ManagedFiles[key] = hashOf(content)
+	}
+	if _, err := os.Stat(filepath.Join(root, fileutil.CommittedBaseDir)); !os.IsNotExist(err) {
+		t.Fatalf("fixture unexpectedly has a committed base tree (stat err: %v)", err)
+	}
+
+	got, err := Detect(m, root)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(got) != 7 {
+		t.Fatalf("findings = %d, want one per key (7): %+v", len(got), got)
+	}
+	for i, f := range got {
+		wantPath := fmt.Sprintf("file%d.txt", i)
+		if f.Kind != BaseMissing || f.Path != wantPath {
+			t.Errorf("finding %d = (%q, %q), want (%q, base-missing)", i, f.Path, f.Kind, wantPath)
+		}
+	}
+}
+
 // TestDetect_BaseInvalid: a base whose neither normalized nor raw hash matches
 // the ledger is reported as BaseInvalid with the base hash.
 func TestDetect_BaseInvalid(t *testing.T) {

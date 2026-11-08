@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/util/fileutil"
+	"scbake/pkg/tasks"
 )
 
 // TestDriftCleanExitsZero: a freshly generated project has no drift.
@@ -158,6 +160,115 @@ func TestDriftInvalidBaseExitsOne(t *testing.T) {
 	}
 	if after := mustRead(t, basePath); after != before {
 		t.Errorf("drift repaired the invalid base:\n%s\n---\n%s", before, after)
+	}
+}
+
+// driftFile is one working file and the content recorded for it.
+type driftFile struct {
+	key  string
+	body string
+}
+
+// setupDriftManifest creates a minimal project whose managed_files entries match
+// the working files exactly and whose committed base tree is absent. It avoids
+// template machinery so the CLI reporting tests control the finding mix.
+func setupDriftManifest(t *testing.T, files ...driftFile) string {
+	t.Helper()
+	root := t.TempDir()
+	t.Chdir(root)
+
+	var manifest strings.Builder
+	manifest.WriteString("scbake_version = \"v0.3.0\"\n\n[managed_files]\n")
+	for _, f := range files {
+		mustWrite(t, filepath.Join(root, filepath.FromSlash(f.key)), f.body)
+		fmt.Fprintf(&manifest, "%q = %q\n", f.key, tasks.HashContent([]byte(f.body)))
+	}
+	mustWrite(t, filepath.Join(root, fileutil.ManifestFileName), manifest.String())
+	return root
+}
+
+// TestDriftHeaderCountsPathOnceAcrossModifiedAndInvalidBase: one file that is
+// both modified and has an invalid base is one managed file, not two.
+func TestDriftHeaderCountsPathOnceAcrossModifiedAndInvalidBase(t *testing.T) {
+	projectPath, _ := setupUpdateProject(t, "alpha\nshared\nomega\n")
+	mustWrite(t, filepath.Join(projectPath, "Makefile"), "alpha\nLOCAL\nomega\n")
+	mustWrite(t, filepath.Join(projectPath, fileutil.CommittedBaseDir, "Makefile"), "stale base\n")
+
+	out, err := runCLI("drift")
+	requireNonZeroExit(t, out, err)
+	want := "Drift detected in 1 managed file(s); 1 invalid merge base(s):"
+	if !strings.Contains(out, want) {
+		t.Errorf("drift header does not count the path once per category:\nwant %q\ngot:\n%s", want, out)
+	}
+	if strings.Contains(out, "Drift detected in 2 managed file(s)") {
+		t.Errorf("drift counted one file twice in the managed-file total:\n%s", out)
+	}
+}
+
+// TestDriftRequireBaseHeaderIncludesInvalidAndMissing: when blocking findings
+// span both base categories, the header names both counts.
+func TestDriftRequireBaseHeaderIncludesInvalidAndMissing(t *testing.T) {
+	root := setupDriftManifest(t,
+		driftFile{key: "a.txt", body: "alpha\n"},
+		driftFile{key: "b.txt", body: "beta\n"},
+	)
+	// a.txt has a corrupt base; b.txt has no base at all.
+	baseDir := filepath.Join(root, fileutil.CommittedBaseDir)
+	if err := os.MkdirAll(baseDir, 0o750); err != nil {
+		t.Fatalf("create base dir: %v", err)
+	}
+	mustWrite(t, filepath.Join(baseDir, "a.txt"), "corrupt\n")
+
+	out, err := runCLI("drift", "--require-base")
+	requireNonZeroExit(t, out, err)
+	if code, ok := exitCodeOf(err); !ok || code != fileutil.ExitError {
+		t.Errorf("drift --require-base exit code = %d, want %d (output=%s)", code, fileutil.ExitError, out)
+	}
+	want := "Invalid committed merge base for 1 managed file(s), and 1 missing merge base(s):"
+	if !strings.Contains(out, want) {
+		t.Errorf("drift header does not include both base categories:\nwant %q\ngot:\n%s", want, out)
+	}
+	for _, detail := range []string{"base-invalid", "base-missing", "a.txt", "b.txt"} {
+		if !strings.Contains(out, detail) {
+			t.Errorf("drift output missing %q: %s", detail, out)
+		}
+	}
+}
+
+// TestDriftAdvisoryCapsMissingBaseSamples: seven missing bases still exit 0,
+// but the human advisory shows only five sample paths and an aggregate count.
+func TestDriftAdvisoryCapsMissingBaseSamples(t *testing.T) { //nolint:cyclop // assertion-heavy output-cap test
+	files := make([]driftFile, 7)
+	for i := range files {
+		files[i] = driftFile{key: fmt.Sprintf("file%d.txt", i), body: fmt.Sprintf("body %d\n", i)}
+	}
+	root := setupDriftManifest(t, files...)
+	if _, err := os.Stat(filepath.Join(root, fileutil.CommittedBaseDir)); !os.IsNotExist(err) {
+		t.Fatalf("fixture unexpectedly has a committed base tree (stat err: %v)", err)
+	}
+
+	out, err := runCLI("drift")
+	if err != nil {
+		t.Fatalf("drift on missing bases alone exited non-zero: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "No working-tree drift; 7 merge base(s) missing (advisory):") {
+		t.Errorf("drift advisory header is wrong:\n%s", out)
+	}
+	for i := range 5 {
+		if path := fmt.Sprintf("file%d.txt", i); !strings.Contains(out, path) {
+			t.Errorf("drift output missing sample path %q: %s", path, out)
+		}
+	}
+	for i := 5; i < 7; i++ {
+		if path := fmt.Sprintf("file%d.txt", i); strings.Contains(out, path) {
+			t.Errorf("drift printed an unsampled detail path %q:\n%s", path, out)
+		}
+	}
+	if !strings.Contains(out, "... and 2 more missing base(s)") {
+		t.Errorf("drift output missing the aggregate remainder:\n%s", out)
+	}
+	if got := strings.Count(out, "base-missing"); got != 5 {
+		t.Errorf("drift printed %d base-missing detail lines, want 5:\n%s", got, out)
 	}
 }
 
