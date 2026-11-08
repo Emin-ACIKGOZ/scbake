@@ -11,9 +11,11 @@ type Manifest struct {
 	Templates    []Template        `toml:"templates"`
 	Metadata     map[string]string `toml:"metadata,omitempty"`
 	// ManagedFiles tracks files created by scbake and their SHA-256 hashes.
-	// Keys are paths relative to the manifest root (e.g. "services/api/LICENSE"),
-	// so monorepo subprojects that generate the same relative filename get
-	// distinct entries instead of colliding.
+	// Hashes are EOL-insensitive for text: the content is normalized from CRLF
+	// to LF before hashing, while NUL-bearing binary content is hashed
+	// byte-exact. Keys are paths relative to the manifest root (e.g.
+	// "services/api/LICENSE"), so monorepo subprojects that generate the same
+	// relative filename get distinct entries instead of colliding.
 	ManagedFiles map[string]string `toml:"managed_files,omitempty"`
 }
 

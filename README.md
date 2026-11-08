@@ -213,7 +213,7 @@ run repeatedly:
 
 - **Idempotent.** With no template change and no drift, it makes no writes.
 - **Three-way merge.** A pristine copy of each managed file is kept under
-  `.scbake/base/`; when both the template and your file changed, `update` merges
+  `.scbake-base/`; when both the template and your file changed, `update` merges
   non-overlapping edits. Overlapping edits are written to a `<file>.scbake-new`
   artifact instead of being applied.
 - **Policy.** `--conflict-strategy` accepts `merge` (default), `fail`,
@@ -225,6 +225,58 @@ run repeatedly:
 cd my-backend
 scbake update
 ```
+
+#### Committed merge base and migration
+
+`.scbake-base/` is committed with the project, so a fresh clone has the common
+ancestor that `update` needs. The root `.gitignore` keeps private state ignored
+and re-includes the committed base:
+
+```gitignore
+.scbake/
+!.scbake-base/
+!.scbake-base/**
+!.gitignore
+```
+
+Run `git add .` from the manifest root, not a subdirectory, so new base files
+are staged. Inside `.scbake-base`, a managed `.gitignore` or `.gitattributes` is
+stored as `.gitignore.scbake-shadow` or `.gitattributes.scbake-shadow` so Git
+does not apply those rules to the base tree itself. Those two suffixed names are
+reserved.
+
+The base stores pristine rendered bytes, so it can duplicate ignored build
+outputs and any secret a template rendered. It also adds repository churn
+whenever generated content changes; review the committed tree before publishing.
+
+`managed_files` hashes are EOL-insensitive for text: CRLF and LF hash the same,
+while content containing a NUL byte is hashed byte-exact. A legacy file recorded
+while rendered as CRLF can report one-time drift after upgrading.
+
+**Breaking change.** This release no longer reads the old `.scbake/base/` path.
+Migrate once by copying the base, renaming the two Git-special files, and
+committing the result:
+
+```sh
+mkdir -p .scbake-base
+cp -a .scbake/base/. .scbake-base/
+find .scbake-base -type f -name .gitignore \
+  -exec sh -c 'mv -n "$1" "$1.scbake-shadow"' _ {} \;
+find .scbake-base -type f -name .gitattributes \
+  -exec sh -c 'mv -n "$1" "$1.scbake-shadow"' _ {} \;
+# Ensure the ignore block above is present at the end of .gitignore.
+git rm -r --cached .scbake/base 2>/dev/null || true
+git add .gitignore .scbake-base
+git commit -m 'chore: migrate scbake merge base to .scbake-base'
+rm -rf .scbake/base
+```
+
+`git mv .scbake/base .scbake-base` alone is insufficient: the copied
+`.gitignore` and `.gitattributes` would keep names Git applies to the base tree.
+A missing or invalid base fails closed to a `.scbake-new` artifact, but sparse or
+partial clones that omit `.scbake-base/` cannot merge. Native Windows/macOS
+filters, LFS, and `working-tree-encoding` transformations remain unverified;
+plain CRLF is handled by hash and merge-input normalization.
 
 
 ### `drift`: Detect (and Repair) Changes to Managed Files

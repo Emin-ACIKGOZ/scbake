@@ -375,15 +375,51 @@ flags. Two properties make it safe:
 - **Provenance.** `[[templates]]` records the real `{name, path}` of every
   tooling template, and `[[projects]]` records each project's `language`, so
   `update` can reconstruct exactly what `apply` ran (D2).
-- **Pristine base shadow.** Every managed write stores its rendered bytes under
-  `.scbake/base/<path>`. When both the template and the working file changed,
-  `update` runs a conservative line-oriented three-way merge
+- **Pristine committed base.** Every managed write stores its rendered bytes
+  under `.scbake-base/<path>`. When both the template and the working file
+  changed, `update` runs a conservative line-oriented three-way merge
   (`internal/merge`) against that base. Non-overlapping edits merge; overlaps
   fall back to an artifact. Only `CreateTemplateTask` writes are replayed, so
   environment commands never re-run.
 
-`managed_files` continues to hold the hash of the pristine render, so a merged
-file is still recognized as locally modified on the next `apply` (SCB-056).
+The base lives at the project root rather than under the ignored `.scbake/`
+directory so a normal commit carries it to a clone. The root `.gitignore` must
+contain:
+
+```gitignore
+.scbake/
+!.scbake-base/
+!.scbake-base/**
+!.gitignore
+```
+
+The directory and glob re-includes are both required under broad patterns such
+as `.*` or `*.out`; `!.gitignore` keeps the rules file itself stageable. The
+base must be staged from the manifest root (`git add .`), because a
+subdirectory add cannot reach a root-level directory. Inside `.scbake-base`,
+managed `.gitignore` and `.gitattributes` files are renamed to
+`.gitignore.scbake-shadow` and `.gitattributes.scbake-shadow` at every depth;
+otherwise Git would apply those copies to the base tree and hide or transform
+sibling payloads. Those suffixes are reserved names.
+
+`managed_files` records the hash of the pristine render, computed with CRLF
+normalized to LF for text. Content containing a NUL byte is hashed byte-exact,
+so binary payloads are unaffected. The base tree itself keeps the render
+byte-exact; normalization applies only to hashing and to the inputs of
+`merge.Merge`. Consequently EOL-only edits are not project content, and a
+legacy CRLF-recorded file can show one-time drift. A merged file is still
+recognized as locally modified on the next `apply` (SCB-056).
+
+The move from `.scbake/base/` to `.scbake-base/` is a breaking change with no
+read fallback. Migration is manual: copy the old base, rename the two
+Git-special files, ensure the ignore block above, stage `.gitignore` and
+`.scbake-base`, and remove the old tracked or ignored directory. A plain
+`git mv .scbake/base .scbake-base` is insufficient because the shadow names
+remain active. A missing or invalid base falls back to an artifact rather than a
+silent merge. Committing rendered bytes can expose ignored outputs or secrets
+and adds churn. Sparse/partial clones may omit the base, and native
+Windows/macOS checkout filters, LFS, and `working-tree-encoding` remain
+unverified; hash and merge-input normalization cover plain CRLF only.
 
 ### 6. Drift Detection
 
