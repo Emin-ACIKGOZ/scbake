@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"scbake/internal/filesystem/transaction"
@@ -40,11 +41,19 @@ func rawHashOf(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// writeBase writes the committed pristine base for a ledger key using the same
+// shadow mapping as the write path.
+func writeBase(t *testing.T, root, key string, content []byte) {
+	t.Helper()
+	mustWrite(t, filepath.Join(root, tasks.BaseShadowRelPath(key)), content)
+}
+
 // TestDetect_Clean: a file whose bytes hash to the recorded value is not drift.
 func TestDetect_Clean(t *testing.T) {
 	root := t.TempDir()
 	content := []byte("generated\n")
 	mustWrite(t, filepath.Join(root, "a.txt"), content)
+	writeBase(t, root, "a.txt", content)
 
 	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": hashOf(content)}}
 	got, err := Detect(m, root)
@@ -64,6 +73,7 @@ func TestDetect_Modified(t *testing.T) {
 	base := []byte("original\n")
 	edited := []byte("hand-edited\n")
 	mustWrite(t, filepath.Join(root, "a.txt"), edited)
+	writeBase(t, root, "a.txt", base)
 
 	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": hashOf(base)}}
 	got, err := Detect(m, root)
@@ -91,6 +101,7 @@ func TestDetect_IgnoresEOLOnlyChurn(t *testing.T) {
 	root := t.TempDir()
 	lf := []byte("alpha\nshared\nomega\n")
 	mustWrite(t, filepath.Join(root, "a.txt"), []byte("alpha\r\nshared\r\nomega\r\n"))
+	writeBase(t, root, "a.txt", lf)
 
 	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": hashOf(lf)}}
 	got, err := Detect(m, root)
@@ -110,6 +121,7 @@ func TestDetect_LegacyCRLFHashIsOneTimeDrift(t *testing.T) {
 	root := t.TempDir()
 	crlf := []byte("alpha\r\nshared\r\nomega\r\n")
 	mustWrite(t, filepath.Join(root, "a.txt"), crlf)
+	writeBase(t, root, "a.txt", crlf)
 
 	legacy := &types.Manifest{ManagedFiles: map[string]string{"a.txt": rawHashOf(crlf)}}
 	got, err := Detect(legacy, root)
@@ -138,6 +150,7 @@ func TestDetect_LegacyLFHashIsClean(t *testing.T) {
 	root := t.TempDir()
 	lf := []byte("alpha\nshared\nomega\n")
 	mustWrite(t, filepath.Join(root, "a.txt"), lf)
+	writeBase(t, root, "a.txt", lf)
 
 	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": rawHashOf(lf)}}
 	if got, err := Detect(m, root); err != nil || len(got) != 0 {
@@ -177,6 +190,236 @@ func TestDetect_CommittedBaseLocation(t *testing.T) {
 	}
 }
 
+// TestDetect_BaseMissing: a clean working file with no committed base is
+// reported as BaseMissing with the expected shadow path.
+func TestDetect_BaseMissing(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("generated\n")
+	mustWrite(t, filepath.Join(root, "a.txt"), content)
+
+	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": hashOf(content)}}
+	got, err := Detect(m, root)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != BaseMissing {
+		t.Fatalf("missing base = %+v, want one BaseMissing finding", got)
+	}
+	if got[0].Path != "a.txt" {
+		t.Errorf("Path = %q, want a.txt", got[0].Path)
+	}
+	if want := filepath.ToSlash(tasks.BaseShadowRelPath("a.txt")); got[0].BasePath != want {
+		t.Errorf("BasePath = %q, want %q", got[0].BasePath, want)
+	}
+	if got[0].Recorded != hashOf(content) || got[0].Actual != "" {
+		t.Errorf("finding hashes = %+v, want recorded hash and empty actual", got[0])
+	}
+}
+
+// TestDetect_BaseMissingPerKeyWhenTreeAbsent: an absent .scbake-base tree still
+// yields one BaseMissing finding per current ledger key, not a collapsed
+// directory-level result.
+func TestDetect_BaseMissingPerKeyWhenTreeAbsent(t *testing.T) {
+	root := t.TempDir()
+	m := &types.Manifest{ManagedFiles: map[string]string{}}
+	for i := range 7 {
+		key := fmt.Sprintf("file%d.txt", i)
+		content := []byte(key + "\n")
+		mustWrite(t, filepath.Join(root, key), content)
+		m.ManagedFiles[key] = hashOf(content)
+	}
+	if _, err := os.Stat(filepath.Join(root, fileutil.CommittedBaseDir)); !os.IsNotExist(err) {
+		t.Fatalf("fixture unexpectedly has a committed base tree (stat err: %v)", err)
+	}
+
+	got, err := Detect(m, root)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(got) != 7 {
+		t.Fatalf("findings = %d, want one per key (7): %+v", len(got), got)
+	}
+	for i, f := range got {
+		wantPath := fmt.Sprintf("file%d.txt", i)
+		if f.Kind != BaseMissing || f.Path != wantPath {
+			t.Errorf("finding %d = (%q, %q), want (%q, base-missing)", i, f.Path, f.Kind, wantPath)
+		}
+	}
+}
+
+// TestDetect_BaseInvalid: a base whose neither normalized nor raw hash matches
+// the ledger is reported as BaseInvalid with the base hash.
+func TestDetect_BaseInvalid(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("generated\n")
+	stale := []byte("stale base\n")
+	mustWrite(t, filepath.Join(root, "a.txt"), content)
+	writeBase(t, root, "a.txt", stale)
+
+	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": hashOf(content)}}
+	got, err := Detect(m, root)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != BaseInvalid {
+		t.Fatalf("stale base = %+v, want one BaseInvalid finding", got)
+	}
+	if want := filepath.ToSlash(tasks.BaseShadowRelPath("a.txt")); got[0].BasePath != want {
+		t.Errorf("BasePath = %q, want %q", got[0].BasePath, want)
+	}
+	if got[0].Recorded != hashOf(content) || got[0].Actual != hashOf(stale) {
+		t.Errorf("finding hashes = %+v, want recorded and base hashes", got[0])
+	}
+}
+
+// TestDetect_CRLFBaseIsValid pins the shared merge predicate: a CRLF base is
+// accepted when its EOL-normalized hash matches the current ledger hash.
+func TestDetect_CRLFBaseIsValid(t *testing.T) {
+	root := t.TempDir()
+	lf := []byte("alpha\nshared\nomega\n")
+	crlf := []byte("alpha\r\nshared\r\nomega\r\n")
+	mustWrite(t, filepath.Join(root, "a.txt"), lf)
+	writeBase(t, root, "a.txt", crlf)
+
+	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": hashOf(lf)}}
+	if got, err := Detect(m, root); err != nil || len(got) != 0 {
+		t.Fatalf("CRLF base reported drift: %+v (err %v)", got, err)
+	}
+}
+
+// TestDetect_ShadowNameBaseIsValid verifies base validation uses the same
+// shadow mapping as the write path for Git-special names at any depth.
+func TestDetect_ShadowNameBaseIsValid(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("dist/\n")
+	mustWrite(t, filepath.Join(root, "sub", ".gitignore"), content)
+	writeBase(t, root, "sub/.gitignore", content)
+
+	m := &types.Manifest{ManagedFiles: map[string]string{"sub/.gitignore": hashOf(content)}}
+	if got, err := Detect(m, root); err != nil || len(got) != 0 {
+		t.Fatalf("shadow-name base reported drift: %+v (err %v)", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, fileutil.CommittedBaseDir, "sub", ".gitignore")); !os.IsNotExist(err) {
+		t.Errorf("unshadowed base path exists (stat err: %v)", err)
+	}
+}
+
+// TestDetect_MonorepoScopedBases validates scoped keys independently: a valid
+// base is clean and a removed sibling base is BaseMissing for that key alone.
+func TestDetect_MonorepoScopedBases(t *testing.T) {
+	root := t.TempDir()
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New: %v", err)
+	}
+	m := &types.Manifest{}
+	write := func(sub, name string, content []byte) {
+		t.Helper()
+		tc := types.TaskContext{TargetPath: filepath.Join(root, sub), Manifest: m, Tx: tx}
+		if err := tasks.WriteManagedFile(tc, name, content, 0o600); err != nil {
+			t.Fatalf("WriteManagedFile(%s): %v", sub, err)
+		}
+	}
+	write("services/a", "LICENSE", []byte("license for alice\n"))
+	write("services/b", "LICENSE", []byte("license for bob\n"))
+
+	if got, err := Detect(m, root); err != nil || len(got) != 0 {
+		t.Fatalf("freshly generated tree reports drift: %+v (err %v)", got, err)
+	}
+
+	if err := os.Remove(filepath.Join(root, tasks.BaseShadowRelPath("services/b/LICENSE"))); err != nil {
+		t.Fatalf("remove base for services/b: %v", err)
+	}
+	got, err := Detect(m, root)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != BaseMissing || got[0].Path != "services/b/LICENSE" {
+		t.Fatalf("scoped missing base = %+v, want BaseMissing for services/b/LICENSE", got)
+	}
+}
+
+// TestDetect_BaseReadErrorFailsClosed: any base read error other than ENOENT is
+// an error, never BaseInvalid or BaseMissing.
+func TestDetect_BaseReadErrorFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("generated\n")
+	mustWrite(t, filepath.Join(root, "a.txt"), content)
+	if err := os.MkdirAll(filepath.Join(root, tasks.BaseShadowRelPath("a.txt")), 0o750); err != nil {
+		t.Fatalf("create directory at base path: %v", err)
+	}
+
+	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": hashOf(content)}}
+	got, err := Detect(m, root)
+	if err == nil {
+		t.Fatalf("base read error was not surfaced; findings = %+v", got)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("base read error was reported as NotExist: %v", err)
+	}
+	if !strings.Contains(err.Error(), "inspecting committed base") {
+		t.Errorf("error = %v, want an inspecting-committed-base error", err)
+	}
+}
+
+// TestDetect_SortsByPathThenKind pins deterministic ordering when one managed
+// file has both working-tree and base findings.
+func TestDetect_SortsByPathThenKind(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("original\n")
+	mustWrite(t, filepath.Join(root, "a.txt"), []byte("edited\n"))
+	writeBase(t, root, "a.txt", []byte("stale base\n"))
+	mustWrite(t, filepath.Join(root, "b.txt"), content)
+
+	m := &types.Manifest{ManagedFiles: map[string]string{
+		"a.txt": hashOf(content),
+		"b.txt": hashOf(content),
+	}}
+	got, err := Detect(m, root)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	want := []struct {
+		path string
+		kind Kind
+	}{
+		{"a.txt", BaseInvalid},
+		{"a.txt", Modified},
+		{"b.txt", BaseMissing},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("findings = %+v, want %d", got, len(want))
+	}
+	for i := range want {
+		if got[i].Path != want[i].path || got[i].Kind != want[i].kind {
+			t.Errorf("finding %d = (%q, %q), want (%q, %q)",
+				i, got[i].Path, got[i].Kind, want[i].path, want[i].kind)
+		}
+	}
+}
+
+// TestDetect_EmptyRecordedSkipsBase: a malformed empty ledger hash is not a
+// base-invalid finding and no base read is attempted.
+func TestDetect_EmptyRecordedSkipsBase(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("generated\n")
+	mustWrite(t, filepath.Join(root, "a.txt"), content)
+	// A directory at the base path would make any base read fail, so a clean
+	// result proves the base is not inspected for an empty recorded hash.
+	if err := os.MkdirAll(filepath.Join(root, tasks.BaseShadowRelPath("a.txt")), 0o750); err != nil {
+		t.Fatalf("create directory at base path: %v", err)
+	}
+
+	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": ""}}
+	got, err := Detect(m, root)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != Modified {
+		t.Fatalf("empty recorded hash findings = %+v, want only one Modified", got)
+	}
+}
+
 // TestDetect_Missing: a deleted managed file is reported Missing, not clean.
 func TestDetect_Missing(t *testing.T) {
 	root := t.TempDir()
@@ -186,6 +429,7 @@ func TestDetect_Missing(t *testing.T) {
 		Projects:     []types.Project{{Name: "root", Path: ".", Language: "go"}},
 		ManagedFiles: map[string]string{"gone.txt": hashOf([]byte("x"))},
 	}
+	writeBase(t, root, "gone.txt", []byte("x"))
 
 	got, err := Detect(m, root)
 	if err != nil {
@@ -220,6 +464,9 @@ func TestDetect_Invariants(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "z.txt"), []byte("z\n"))
 	mustWrite(t, filepath.Join(root, "a.txt"), []byte("changed\n"))
 	// m.txt is absent on purpose.
+	writeBase(t, root, "z.txt", []byte("z\n"))
+	writeBase(t, root, "a.txt", []byte("orig\n"))
+	writeBase(t, root, "m.txt", []byte("missing\n"))
 
 	m := &types.Manifest{ManagedFiles: map[string]string{
 		"z.txt": hashOf([]byte("z\n")),       // clean
@@ -299,6 +546,9 @@ func legacyProject(t *testing.T, projects ...types.Project) (string, *types.Mani
 // or `drift` would report drift for a file `apply` considers clean.
 func TestDetect_LegacyFlatKeyNotFalseMissing(t *testing.T) {
 	root, m, _ := legacyProject(t, types.Project{Name: "a", Path: "services/a", Language: "go"})
+	// No version wrote a base at the flat key, so a corrupt base there must not
+	// turn a legacy-resolved entry into a base finding.
+	writeBase(t, root, "LICENSE", []byte("corrupt base\n"))
 
 	got, err := Detect(m, root)
 	if err != nil {
@@ -312,7 +562,8 @@ func TestDetect_LegacyFlatKeyNotFalseMissing(t *testing.T) {
 // TestDetect_LegacyFlatKeyEditedThenDeleted: an edited legacy file is Modified
 // (not falsely Missing), and a deleted one is Missing.
 func TestDetect_LegacyFlatKeyEditedThenDeleted(t *testing.T) {
-	root, m, _ := legacyProject(t, types.Project{Name: "a", Path: "services/a", Language: "go"})
+	root, m, content := legacyProject(t, types.Project{Name: "a", Path: "services/a", Language: "go"})
+	writeBase(t, root, "LICENSE", content)
 	license := filepath.Join(root, "services", "a", "LICENSE")
 
 	mustWrite(t, license, []byte("alice edited\n"))
@@ -380,8 +631,13 @@ func TestDetect_ReadOnly(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "scbake.toml"), []byte("scbake_version = \"v0.3.0\"\n"))
 	mustWrite(t, filepath.Join(root, "a.txt"), []byte("drifted\n"))
+	corruptBase := []byte("corrupt base\n")
+	writeBase(t, root, "a.txt", corruptBase)
 
-	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": hashOf([]byte("orig\n"))}}
+	m := &types.Manifest{ManagedFiles: map[string]string{
+		"a.txt": hashOf([]byte("orig\n")),
+		"b.txt": hashOf([]byte("b\n")), // committed base is absent
+	}}
 	before := snapshot(t, root)
 	if _, err := Detect(m, root); err != nil {
 		t.Fatalf("Detect: %v", err)
@@ -398,6 +654,15 @@ func TestDetect_ReadOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".scbake")); !os.IsNotExist(err) {
 		t.Errorf("Detect created .scbake state")
+	}
+	//nolint:gosec // test-controlled temp path
+	if got, err := os.ReadFile(filepath.Join(root, tasks.BaseShadowRelPath("a.txt"))); err != nil {
+		t.Fatalf("read corrupt base: %v", err)
+	} else if string(got) != string(corruptBase) {
+		t.Errorf("Detect repaired the corrupt base: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, tasks.BaseShadowRelPath("b.txt"))); !os.IsNotExist(err) {
+		t.Errorf("Detect created a missing base (stat err: %v)", err)
 	}
 }
 
@@ -478,6 +743,7 @@ func FuzzDetect_RoundTrip(f *testing.F) {
 		}
 		root := t.TempDir()
 		mustWrite(t, filepath.Join(root, "f.txt"), content)
+		writeBase(t, root, "f.txt", content)
 		m := &types.Manifest{ManagedFiles: map[string]string{"f.txt": hashOf(content)}}
 
 		if got, err := Detect(m, root); err != nil || len(got) != 0 {

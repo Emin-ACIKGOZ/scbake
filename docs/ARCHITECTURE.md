@@ -444,17 +444,33 @@ unverified; hash and merge-input normalization cover plain CRLF only.
 that `update` writes. For every recorded key it hashes the working-tree file with
 the EOL-insensitive contract and classifies it `modified` (normalized hash
 differs), `missing` (absent), or clean. EOL-only changes to NUL-free content are
-therefore not drift. It opens
-no transaction, renders no template, and never touches the network, so it is
-safe as a CI gate; it exits non-zero when any finding remains. `--repair`
-delegates to `core.RunUpdate`, so detection and repair share one reconciliation
-implementation (`internal/drift`).
+therefore not drift.
+
+For every current, non-legacy-resolved key it also reads the committed base under
+`.scbake-base` with the shared shadow-path mapping and compares it to the ledger
+with the same predicate `update` uses. An absent base is `base-missing`; a hash
+mismatch is `base-invalid`, blocking on exit. Missing bases are advisory by
+default and become blocking under `--require-base`, which cannot be combined with
+`--repair`. A base read error other than `ENOENT` (for example a permission
+error, directory, or symlink rejected by the containment check) is returned as
+an error so detection fails closed instead of misreporting an I/O problem as
+drift. Flat pre-scoping keys resolved through a project path are skipped because
+no version wrote a base for them. Findings are sorted by `(path, kind)` so two
+findings on one path are deterministic.
+
+It opens no transaction, takes no project lock, renders no template, and never
+touches the network, so it is safe as a CI gate; it exits non-zero when any
+blocking finding remains. `--repair` delegates to `core.RunUpdate`, so detection
+and repair share one reconciliation implementation (`internal/drift`). Detection
+does not backfill a missing base; a no-op `update` does not either.
 
 Detection is deliberately conservative: a locally edited file is drift even
 when `update`'s default `merge` strategy is a no-op that preserves the edit.
 A `merge`-style repair therefore leaves the file reported as drift (use
 `overwrite` to force restoration), which is why `drift` after `--repair` may
-still exit non-zero by design.
+still exit non-zero by design. Staying lock-free means a concurrent `update` can
+momentarily expose a partially written base, which detection may report as a
+transient `base-invalid` rather than waiting for or acquiring the lock.
 
 ---
 

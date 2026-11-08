@@ -108,6 +108,21 @@ func rawContentHash(content []byte) string {
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
+// BaseMatchesRecordedHash reports whether base is the pristine content recorded
+// by recorded in the managed_files ledger. It accepts the EOL-insensitive hash
+// and, for manifests written before that contract, the byte-exact raw hash. An
+// empty recorded hash never matches, so a malformed ledger entry cannot make
+// arbitrary base content look valid.
+//
+// The write path and read-only drift detection share this predicate so a base
+// accepted by `update` is never reported as invalid by `drift`, and vice versa.
+func BaseMatchesRecordedHash(base []byte, recorded string) bool {
+	if recorded == "" {
+		return false
+	}
+	return HashContent(base) == recorded || rawContentHash(base) == recorded
+}
+
 // normalizeEOL returns content with every run of one or more CR bytes that is
 // immediately followed by LF collapsed to a single LF. This is a single-pass
 // projection, so it is idempotent even for pathological CR runs: "\r\r\n"
@@ -239,7 +254,7 @@ func reconcileMerge(
 	// the raw SHA-256 of the rendered bytes. A migrated CRLF base therefore
 	// matches originalHash only byte-exactly, not through HashContent. Accept
 	// either form; a truly stale base still matches neither.
-	if HashContent(base) != originalHash && rawContentHash(base) != originalHash {
+	if !BaseMatchesRecordedHash(base, originalHash) {
 		fmt.Fprintf(os.Stderr,
 			"⚠️  No valid pristine base for %s (hash mismatch); writing new template to artifact.\n",
 			outputRelPath)
