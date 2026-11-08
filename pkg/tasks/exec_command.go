@@ -78,11 +78,13 @@ type ExecCommandTask struct {
 	// PredictedCreated lists files or directories this command may create or
 	// modify. Despite the historical name, it is not limited to missing paths:
 	// when a transaction is active, every listed path is tracked before the
-	// command runs. Tracking records a missing path for deletion, backs up an
-	// existing regular file (content and mode), and leaves existing directories
-	// unchanged. Relative paths are resolved against the command's working
-	// directory. This lets rollback undo opaque command side effects such as
-	// `go mod tidy` rewriting go.mod or `npm install` changing package.json.
+	// command runs. Tracking snapshots a missing regular file after the command
+	// for content-verified removal, backs up an existing regular file (content
+	// and mode), and leaves existing directories unchanged. A created directory
+	// is removed only when empty, so a populated one is kept as residue.
+	// Relative paths are resolved against the command's working directory. This
+	// lets rollback undo opaque command side effects such as `go mod tidy`
+	// rewriting go.mod or `npm install` changing package.json.
 	PredictedCreated []string
 
 	// ArchivePath is an optional zip archive whose entries are tracked before
@@ -166,10 +168,11 @@ func snapshotCreatedContent(tc types.TaskContext, paths []string) {
 
 // trackSideEffects registers paths the command may create or modify before it
 // runs. Tracking every prediction unconditionally means Track backs up an
-// existing file, records a missing path for deletion, or no-ops an existing
-// directory. Archive entries are expanded separately so nested writes are also
-// covered. It returns the declared and archive destination paths so their
-// created content can be snapshotted after the command runs.
+// existing regular file, registers a missing path for content-verified removal
+// after the command, or no-ops an existing directory. Archive entries are
+// expanded separately so nested writes are also covered. It returns the
+// declared and archive destination paths so their created content can be
+// snapshotted after the command runs.
 func (t *ExecCommandTask) trackSideEffects(tc types.TaskContext) ([]string, error) {
 	if tc.Tx == nil {
 		return nil, nil

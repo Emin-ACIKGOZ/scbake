@@ -39,8 +39,10 @@ graph LR
 
 - **Built-in Rollback Safety**
   File and directory writes performed by scbake's file tasks are managed by a
-  transaction manager. Created regular files are removed only when a content
-  hash recorded before the write still matches their raw bytes; created
+  transaction manager. A created regular file is removed only when a content
+  hash recorded by the transaction still matches its raw bytes; file-task writes
+  record that hash before writing, while declared command outputs, archive
+  destinations, and the manifest are recorded after their write. Created
   directories are removed deepest-first and only when empty. Files those tasks
   overwrite are restored from on-disk backups when a task or the manifest save
   fails. External tool commands are opaque, so handlers declare the paths a
@@ -54,9 +56,9 @@ graph LR
   manifests, and declared zip entries, not build state. Pre-existing dependency
   trees such as `node_modules`, `.git` internals, non-zip extraction, and writes
   outside declared paths remain outside the transaction; custom handlers must
-  declare their own paths. Repeated opaque writers, legacy journals, and
-  unverifiable paths are kept as conservative residue rather than deleted. If a
-  dependency install fails, delete the affected tree (for example
+  declare their own paths. Repeated opaque writers and legacy journals can
+  leave conservative residue: unverifiable regular files are kept rather than
+  deleted. If a dependency install fails, delete the affected tree (for example
   `node_modules`) and reinstall from `package.json`/`package-lock.json`; the
   manifests are restored by rollback. SIGINT and SIGTERM cancel running tasks,
   stop the child process, run the same rollback as an in-process error, and exit
@@ -423,16 +425,16 @@ fallback for non-scbake writers; the root lock is the primary scbake-vs-scbake
 concurrency guard.
 
 Rollback verifies created paths before removing them. A created regular file is
-deleted only when a content hash journaled before the write still matches the
-file's current raw bytes; a created directory is removed deepest-first, and only
-when it is empty. Paths with no recorded hash — such as legacy journals, an
-interrupted write, or opaque command output that was not declared — are kept
-with a warning instead of being deleted. Declared command outputs, archive
-extraction destinations, and a newly saved manifest are snapshotted after their
-write, so a regular file created once by an opaque writer remains removable.
-Non-empty directories are kept, and repeated opaque writers can make the
-recorded hash stale, leaving conservative residue rather than deleting
-unverified content. This closes #133.
+deleted only when a content hash recorded by the transaction still matches the
+file's current raw bytes. File-task writes record that hash before writing;
+declared command outputs, archive extraction destinations, and a newly saved
+manifest are snapshotted after their write, so a file created once by an opaque
+writer remains removable. A created directory is removed deepest-first, and only
+when it is empty. Created regular files with no recorded hash, such as entries
+from a legacy journal, an interrupted write, or undeclared opaque output, are
+kept with a warning instead of being deleted. Non-empty directories are kept,
+and repeated opaque writers can make the recorded hash stale, leaving
+conservative residue rather than deleting unverified content.
 
 
 ### `template registry`: Manage Remote Registries

@@ -142,9 +142,12 @@ the lock when the process exits or crashes, so a leftover lock file is harmless;
 normal release removes the file and prunes an empty `.scbake` directory. The
 manifest mtime check remains as a fallback for non-scbake writers. Rollback is
 content-aware: a created regular file is deleted only when the raw SHA-256
-recorded before its write still matches the current bytes, and a created
-directory is removed deepest-first only when empty. Paths with no recorded hash
-(for example legacy journals or interrupted writes) are kept with a warning.
+recorded by the transaction still matches the current bytes. File-task writes
+record the hash before writing; declared command outputs, archive destinations,
+and the manifest are snapshotted after their write. A created directory is
+removed deepest-first only when empty. Created regular files with no recorded
+hash (for example legacy journals or interrupted writes) are kept with a
+warning.
 The check is forensic, not atomic: a writer can still replace bytes between
 verification and unlink, and a background child can race the post-command
 snapshot. Those races are accepted residuals.
