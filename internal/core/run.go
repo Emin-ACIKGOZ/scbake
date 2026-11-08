@@ -410,25 +410,8 @@ func persistManifestState(
 		return err
 	}
 
-	// Persist metadata
-	if tc.Manifest.Metadata != nil {
-		if m.Metadata == nil {
-			m.Metadata = make(map[string]string)
-		}
-		for k, v := range tc.Manifest.Metadata {
-			m.Metadata[k] = v
-		}
-	}
-
-	// Persist managed files state
-	if tc.Manifest.ManagedFiles != nil {
-		if m.ManagedFiles == nil {
-			m.ManagedFiles = make(map[string]string)
-		}
-		for k, v := range tc.Manifest.ManagedFiles {
-			m.ManagedFiles[k] = v
-		}
-	}
+	persistManifestMetadata(m, tc)
+	persistManagedFiles(m, tc)
 
 	// We track the manifest file itself before saving.
 	// This ensures that if the Save succeeds but a subsequent step crashes (unlikely),
@@ -441,7 +424,45 @@ func persistManifestState(
 	if err := manifest.Save(m, rootPath); err != nil {
 		return fmt.Errorf("manifest save failed: %w", err)
 	}
+
+	snapshotManifestContent(tx, manifestPath)
 	return nil
+}
+
+// persistManifestMetadata copies the context's metadata into the manifest.
+func persistManifestMetadata(m *types.Manifest, tc types.TaskContext) {
+	if tc.Manifest.Metadata == nil {
+		return
+	}
+	if m.Metadata == nil {
+		m.Metadata = make(map[string]string)
+	}
+	for k, v := range tc.Manifest.Metadata {
+		m.Metadata[k] = v
+	}
+}
+
+// persistManagedFiles copies the context's managed-file state into the
+// manifest.
+func persistManagedFiles(m *types.Manifest, tc types.TaskContext) {
+	if tc.Manifest.ManagedFiles == nil {
+		return
+	}
+	if m.ManagedFiles == nil {
+		m.ManagedFiles = make(map[string]string)
+	}
+	for k, v := range tc.Manifest.ManagedFiles {
+		m.ManagedFiles[k] = v
+	}
+}
+
+// snapshotManifestContent records a newly created manifest's bytes so rollback
+// removes it only when they are unchanged. Best-effort: a failure keeps the
+// manifest on rollback rather than risking unverified content.
+func snapshotManifestContent(tx *transaction.Manager, manifestPath string) {
+	if err := tx.SnapshotCreatedContent(manifestPath); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Could not snapshot manifest content for rollback: %v\n", err)
+	}
 }
 
 // updateManifest merges new projects and templates into the existing manifest

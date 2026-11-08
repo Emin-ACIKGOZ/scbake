@@ -22,7 +22,7 @@ Priority Sorting (execute in order)
 Task Execution (with transaction tracking)
     ↓
 On success: Commit (delete backups)
-On failure: Rollback (delete created paths in reverse order; restore backups)
+On failure: Rollback (delete verified created paths deepest-first; restore backups)
 ```
 
 ---
@@ -96,7 +96,7 @@ sequenceDiagram
     T->>FS: Backup/Track File 2
     E->>T: Execute Task 3 (FAILS)
     Note over E,FS: Failure detected, starting rollback
-    T->>FS: Delete created paths in reverse order
+    T->>FS: Delete verified created paths deepest-first
     T->>FS: Restore backed-up files
     Note over E,FS: Tracked changes rolled back (handled failures)
 ```
@@ -106,7 +106,7 @@ sequenceDiagram
 **Key features**:
 - ✅ Tracks created files and directory changes
 - ✅ Backs up modified files before overwrite
-- ✅ Reverse-order deletion of created paths; backups restored from the transaction directory
+- ✅ Deepest-first, content-verified deletion of created paths; backups restored from the transaction directory
 - ✅ Atomic rename for manifest updates
 - ✅ Cleanup of orphaned backups
 - ✅ Non-blocking per-root advisory lock (`.scbake/lock`) for mutating runs
@@ -118,9 +118,9 @@ process termination cannot run deferred cleanup, so every tracked mutation is
 recorded in an fsynced `.scbake/tmp/tx-*/journal.jsonl` before it happens. The next `apply`, `update`,
 or `drift` reports a dead owner's uncommitted journal instead of reporting the
 tree clean, and `scbake recover` replays it to restore backups and remove
-created paths. This protects against process crashes; it is not a power-loss
-durability guarantee. External commands are tracked only when their outputs are
-predicted.
+verified created paths. This protects against process crashes; it is not a
+power-loss durability guarantee. External commands are tracked only when their
+outputs are predicted.
 
 Rollback covers declared project files and declared manifests, not tool-managed
 build state. `Track` backs up an existing regular file but treats an existing
@@ -140,8 +140,14 @@ commands also fail rather than creating a missing root. Read-only commands and
 all `--dry-run` runs do not acquire the lock. The kernel releases
 the lock when the process exits or crashes, so a leftover lock file is harmless;
 normal release removes the file and prunes an empty `.scbake` directory. The
-manifest mtime check remains as a fallback for non-scbake writers. The rollback
-content-hash check is deferred and #133 remains open.
+manifest mtime check remains as a fallback for non-scbake writers. Rollback is
+content-aware: a created regular file is deleted only when the raw SHA-256
+recorded before its write still matches the current bytes, and a created
+directory is removed deepest-first only when empty. Paths with no recorded hash
+(for example legacy journals or interrupted writes) are kept with a warning.
+The check is forensic, not atomic: a writer can still replace bytes between
+verification and unlink, and a background child can race the post-command
+snapshot. Those races are accepted residuals.
 
 ---
 

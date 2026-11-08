@@ -29,12 +29,13 @@ func (t *lockFailureTask) Description() string { return "injected lock failure t
 func (t *lockFailureTask) Priority() int { return int(types.PrioConfigUniversal) }
 
 func (t *lockFailureTask) Execute(tc types.TaskContext) error {
+	const content = "partial"
 	if tc.Tx != nil {
-		if err := tc.Tx.Track(t.path); err != nil {
+		if err := tc.Tx.TrackWrite(t.path, []byte(content)); err != nil {
 			return err
 		}
 	}
-	if err := os.WriteFile(t.path, []byte("partial"), fileutil.PrivateFilePerms); err != nil {
+	if err := os.WriteFile(t.path, []byte(content), fileutil.PrivateFilePerms); err != nil {
 		return err
 	}
 	return errors.New("injected apply failure")

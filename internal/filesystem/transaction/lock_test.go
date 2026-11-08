@@ -499,7 +499,7 @@ func TestRecoverBusyDoesNotMutate(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := filepath.Join(root, "created.txt")
-	if err := tx.Track(created); err != nil {
+	if err := tx.TrackWrite(created, []byte("partial")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("partial"), fileutil.PrivateFilePerms); err != nil {
@@ -561,7 +561,7 @@ func TestRecoverInterruptedNewRemovesRootWhileLocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := filepath.Join(root, "partial.txt")
-	if err := tx.Track(created); err != nil {
+	if err := tx.TrackWrite(created, []byte("partial")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("partial"), fileutil.PrivateFilePerms); err != nil {

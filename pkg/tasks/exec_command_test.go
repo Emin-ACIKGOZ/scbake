@@ -403,6 +403,140 @@ func TestExecCommandTask_PredictedCreated(t *testing.T) { //nolint:cyclop // thr
 	})
 }
 
+// TestExecCommandTask_PredictedCreatedSnapshotContent verifies that a declared
+// created path is snapshotted after the command regardless of its exit status,
+// so a later external rewrite survives rollback.
+func TestExecCommandTask_PredictedCreatedSnapshotContent(t *testing.T) { //nolint:cyclop // success and failure command scenarios with explicit setup
+	const createdContent = "example.com/dep v1.0.0 h1:abc=\n"
+	const externalContent = "external rewrite\n"
+
+	t.Run("successful command snapshots the declared path", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "go.sum")
+
+		tx, err := transaction.New(root)
+		if err != nil {
+			t.Fatalf("transaction.New: %v", err)
+		}
+		t.Setenv("GO_WANT_EXEC_HELPER", "mutate")
+		t.Setenv("GO_WANT_EXEC_HELPER_PATH", path)
+		t.Setenv("GO_WANT_EXEC_HELPER_CONTENT", createdContent)
+
+		task := &ExecCommandTask{
+			Cmd:              os.Args[0],
+			Args:             []string{"-test.run=^TestExecCommandTaskHelper$"},
+			Desc:             "Create go.sum",
+			RunInTarget:      true,
+			PredictedCreated: []string{"go.sum"},
+		}
+		tc := types.TaskContext{Ctx: context.Background(), TargetPath: root, Tx: tx}
+
+		if err := task.Execute(tc); err != nil {
+			t.Fatalf("task failed: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(externalContent), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
+		if got := mustReadTestFile(t, path); got != externalContent {
+			t.Errorf("external rewrite after success = %q, want %q", got, externalContent)
+		}
+	})
+
+	t.Run("failed command still snapshots the declared path", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "go.sum")
+
+		tx, err := transaction.New(root)
+		if err != nil {
+			t.Fatalf("transaction.New: %v", err)
+		}
+		t.Setenv("GO_WANT_EXEC_HELPER", "mutate")
+		t.Setenv("GO_WANT_EXEC_HELPER_PATH", path)
+		t.Setenv("GO_WANT_EXEC_HELPER_CONTENT", createdContent)
+		t.Setenv("GO_WANT_EXEC_HELPER_FAIL", "1")
+
+		task := &ExecCommandTask{
+			Cmd:              os.Args[0],
+			Args:             []string{"-test.run=^TestExecCommandTaskHelper$"},
+			Desc:             "Create go.sum then fail",
+			RunInTarget:      true,
+			PredictedCreated: []string{"go.sum"},
+		}
+		tc := types.TaskContext{Ctx: context.Background(), TargetPath: root, Tx: tx}
+
+		if err := task.Execute(tc); err == nil {
+			t.Fatal("expected the helper command to fail")
+		}
+		if err := os.WriteFile(path, []byte(externalContent), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
+		if got := mustReadTestFile(t, path); got != externalContent {
+			t.Errorf("external rewrite after failure = %q, want %q", got, externalContent)
+		}
+	})
+}
+
+// TestExecCommandTask_SecondOpaqueWriterKeepsStaleHash documents the intended
+// conservative behavior for a second opaque writer: the post-command snapshot
+// only fills a missing hash, so a later command that rewrites an already-
+// created path leaves the first hash stale. Rollback then sees different bytes
+// and keeps the later output with a warning rather than deleting it.
+func TestExecCommandTask_SecondOpaqueWriterKeepsStaleHash(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "go.sum")
+	const firstContent = "example.com/first v1.0.0 h1:first=\n"
+	const secondContent = "example.com/second v2.0.0 h1:second=\n"
+
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New: %v", err)
+	}
+	t.Setenv("GO_WANT_EXEC_HELPER", "mutate")
+	t.Setenv("GO_WANT_EXEC_HELPER_PATH", path)
+
+	task := &ExecCommandTask{
+		Cmd:              os.Args[0],
+		Args:             []string{"-test.run=^TestExecCommandTaskHelper$"},
+		Desc:             "Opaque writer",
+		RunInTarget:      true,
+		PredictedCreated: []string{"go.sum"},
+	}
+	tc := types.TaskContext{Ctx: context.Background(), TargetPath: root, Tx: tx}
+
+	t.Setenv("GO_WANT_EXEC_HELPER_CONTENT", firstContent)
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("first command failed: %v", err)
+	}
+	t.Setenv("GO_WANT_EXEC_HELPER_CONTENT", secondContent)
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("second command failed: %v", err)
+	}
+	if got := mustReadTestFile(t, path); got != secondContent {
+		t.Fatalf("second writer content = %q, want %q", got, secondContent)
+	}
+
+	var rollbackErr error
+	stderr := captureStderr(t, func() { rollbackErr = tx.Rollback() })
+	if rollbackErr != nil {
+		t.Fatalf("Rollback treated stale-hash residue as an error: %v", rollbackErr)
+	}
+	if got := mustReadTestFile(t, path); got != secondContent {
+		t.Errorf("rollback deleted the later opaque write: got %q", got)
+	}
+	if !strings.Contains(stderr, "content changed since this transaction wrote it") {
+		t.Errorf("rollback stderr = %q, want a stale-content warning", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(root, fileutil.InternalDir)); !os.IsNotExist(err) {
+		t.Errorf("rollback left transaction state: %v", err)
+	}
+}
+
 // TestExecCommandTask_DryRunSkipsTrackingAndExecution verifies that a dry run
 // neither registers predicted paths with the transaction nor executes the
 // command.

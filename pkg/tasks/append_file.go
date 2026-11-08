@@ -41,11 +41,7 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 	existingContent, err := fileutil.SafeReadFile(tc.TargetPath, t.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// If file doesn't exist, create it with the content
-			if tc.DryRun {
-				return nil
-			}
-			return fileutil.SafeWriteFile(tc.TargetPath, t.FilePath, []byte(t.Content), fileutil.FilePerms)
+			return t.createMissingFile(tc, absPath)
 		}
 		return fmt.Errorf("failed to read file %s: %w", t.FilePath, err)
 	}
@@ -57,7 +53,55 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 		return nil
 	}
 
+	// A file created earlier in this transaction may already carry a hash from
+	// its first write. The append changes the whole file, so record the
+	// post-append bytes before writing. TrackWrite only updates paths this
+	// transaction created, and only when the current bytes still match the
+	// existing hash; an externally edited file keeps its old identity and is
+	// retained on rollback. A pre-existing user file is restored from its
+	// backup, which remains authoritative.
+	fullContent := appendResultBytes(existingContent, t.Content)
+	if err := trackAppendWrite(tc, absPath, t.FilePath, fullContent); err != nil {
+		return err
+	}
+
 	return appendFileContent(tc.TargetPath, t.FilePath, existingContent, t.Content)
+}
+
+// appendResultBytes returns the exact bytes appendFileContent will produce: the
+// existing content, a separating newline when it does not end with one, then
+// newContent.
+func appendResultBytes(existing []byte, newContent string) []byte {
+	full := make([]byte, 0, len(existing)+len(newContent)+1)
+	full = append(full, existing...)
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		full = append(full, '\n')
+	}
+	return append(full, newContent...)
+}
+
+// createMissingFile writes a missing append target. TrackWrite records the raw
+// hash of the bytes the transaction is about to write so rollback can verify
+// them.
+func (t *AppendFileTask) createMissingFile(tc types.TaskContext, absPath string) error {
+	if tc.DryRun {
+		return nil
+	}
+	if err := trackAppendWrite(tc, absPath, t.FilePath, []byte(t.Content)); err != nil {
+		return err
+	}
+	return fileutil.SafeWriteFile(tc.TargetPath, t.FilePath, []byte(t.Content), fileutil.FilePerms)
+}
+
+// trackAppendWrite registers the intended bytes when a transaction is active.
+func trackAppendWrite(tc types.TaskContext, absPath, relPath string, content []byte) error {
+	if tc.Tx == nil {
+		return nil
+	}
+	if err := tc.Tx.TrackWrite(absPath, content); err != nil {
+		return fmt.Errorf("failed to track file %s: %w", relPath, err)
+	}
+	return nil
 }
 
 // contentAlreadyPresent reports whether content already exists inside existing as

@@ -381,7 +381,7 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 // through the symlink-safe helpers.
 func trackAndWrite(tc types.TaskContext, path string, content []byte, perm os.FileMode) error {
 	if tc.Tx != nil {
-		if err := tc.Tx.Track(path); err != nil {
+		if err := tc.Tx.TrackWrite(path, content); err != nil {
 			return fmt.Errorf("failed to track file %s: %w", path, err)
 		}
 	}
@@ -472,8 +472,9 @@ func trackBaseAncestors(tc types.TaskContext, absPath string) error {
 		}
 		missing = append(missing, dir)
 	}
-	// Register shallowest-first so reverse-order rollback removes the deepest
-	// first; RemoveAll on .scbake-base is safe and leaves the root intact.
+	// Register shallowest-first so rollback removes the deepest created
+	// directory first, and only when empty; the project root is never
+	// registered.
 	for i := len(missing) - 1; i >= 0; i-- {
 		if err := tc.Tx.Track(missing[i]); err != nil {
 			return fmt.Errorf("failed to track base shadow ancestor %s: %w", missing[i], err)
@@ -499,7 +500,7 @@ func writeBaseShadow(tc types.TaskContext, ledgerKey string, content []byte) err
 	if err != nil {
 		return fmt.Errorf("invalid base shadow path for %s: %w", ledgerKey, err)
 	}
-	if err := tc.Tx.Track(absPath); err != nil {
+	if err := tc.Tx.TrackWrite(absPath, content); err != nil {
 		return fmt.Errorf("failed to track base shadow %s: %w", absPath, err)
 	}
 	if err := trackBaseAncestors(tc, absPath); err != nil {

@@ -25,31 +25,47 @@ import (
 // validated before any path is tracked, so a rejected entry prevents the
 // extraction command from running at all.
 func trackArchiveEntries(tc types.TaskContext, cmdDir, archivePath string) error {
+	_, err := trackArchiveEntriesWithDestinations(tc, cmdDir, archivePath)
+	return err
+}
+
+// trackArchiveEntriesWithDestinations is trackArchiveEntries plus the resolved
+// destination paths, so the command can snapshot created entries after
+// extraction.
+func trackArchiveEntriesWithDestinations(tc types.TaskContext, cmdDir, archivePath string) ([]string, error) {
 	if tc.Tx == nil || tc.DryRun {
-		return nil
+		return nil, nil
 	}
 
 	root := taskRoot(tc)
 	if root == "" {
-		return errors.New("cannot track archive entries without a project root")
+		return nil, errors.New("cannot track archive entries without a project root")
 	}
 
 	absArchive, err := resolveArchivePath(root, cmdDir, archivePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	zr, err := zip.OpenReader(absArchive)
 	if err != nil {
-		return fmt.Errorf("failed to open archive %s: %w", absArchive, err)
+		return nil, fmt.Errorf("failed to open archive %s: %w", absArchive, err)
 	}
 	defer func() { _ = zr.Close() }()
 
 	destinations, err := archiveDestinations(root, cmdDir, absArchive, zr.File)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return trackArchiveDestinations(tc, destinations)
+	if err := trackArchiveDestinations(tc, destinations); err != nil {
+		return nil, err
+	}
+
+	paths := make([]string, 0, len(destinations))
+	for _, dest := range destinations {
+		paths = append(paths, dest.path)
+	}
+	return paths, nil
 }
 
 // archiveDestination is one validated extraction target.

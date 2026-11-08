@@ -110,7 +110,8 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 		return nil
 	}
 
-	if err := t.trackSideEffects(tc); err != nil {
+	snapshotPaths, err := t.trackSideEffects(tc)
+	if err != nil {
 		return err
 	}
 
@@ -134,50 +135,81 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 	var stderr limitedBuffer
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		return commandExecutionError(tc.Ctx, t.Cmd, t.Args, err, &stderr)
+	runErr := cmd.Run()
+
+	// Snapshot declared/archive destinations after the command, whether it
+	// succeeded or failed, so rollback can verify the bytes it created before
+	// removing them. Snapshot errors only warn: a successful command must not
+	// fail because cleanup lost a hash, and the safe outcome is to keep it.
+	snapshotCreatedContent(tc, snapshotPaths)
+
+	if runErr != nil {
+		return commandExecutionError(tc.Ctx, t.Cmd, t.Args, runErr, &stderr)
 	}
 
 	return nil
+}
+
+// snapshotCreatedContent records post-write hashes for paths the transaction
+// created. It is best-effort: failures warn and leave the path unhashed, which
+// makes rollback keep it.
+func snapshotCreatedContent(tc types.TaskContext, paths []string) {
+	if tc.Tx == nil {
+		return
+	}
+	for _, path := range paths {
+		if err := tc.Tx.SnapshotCreatedContent(path); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Could not snapshot created path %s: %v\n", path, err)
+		}
+	}
 }
 
 // trackSideEffects registers paths the command may create or modify before it
 // runs. Tracking every prediction unconditionally means Track backs up an
 // existing file, records a missing path for deletion, or no-ops an existing
 // directory. Archive entries are expanded separately so nested writes are also
-// covered.
-func (t *ExecCommandTask) trackSideEffects(tc types.TaskContext) error {
+// covered. It returns the declared and archive destination paths so their
+// created content can be snapshotted after the command runs.
+func (t *ExecCommandTask) trackSideEffects(tc types.TaskContext) ([]string, error) {
 	if tc.Tx == nil {
-		return nil
+		return nil, nil
 	}
 
 	cmdDir, err := commandWorkingDir(tc, t.RunInTarget)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := trackPredictedPaths(tc, cmdDir, t.PredictedCreated); err != nil {
-		return err
+	predicted, err := trackPredictedPaths(tc, cmdDir, t.PredictedCreated)
+	if err != nil {
+		return nil, err
 	}
 	if t.ArchivePath == "" {
-		return nil
+		return predicted, nil
 	}
-	return trackArchiveEntries(tc, cmdDir, t.ArchivePath)
+	archivePaths, err := trackArchiveEntriesWithDestinations(tc, cmdDir, t.ArchivePath)
+	if err != nil {
+		return nil, err
+	}
+	return append(predicted, archivePaths...), nil
 }
 
 // trackPredictedPaths resolves each prediction against the command's working
 // directory and registers it with the transaction. Absolute predictions are
-// validated by Track against the transaction root rather than joined again.
-func trackPredictedPaths(tc types.TaskContext, cmdDir string, paths []string) error {
+// validated by Track against the transaction root rather than joined again. It
+// returns the resolved paths for post-command snapshots.
+func trackPredictedPaths(tc types.TaskContext, cmdDir string, paths []string) ([]string, error) {
+	resolved := make([]string, 0, len(paths))
 	for _, pred := range paths {
 		fullPath := pred
 		if !filepath.IsAbs(fullPath) {
 			fullPath = filepath.Join(cmdDir, pred)
 		}
 		if err := tc.Tx.Track(fullPath); err != nil {
-			return fmt.Errorf("failed to track predicted path %s: %w", fullPath, err)
+			return nil, fmt.Errorf("failed to track predicted path %s: %w", fullPath, err)
 		}
+		resolved = append(resolved, fullPath)
 	}
-	return nil
+	return resolved, nil
 }
 
 // commandWorkingDir returns the absolute directory the command will run in, so

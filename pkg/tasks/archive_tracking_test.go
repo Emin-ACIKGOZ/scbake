@@ -104,6 +104,18 @@ func newTestTaskContext(t *testing.T, root string) (types.TaskContext, *transact
 	return types.TaskContext{Ctx: context.Background(), TargetPath: root, Tx: tx}, tx
 }
 
+// snapshotCreatedDestinations mirrors the post-extraction snapshot the exec task
+// performs, so the helper-level archive tests exercise the same content-aware
+// rollback path.
+func snapshotCreatedDestinations(t *testing.T, tx *transaction.Manager, paths []string) {
+	t.Helper()
+	for _, path := range paths {
+		if err := tx.SnapshotCreatedContent(path); err != nil {
+			t.Fatalf("SnapshotCreatedContent(%s): %v", path, err)
+		}
+	}
+}
+
 // TestTrackArchiveEntries_RestoresExistingNestedFile verifies that a file
 // nested below an existing src/ directory is backed up before extraction and
 // restored byte-for-byte, including its mode, after rollback.
@@ -161,8 +173,9 @@ func TestTrackArchiveEntries_RemovesCreatedNestedPaths(t *testing.T) { //nolint:
 		)
 
 		tc, tx := newTestTaskContext(t, root)
-		if err := trackArchiveEntries(tc, root, filepath.Join("dist", "new.zip")); err != nil {
-			t.Fatalf("trackArchiveEntries: %v", err)
+		destinations, err := trackArchiveEntriesWithDestinations(tc, root, filepath.Join("dist", "new.zip"))
+		if err != nil {
+			t.Fatalf("trackArchiveEntriesWithDestinations: %v", err)
 		}
 
 		// Simulate extraction creating every missing directory.
@@ -172,6 +185,7 @@ func TestTrackArchiveEntries_RemovesCreatedNestedPaths(t *testing.T) { //nolint:
 		if err := os.WriteFile(filepath.Join(root, "src", "new", "deep", "file.txt"), []byte("one\n"), 0o600); err != nil {
 			t.Fatalf("simulate extraction file: %v", err)
 		}
+		snapshotCreatedDestinations(t, tx, destinations)
 
 		if err := tx.Rollback(); err != nil {
 			t.Fatalf("rollback: %v", err)
@@ -197,8 +211,9 @@ func TestTrackArchiveEntries_RemovesCreatedNestedPaths(t *testing.T) { //nolint:
 		})
 
 		tc, tx := newTestTaskContext(t, root)
-		if err := trackArchiveEntries(tc, root, filepath.Join("dist", "new.zip")); err != nil {
-			t.Fatalf("trackArchiveEntries: %v", err)
+		destinations, err := trackArchiveEntriesWithDestinations(tc, root, filepath.Join("dist", "new.zip"))
+		if err != nil {
+			t.Fatalf("trackArchiveEntriesWithDestinations: %v", err)
 		}
 		if err := os.MkdirAll(filepath.Join(root, "src", "new", "deep"), fileutil.DirPerms); err != nil {
 			t.Fatalf("simulate extraction dirs: %v", err)
@@ -206,6 +221,7 @@ func TestTrackArchiveEntries_RemovesCreatedNestedPaths(t *testing.T) { //nolint:
 		if err := os.WriteFile(filepath.Join(root, "src", "new", "deep", "file.txt"), []byte("one\n"), 0o600); err != nil {
 			t.Fatalf("simulate extraction file: %v", err)
 		}
+		snapshotCreatedDestinations(t, tx, destinations)
 
 		if err := tx.Rollback(); err != nil {
 			t.Fatalf("rollback: %v", err)

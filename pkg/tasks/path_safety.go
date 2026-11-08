@@ -51,8 +51,9 @@ func trackTaskFile(tc types.TaskContext, absPath, relPath string) error {
 // `apply <subproject>` in a monorepo: there the root is the existing manifest
 // root and the not-yet-existing target lies below it.
 //
-// Missing ancestors are registered shallowest-first; Manager.Rollback iterates
-// in reverse, and because it removes recursively the whole chain is cleaned up.
+// Missing ancestors are registered shallowest-first; rollback processes created
+// paths deepest-first and removes a directory only when it is empty, so an
+// emptied chain is cleaned up while any retained content keeps its parents.
 //
 // It is a no-op when transactions are disabled or in dry-run mode.
 func trackMissingAncestors(tc types.TaskContext, absPath string) error {
@@ -79,8 +80,8 @@ func trackMissingAncestors(tc types.TaskContext, absPath string) error {
 		missing = append(missing, dir)
 	}
 
-	// Register shallowest-first; Manager.Rollback iterates in reverse so the
-	// deepest implicitly-created directory is removed first.
+	// Register shallowest-first; rollback orders by depth so the deepest
+	// implicitly-created directory is removed first, and only when empty.
 	for i := len(missing) - 1; i >= 0; i-- {
 		if err := tc.Tx.Track(missing[i]); err != nil {
 			return fmt.Errorf("failed to track ancestor directory %s: %w", missing[i], err)
