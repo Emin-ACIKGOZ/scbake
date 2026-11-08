@@ -695,8 +695,11 @@ func TestWriteManagedFile_MergeStrategyMergesDisjointEdits(t *testing.T) {
 		t.Fatalf("initial execute: %v", err)
 	}
 	// I5: the pristine base shadow is captured for future merges.
-	if _, err := os.Stat(filepath.Join(root, fileutil.InternalDir, fileutil.BaseDir, "Makefile")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, fileutil.CommittedBaseDir, "Makefile")); err != nil {
 		t.Fatalf("base shadow missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, fileutil.InternalDir, fileutil.BaseDir)); !os.IsNotExist(err) {
+		t.Fatalf("legacy .scbake/base must not exist (stat err: %v)", err)
 	}
 
 	//nolint:gosec // test temp directory

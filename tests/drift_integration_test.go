@@ -23,6 +23,22 @@ func TestDriftCleanExitsZero(t *testing.T) {
 	}
 }
 
+// TestDriftIgnoresEOLOnlyChurn pins the EOL-insensitive contract end to end:
+// a text file rewritten with CRLF is not drift, so an autocrlf clone does not
+// fail CI.
+func TestDriftIgnoresEOLOnlyChurn(t *testing.T) {
+	projectPath, _ := setupUpdateProject(t, "alpha\nshared\nomega\n")
+	mustWrite(t, filepath.Join(projectPath, "Makefile"), "alpha\r\nshared\r\nomega\r\n")
+
+	out, err := runCLI("drift")
+	if err != nil {
+		t.Fatalf("drift reported EOL-only churn: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "No drift detected") {
+		t.Errorf("unexpected output: %s", out)
+	}
+}
+
 // TestDriftModifiedExitsNonZero: a local edit is listed and the exit is non-zero
 // so it can gate CI.
 func TestDriftModifiedExitsNonZero(t *testing.T) {

@@ -23,7 +23,8 @@ import (
 type Kind string
 
 const (
-	// Modified means the file still exists but no longer matches its recorded hash.
+	// Modified means the file still exists but its normalized hash no longer
+	// matches the recorded hash.
 	Modified Kind = "modified"
 	// Missing means the managed file no longer exists.
 	Missing Kind = "missing"
@@ -36,9 +37,11 @@ type Finding struct {
 	Path string
 	// Kind is Modified or Missing.
 	Kind Kind
-	// Recorded is the SHA-256 scbake recorded when it last wrote the file.
+	// Recorded is the EOL-insensitive SHA-256 scbake recorded when it last
+	// wrote the file.
 	Recorded string
-	// Actual is the SHA-256 of the file on disk; empty when Kind is Missing.
+	// Actual is the normalized SHA-256 of the file on disk; empty when Kind is
+	// Missing.
 	Actual string
 }
 
@@ -47,12 +50,13 @@ type Finding struct {
 // renders a template, opens a transaction, or touches the network, so it is
 // safe to run in CI and cannot corrupt a project.
 //
-// A file is clean when its on-disk SHA-256 equals the recorded hash, Modified
-// when the bytes differ, and Missing when the path does not exist. Legacy
-// entries written before managed_files keys were scoped per project are
-// resolved against the manifest's project paths using the same
-// content-matching rule as the write path, so detection never reports false
-// drift for a file scbake still manages.
+// A file is clean when its on-disk normalized SHA-256 equals the recorded hash,
+// Modified when the normalized hashes differ, and Missing when the path does
+// not exist. The hash is EOL-insensitive for NUL-free content, so an EOL-only
+// change is not drift. Legacy entries written before managed_files keys were
+// scoped per project are resolved against the manifest's project paths using
+// the same content-matching rule as the write path, so detection never reports
+// false drift for a file scbake still manages.
 func Detect(m *types.Manifest, root string) ([]Finding, error) {
 	if m == nil || len(m.ManagedFiles) == 0 {
 		return nil, nil

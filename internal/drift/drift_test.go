@@ -4,6 +4,8 @@
 package drift
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,6 +15,7 @@ import (
 
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/types"
+	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
 )
 
@@ -29,6 +32,13 @@ func mustWrite(t *testing.T, path string, body []byte) {
 
 // hashOf is a shorthand for the hash the ledger stores.
 func hashOf(b []byte) string { return tasks.HashContent(b) }
+
+// rawHashOf is the pre-normalization SHA-256 contract, used to model a legacy
+// manifest recorded before EOL-insensitive hashing.
+func rawHashOf(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
 
 // TestDetect_Clean: a file whose bytes hash to the recorded value is not drift.
 func TestDetect_Clean(t *testing.T) {
@@ -71,6 +81,99 @@ func TestDetect_Modified(t *testing.T) {
 	}
 	if got[0].Actual != hashOf(edited) {
 		t.Errorf("Actual = %q, want the on-disk hash", got[0].Actual)
+	}
+}
+
+// TestDetect_IgnoresEOLOnlyChurn pins the EOL-insensitive hash contract: a
+// CRLF checkout or editor save of text is not drift when the recorded render is
+// its LF form. This is what keeps an autocrlf clone from reporting every file.
+func TestDetect_IgnoresEOLOnlyChurn(t *testing.T) {
+	root := t.TempDir()
+	lf := []byte("alpha\nshared\nomega\n")
+	mustWrite(t, filepath.Join(root, "a.txt"), []byte("alpha\r\nshared\r\nomega\r\n"))
+
+	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": hashOf(lf)}}
+	got, err := Detect(m, root)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("EOL-only churn reported as drift: %+v", got)
+	}
+}
+
+// TestDetect_LegacyCRLFHashIsOneTimeDrift documents the chosen compatibility
+// behavior for manifests written before EOL-insensitive hashing: a recorded raw
+// CRLF hash no longer matches the normalized hash and is reported once, then a
+// canonical write records the normalized hash and the file is clean.
+func TestDetect_LegacyCRLFHashIsOneTimeDrift(t *testing.T) {
+	root := t.TempDir()
+	crlf := []byte("alpha\r\nshared\r\nomega\r\n")
+	mustWrite(t, filepath.Join(root, "a.txt"), crlf)
+
+	legacy := &types.Manifest{ManagedFiles: map[string]string{"a.txt": rawHashOf(crlf)}}
+	got, err := Detect(legacy, root)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != Modified {
+		t.Fatalf("legacy CRLF hash = %+v, want one Modified finding", got)
+	}
+	if got[0].Recorded != rawHashOf(crlf) || got[0].Actual != hashOf(crlf) {
+		t.Fatalf("legacy finding = %+v, want raw recorded and normalized actual", got[0])
+	}
+
+	// Re-recording with the normalizing hash (the next canonical write) clears
+	// the one-time drift.
+	canonical := &types.Manifest{ManagedFiles: map[string]string{"a.txt": hashOf(crlf)}}
+	if got, err := Detect(canonical, root); err != nil || len(got) != 0 {
+		t.Fatalf("canonical re-record still drifts: %+v (err %v)", got, err)
+	}
+}
+
+// TestDetect_LegacyLFHashIsClean is the negative control: a legacy raw hash of
+// LF text is identical to the normalized hash, so ordinary manifests do not
+// report a migration-time drift event.
+func TestDetect_LegacyLFHashIsClean(t *testing.T) {
+	root := t.TempDir()
+	lf := []byte("alpha\nshared\nomega\n")
+	mustWrite(t, filepath.Join(root, "a.txt"), lf)
+
+	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": rawHashOf(lf)}}
+	if got, err := Detect(m, root); err != nil || len(got) != 0 {
+		t.Fatalf("legacy LF manifest reported drift: %+v (err %v)", got, err)
+	}
+}
+
+// TestDetect_CommittedBaseLocation refreshes the drift fixture for the #143
+// storage move: the write path places pristine bases under .scbake-base and
+// never re-creates the legacy ignored .scbake/base tree, and drift remains
+// clean on that freshly generated layout.
+func TestDetect_CommittedBaseLocation(t *testing.T) {
+	root := t.TempDir()
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New: %v", err)
+	}
+	m := &types.Manifest{}
+	tc := types.TaskContext{
+		TargetPath:       root,
+		Manifest:         m,
+		Tx:               tx,
+		ConflictStrategy: types.ConflictFail,
+	}
+	content := []byte("generated\n")
+	if err := tasks.WriteManagedFile(tc, "a.txt", content, 0o600); err != nil {
+		t.Fatalf("WriteManagedFile: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, fileutil.CommittedBaseDir, "a.txt")); err != nil {
+		t.Fatalf("committed base missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, fileutil.InternalDir, fileutil.BaseDir)); !os.IsNotExist(err) {
+		t.Fatalf("legacy .scbake/base must not exist (stat err: %v)", err)
+	}
+	if got, err := Detect(m, root); err != nil || len(got) != 0 {
+		t.Fatalf("fresh committed-base layout reports drift: %+v (err %v)", got, err)
 	}
 }
 

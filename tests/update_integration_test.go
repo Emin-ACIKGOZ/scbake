@@ -173,6 +173,28 @@ func TestUpdateMergesDisjointChanges(t *testing.T) {
 	}
 }
 
+// TestUpdateMergesWholeFileCRLFEdit covers the editor/autocrlf case where the
+// local file is saved with CRLF and the template introduces a disjoint change.
+// Normalized merge inputs must keep both edits instead of writing an artifact.
+func TestUpdateMergesWholeFileCRLFEdit(t *testing.T) {
+	projectPath, overrideDir := setupUpdateProject(t, "alpha\nshared\nomega\n")
+	makefile := filepath.Join(projectPath, "Makefile")
+
+	mustWrite(t, makefile, "alpha-local\r\nshared\r\nomega\r\n")
+	mustWrite(t, filepath.Join(overrideDir, "makefile.tpl"), "alpha\r\nshared\r\nomega-template\r\n")
+
+	out, err := runCLI("update", "--template-dir", overrideDir)
+	if err != nil {
+		t.Fatalf("update failed: %v\n%s", err, out)
+	}
+	if got := mustRead(t, makefile); got != "alpha-local\nshared\nomega-template\n" {
+		t.Fatalf("whole-file CRLF merge = %q", got)
+	}
+	if _, err := os.Stat(makefile + ".scbake-new"); !os.IsNotExist(err) {
+		t.Fatalf("whole-file CRLF edit should not produce an artifact (stat err: %v)", err)
+	}
+}
+
 // TestUpdateConflictWritesArtifact verifies that a conflicting change is not
 // clobbered and the template render is written to an artifact.
 func TestUpdateConflictWritesArtifact(t *testing.T) {

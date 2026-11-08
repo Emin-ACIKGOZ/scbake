@@ -294,7 +294,7 @@ scbake_version = "v0.3.0"
 | `[[projects]]` | One table per applied language pack. `path` is relative to the manifest root (`"."` for the root project). |
 | `[[templates]]` | One table per applied tooling template, recording its `name` and the `path` it was applied to. |
 | `[metadata]` | Inputs declared by template schemas (including defaults), values passed with `--set`, and `--license`/`--copyright-holder`. Omitted when empty. |
-| `[managed_files]` | SHA-256 of every template-rendered file scbake manages, keyed by path relative to the manifest root. Drives `update` and `drift`. Omitted when empty. |
+| `[managed_files]` | SHA-256 of every template-rendered file scbake manages, EOL-insensitive for NUL-free content, keyed by path relative to the manifest root. Drives `update` and `drift`. Omitted when empty. |
 
 The hashes above are real values from the current embedded templates; they change
 whenever a rendered template changes. `[metadata]` and `[managed_files]` are omitted
@@ -375,21 +375,70 @@ flags. Two properties make it safe:
 - **Provenance.** `[[templates]]` records the real `{name, path}` of every
   tooling template, and `[[projects]]` records each project's `language`, so
   `update` can reconstruct exactly what `apply` ran (D2).
-- **Pristine base shadow.** Every managed write stores its rendered bytes under
-  `.scbake/base/<path>`. When both the template and the working file changed,
-  `update` runs a conservative line-oriented three-way merge
+- **Pristine committed base.** Every managed write stores its rendered bytes
+  under `.scbake-base/<path>`. When both the template and the working file
+  changed, `update` runs a conservative line-oriented three-way merge
   (`internal/merge`) against that base. Non-overlapping edits merge; overlaps
   fall back to an artifact. Only `CreateTemplateTask` writes are replayed, so
   environment commands never re-run.
 
-`managed_files` continues to hold the hash of the pristine render, so a merged
-file is still recognized as locally modified on the next `apply` (SCB-056).
+The base lives at the project root rather than under the ignored `.scbake/`
+directory so a normal commit carries it to a clone. The root `.gitignore` must
+contain:
+
+```gitignore
+.scbake/
+!.scbake-base/
+!.scbake-base/**
+!.gitignore
+```
+
+The directory and glob re-includes are both required under broad patterns such
+as `.*` or `*.out`; `!.gitignore` keeps the rules file itself stageable. The
+block must remain last: a later pattern such as `*` overrides the re-includes.
+Scbake appends missing lines but does not move an existing block, so a reordered
+file is only repaired by restoring the block order. The base must be staged from
+the manifest root (`git add .`), because a subdirectory add cannot reach a
+root-level directory. Inside `.scbake-base`,
+managed `.gitignore` and `.gitattributes` files are renamed to
+`.gitignore.scbake-shadow` and `.gitattributes.scbake-shadow` at every depth;
+otherwise Git would apply those copies to the base tree and hide or transform
+sibling payloads. Those suffixes are reserved names.
+
+`managed_files` records the hash of the pristine render. For NUL-free content,
+every run of CR bytes immediately before LF is folded to a single LF before
+hashing, so CRLF and LF hash identically and EOL-only edits are not drift. This
+also means NUL-free binary content containing CRLF is treated as text. NUL-bearing
+content is hashed byte-exact. The base tree itself keeps the render byte-exact;
+normalization applies only to hashing and to merge inputs. A legacy
+CRLF-recorded file can show one-time drift. Base validation accepts a base whose
+normalized or raw hash matches the ledger, but a legacy CRLF ledger hash does not
+survive Git normalizing the migrated base to LF. Refresh the ledger with a clean
+`scbake update` (or otherwise re-record the normalized hash) before committing
+the migrated base, or keep the base byte-exact with `-text`. A merged file is
+still recognized as locally modified on the next `apply` (SCB-056).
+
+The move from `.scbake/base/` to `.scbake-base/` is a breaking change with no
+read fallback. Migration is manual: copy the old base, rename the two
+Git-special files, ensure the ignore block above, stage `.gitignore` and
+`.scbake-base`, and remove the old tracked or ignored directory. If the legacy
+ledger holds raw CRLF hashes and Git normalized the migrated base to LF, run a
+clean `scbake update` to refresh the ledger before committing, or keep the base
+byte-exact with `-text`. A plain
+`git mv .scbake/base .scbake-base` is insufficient because the shadow names
+remain active. A missing or invalid base falls back to an artifact rather than a
+silent merge. Committing rendered bytes can expose ignored outputs or secrets
+and adds churn. Sparse/partial clones may omit the base, and native
+Windows/macOS checkout filters, LFS, and `working-tree-encoding` remain
+unverified; hash and merge-input normalization cover plain CRLF only.
 
 ### 6. Drift Detection
 
 `scbake drift` is the read-only projection of the same `managed_files` ledger
-that `update` writes. For every recorded key it hashes the working-tree file and
-classifies it `modified` (bytes differ), `missing` (absent), or clean. It opens
+that `update` writes. For every recorded key it hashes the working-tree file with
+the EOL-insensitive contract and classifies it `modified` (normalized hash
+differs), `missing` (absent), or clean. EOL-only changes to NUL-free content are
+therefore not drift. It opens
 no transaction, renders no template, and never touches the network, so it is
 safe as a CI gate; it exits non-zero when any finding remains. `--repair`
 delegates to `core.RunUpdate`, so detection and repair share one reconciliation

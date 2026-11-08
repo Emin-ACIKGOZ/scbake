@@ -91,11 +91,60 @@ func (t *CreateTemplateTask) Priority() int {
 	return t.TaskPrio
 }
 
-// HashContent calculates the SHA-256 hash of the given bytes.
+// HashContent calculates the SHA-256 hash of the given bytes after normalizing
+// text line endings. CRLF and LF therefore hash identically, which keeps the
+// managed_files ledger stable across Git checkouts that rewrite EOL bytes.
+// NUL-free content is normalized; NUL-bearing binary content is hashed
+// byte-exact.
 func HashContent(content []byte) string {
+	return rawContentHash(normalizeEOL(content))
+}
+
+// rawContentHash returns the byte-exact SHA-256 of content without EOL
+// normalization.
+func rawContentHash(content []byte) string {
 	hasher := sha256.New()
 	hasher.Write(content)
 	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+// normalizeEOL returns content with every run of one or more CR bytes that is
+// immediately followed by LF collapsed to a single LF. This is a single-pass
+// projection, so it is idempotent even for pathological CR runs: "\r\r\n"
+// becomes "\n" on the first pass and cannot change again. Lone CR bytes and
+// CR runs not followed by LF are preserved as content.
+//
+// This is the EOL-insensitive text-hash contract: line endings are not project
+// content, so a working file rewritten by a Windows editor still matches the
+// recorded pristine render. Any content containing a NUL byte is treated as
+// binary and returned unchanged, so binary hashes remain byte-exact.
+func normalizeEOL(content []byte) []byte {
+	if bytes.IndexByte(content, 0) >= 0 {
+		return content
+	}
+	if !bytes.Contains(content, []byte("\r\n")) {
+		return content
+	}
+	out := make([]byte, 0, len(content))
+	for i := 0; i < len(content); {
+		if content[i] != '\r' {
+			out = append(out, content[i])
+			i++
+			continue
+		}
+		end := i
+		for end < len(content) && content[end] == '\r' {
+			end++
+		}
+		if end < len(content) && content[end] == '\n' {
+			out = append(out, '\n')
+			i = end + 1
+			continue
+		}
+		out = append(out, content[i:end]...)
+		i = end
+	}
+	return out
 }
 
 // checkReconciliation evaluates drift and conflict strategies.
@@ -174,20 +223,34 @@ func reconcileMerge(
 	existingContent, newContent []byte,
 	tc types.TaskContext,
 ) (string, []byte, error) {
-	if base, ok := readBaseShadow(tc, ledgerKey); ok {
-		// The base must be the pristine render recorded in the ledger. A stale
-		// or corrupt base is not a valid common ancestor: the merge can silently
-		// keep one side and drop the other. Treat it as missing and preserve the
-		// local file via the artifact path.
-		if HashContent(base) != originalHash {
-			fmt.Fprintf(os.Stderr,
-				"⚠️  No valid pristine base for %s (hash mismatch); writing new template to artifact.\n",
-				outputRelPath)
-			return absFinalPath + ".scbake-new", nil, nil
-		}
-		if merged, status := merge.Merge(base, existingContent, newContent); status == merge.Clean {
-			return absFinalPath, merged, nil
-		}
+	base, ok := readBaseShadow(tc, ledgerKey)
+	if !ok {
+		fmt.Fprintf(os.Stderr,
+			"⚠️  No valid pristine base for %s (missing); writing new template to artifact.\n",
+			outputRelPath)
+		return absFinalPath + ".scbake-new", nil, nil
+	}
+	// The base must be the pristine render recorded in the ledger. A stale or
+	// corrupt base is not a valid common ancestor: the merge can silently keep
+	// one side and drop the other. Treat it as missing and preserve the local
+	// file via the artifact path.
+	//
+	// Legacy migration: binaries before the EOL-insensitive contract recorded
+	// the raw SHA-256 of the rendered bytes. A migrated CRLF base therefore
+	// matches originalHash only byte-exactly, not through HashContent. Accept
+	// either form; a truly stale base still matches neither.
+	if HashContent(base) != originalHash && rawContentHash(base) != originalHash {
+		fmt.Fprintf(os.Stderr,
+			"⚠️  No valid pristine base for %s (hash mismatch); writing new template to artifact.\n",
+			outputRelPath)
+		return absFinalPath + ".scbake-new", nil, nil
+	}
+	// Merge EOL-normalized inputs so a whole-file CRLF rewrite does not look
+	// like every line changed. The base tree itself keeps the pristine bytes.
+	if merged, status := merge.Merge(
+		normalizeEOL(base), normalizeEOL(existingContent), normalizeEOL(newContent),
+	); status == merge.Clean {
+		return absFinalPath, merged, nil
 	}
 	p, cErr := handleConflict(absFinalPath, outputRelPath, types.ConflictMerge)
 	return p, nil, cErr
@@ -233,11 +296,11 @@ func checkFilePreconditions(tc types.TaskContext, output, target string) (string
 	return absPath, nil
 }
 
-// maybeAppendInternalStateIgnore adds the persistent .scbake entry only when
-// the managed output's ledger key is the manifest-root .gitignore. The key is
-// root-relative, so equivalent paths normalize to ".gitignore", while a
-// subproject's ".gitignore" is keyed like "sub/.gitignore" and must not
-// inherit the root's state entry.
+// maybeAppendInternalStateIgnore adds the .scbake ignore and .scbake-base
+// re-include block only when the managed output's ledger key is the
+// manifest-root .gitignore. The key is root-relative, so equivalent paths
+// normalize to ".gitignore", while a subproject's ".gitignore" is keyed like
+// "sub/.gitignore" and must not inherit the root's state entries.
 func maybeAppendInternalStateIgnore(ledgerKey string, content []byte) []byte {
 	if ledgerKey != fileutil.GitIgnore {
 		return content
@@ -345,16 +408,36 @@ func taskRoot(tc types.TaskContext) string {
 	return abs
 }
 
-// baseShadowPath returns the .scbake base path for a ledger key.
+// baseShadowKey maps a ledger key to its path inside the committed base tree.
+// A base file must not keep the basename .gitignore or .gitattributes: Git
+// applies those files to the base tree itself, which can hide sibling payloads
+// or transform their bytes on checkout. The mapping applies at every depth so a
+// nested managed .gitignore is sanitized too; other filenames are preserved.
+func baseShadowKey(ledgerKey string) string {
+	parts := strings.Split(ledgerKey, "/")
+	for i, part := range parts {
+		if part == fileutil.GitIgnore || part == fileutil.GitAttributes {
+			parts[i] = part + fileutil.BaseShadowSuffix
+		}
+	}
+	return strings.Join(parts, "/")
+}
+
+// BaseShadowRelPath returns the root-relative committed base path for a ledger
+// key, using the same sanitization as the write path.
+func BaseShadowRelPath(ledgerKey string) string {
+	return filepath.Join(fileutil.CommittedBaseDir, filepath.FromSlash(baseShadowKey(ledgerKey)))
+}
+
+// baseShadowPath returns the committed base path for a ledger key.
 func baseShadowPath(root, ledgerKey string) (string, error) {
-	rel := filepath.Join(fileutil.InternalDir, fileutil.BaseDir, filepath.FromSlash(ledgerKey))
-	return fileutil.SafePath(root, rel)
+	return fileutil.SafePath(root, BaseShadowRelPath(ledgerKey))
 }
 
 // trackBaseAncestors registers the not-yet-existing directories of a base
-// shadow with the transaction, stopping below .scbake. The transaction's own
-// temp directory also lives under .scbake, so .scbake itself must never be
-// registered as created: a rollback would RemoveAll it and delete the backups.
+// shadow with the transaction, stopping at the project root. The committed base
+// lives in .scbake-base outside .scbake, so a failed update must be able to
+// remove it during rollback without ever registering the root itself.
 func trackBaseAncestors(tc types.TaskContext, absPath string) error {
 	if tc.Tx == nil || tc.DryRun {
 		return nil
@@ -363,7 +446,7 @@ func trackBaseAncestors(tc types.TaskContext, absPath string) error {
 	if root == "" {
 		return nil
 	}
-	stop := filepath.Join(root, fileutil.InternalDir)
+	stop := root
 
 	var missing []string
 	for dir := filepath.Dir(absPath); dir != stop && isStrictlyWithin(stop, dir); dir = filepath.Dir(dir) {
@@ -375,7 +458,7 @@ func trackBaseAncestors(tc types.TaskContext, absPath string) error {
 		missing = append(missing, dir)
 	}
 	// Register shallowest-first so reverse-order rollback removes the deepest
-	// first; RemoveAll on .scbake/base is safe and leaves .scbake/tmp intact.
+	// first; RemoveAll on .scbake-base is safe and leaves the root intact.
 	for i := len(missing) - 1; i >= 0; i-- {
 		if err := tc.Tx.Track(missing[i]); err != nil {
 			return fmt.Errorf("failed to track base shadow ancestor %s: %w", missing[i], err)
@@ -385,9 +468,10 @@ func trackBaseAncestors(tc types.TaskContext, absPath string) error {
 }
 
 // writeBaseShadow stores the pristine rendered content of a managed file under
-// <root>/.scbake/base/<ledgerKey>. `update` reads it back as the common ancestor
-// for a three-way merge. It is tracked by the transaction so a rollback removes
-// or restores it alongside the file it mirrors.
+// <root>/.scbake-base/<ledgerKey>. `update` reads it back as the common ancestor
+// for a three-way merge. The bytes are stored exactly as rendered; EOL
+// normalization applies only to hashing and merge inputs. It is tracked by the
+// transaction so a rollback removes or restores it alongside the file it mirrors.
 func writeBaseShadow(tc types.TaskContext, ledgerKey string, content []byte) error {
 	if tc.Tx == nil || tc.DryRun || ledgerKey == "" {
 		return nil
@@ -416,10 +500,23 @@ func writeBaseShadow(tc types.TaskContext, ledgerKey string, content []byte) err
 // persistent .scbake state out of version control.
 const internalStateIgnoreEntry = ".scbake/"
 
+// committedBaseIgnoreEntries re-include the committed base tree. The directory
+// line lets Git descend into .scbake-base; the glob re-includes every
+// descendant, including dotfiles matched by patterns such as ".*" and payloads
+// under hostile directories. The last line keeps the rules file itself
+// stageable when the user's patterns include ".*" or "*" and .gitignore is not
+// tracked yet.
+//
+// Order matters: the re-includes must remain at the end of the file. A later
+// matching pattern such as "*" overrides them and can hide the base. The helper
+// appends missing lines but deliberately does not move an existing block.
+var committedBaseIgnoreEntries = []string{"!.scbake-base/", "!.scbake-base/**", "!.gitignore"}
+
 // ensureInternalStateIgnored guarantees that <root>/.gitignore ignores the
-// .scbake state directory, independently of the selected language pack. The
-// base shadow is written for every generated project, so this closes the gap
-// for tooling-only projects that have no Go language .gitignore template.
+// .scbake state directory and re-includes the committed .scbake-base tree,
+// independently of the selected language pack. The base shadow is written for
+// every generated project, so this closes the gap for tooling-only projects
+// that have no Go language .gitignore template.
 //
 // It is idempotent with language-provided ignore entries and records the
 // change through the transaction so rollback restores or removes the file.
@@ -450,7 +547,7 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 		warnInternalStateIgnore(relPath, err)
 		return nil
 	}
-	if gitignoreIgnoresInternalState(existing) {
+	if gitignoreIgnoresInternalState(existing) && gitignoreAllowsCommittedBase(existing) {
 		return nil
 	}
 
@@ -458,19 +555,20 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 }
 
 // checkManagedGitignore warns when a managed root .gitignore no longer exists or
-// no longer ignores the internal state directory. It never mutates the file:
-// the managed render owns the ledger and base shadow, so the fix is a normal
-// apply/update that regenerates it.
+// no longer ignores the internal state directory and re-includes the committed
+// base tree. It never mutates the file: the managed render owns the ledger and
+// base shadow, so the fix is a normal apply/update that regenerates it.
 func checkManagedGitignore(root, relPath string) {
 	existing, err := readRootGitignore(root, relPath)
 	if err != nil {
 		warnManagedGitignoreStale(relPath, "cannot be read: "+err.Error())
 		return
 	}
-	if gitignoreIgnoresInternalState(existing) {
+	if gitignoreIgnoresInternalState(existing) && gitignoreAllowsCommittedBase(existing) {
 		return
 	}
-	warnManagedGitignoreStale(relPath, "is missing or does not ignore "+fileutil.InternalDir+"/")
+	warnManagedGitignoreStale(relPath,
+		"is missing the "+fileutil.InternalDir+"/ ignore or the "+fileutil.CommittedBaseDir+"/ re-include")
 }
 
 // warnManagedGitignoreStale reports a managed .gitignore that no longer
@@ -526,26 +624,35 @@ func checkIgnoredFileWritable(root, relPath string) error {
 // warnInternalStateIgnore reports a best-effort .gitignore update that was
 // skipped, matching the warning style used for conflict handling.
 func warnInternalStateIgnore(relPath string, err error) {
-	fmt.Fprintf(os.Stderr, "⚠️  Could not add %s to %s: %v\n", internalStateIgnoreEntry, relPath, err)
+	fmt.Fprintf(os.Stderr, "⚠️  Could not update the scbake ignore rules in %s: %v\n", relPath, err)
 }
 
-// appendInternalStateIgnore returns content with a standalone .scbake/ entry
-// appended when none is present. Existing bytes are preserved exactly, and a
-// separating newline is inserted only when the file does not already end with
-// one.
+// appendInternalStateIgnore returns content with the .scbake/ ignore and the
+// .scbake-base/ re-include block appended when they are absent. Existing bytes
+// are preserved exactly, and a separating newline is inserted only when the
+// file does not already end with one.
 func appendInternalStateIgnore(content []byte) []byte {
-	if gitignoreIgnoresInternalState(content) {
-		return content
+	out := content
+	if !gitignoreIgnoresInternalState(out) {
+		out = appendIgnoreLine(out, internalStateIgnoreEntry)
 	}
+	for _, entry := range committedBaseIgnoreEntries {
+		if !gitignoreHasLine(out, entry) {
+			out = appendIgnoreLine(out, entry)
+		}
+	}
+	return out
+}
 
-	var out []byte
-	out = append(out, content...)
+// appendIgnoreLine appends one ignore line, inserting a separating newline only
+// when the existing content does not already end with one.
+func appendIgnoreLine(content []byte, entry string) []byte {
+	out := content
 	if len(out) > 0 && out[len(out)-1] != '\n' {
 		out = append(out, '\n')
 	}
-	out = append(out, internalStateIgnoreEntry...)
-	out = append(out, '\n')
-	return out
+	out = append(out, entry...)
+	return append(out, '\n')
 }
 
 // gitignoreIgnoresInternalState reports whether existing already ignores the
@@ -556,6 +663,27 @@ func gitignoreIgnoresInternalState(existing []byte) bool {
 	for _, line := range strings.Split(string(existing), "\n") {
 		switch strings.TrimRight(line, " \t\r") {
 		case ".scbake", ".scbake/", "/.scbake", "/.scbake/":
+			return true
+		}
+	}
+	return false
+}
+
+// gitignoreAllowsCommittedBase reports whether existing carries every
+// re-include line needed to stage new base files under broad ignore patterns.
+func gitignoreAllowsCommittedBase(existing []byte) bool {
+	for _, entry := range committedBaseIgnoreEntries {
+		if !gitignoreHasLine(existing, entry) {
+			return false
+		}
+	}
+	return true
+}
+
+// gitignoreHasLine reports whether existing contains entry as a whole line.
+func gitignoreHasLine(existing []byte, entry string) bool {
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimRight(line, " \t\r") == entry {
 			return true
 		}
 	}
@@ -580,7 +708,7 @@ func writeBaseFile(absPath string, content []byte) error {
 }
 
 // readBaseShadow returns the pristine base content for a managed file, if it
-// exists.
+// exists. The lookup uses the same sanitized mapping as the write path.
 func readBaseShadow(tc types.TaskContext, ledgerKey string) ([]byte, bool) {
 	if ledgerKey == "" {
 		return nil, false
@@ -589,8 +717,7 @@ func readBaseShadow(tc types.TaskContext, ledgerKey string) ([]byte, bool) {
 	if root == "" {
 		return nil, false
 	}
-	rel := filepath.Join(fileutil.InternalDir, fileutil.BaseDir, filepath.FromSlash(ledgerKey))
-	data, err := fileutil.SafeReadFile(root, rel)
+	data, err := fileutil.SafeReadFile(root, BaseShadowRelPath(ledgerKey))
 	if err != nil {
 		return nil, false
 	}
