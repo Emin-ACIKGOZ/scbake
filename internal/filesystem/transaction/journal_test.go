@@ -85,7 +85,7 @@ func TestRecoverRestoresInterruptedTransaction(t *testing.T) {
 	}
 
 	createdFile := filepath.Join(createdDir, "file.txt")
-	if err := tx.Track(createdFile); err != nil {
+	if err := tx.TrackWrite(createdFile, []byte("partial")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(createdFile, []byte("partial"), fileutil.FilePerms); err != nil {
@@ -206,7 +206,7 @@ func TestRecoverContextStopsBetweenEntries(t *testing.T) {
 	first := filepath.Join(root, "first.txt")
 	second := filepath.Join(root, "second.txt")
 	for _, path := range []string{first, second} {
-		if err := tx.Track(path); err != nil {
+		if err := tx.TrackWrite(path, []byte("partial")); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(path, []byte("partial"), fileutil.FilePerms); err != nil {
@@ -215,9 +215,10 @@ func TestRecoverContextStopsBetweenEntries(t *testing.T) {
 	}
 	markJournalOwnerDead(t, tx.tempDir, 1<<30)
 
-	// Created paths are deleted in LIFO order, so second disappears first and
-	// the next context check cancels before first is touched.
-	ctx := &cancelWhenGoneContext{Context: context.Background(), path: second}
+	// Created paths at the same depth keep their tracking order, so first is
+	// removed first; the next context check then cancels before second is
+	// touched.
+	ctx := &cancelWhenGoneContext{Context: context.Background(), path: first}
 	recovered, err := RecoverContext(ctx, root, false)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("RecoverContext error = %v, want context.Canceled", err)
@@ -225,11 +226,11 @@ func TestRecoverContextStopsBetweenEntries(t *testing.T) {
 	if recovered != 0 {
 		t.Errorf("RecoverContext reported %d recoveries before cancellation", recovered)
 	}
-	if _, err := os.Stat(second); !os.IsNotExist(err) {
+	if _, err := os.Stat(first); !os.IsNotExist(err) {
 		t.Errorf("recovery did not process the first entry: %v", err)
 	}
-	if _, err := os.Stat(first); err != nil {
-		t.Errorf("recovery continued after cancellation and removed %s: %v", first, err)
+	if _, err := os.Stat(second); err != nil {
+		t.Errorf("recovery continued after cancellation and removed %s: %v", second, err)
 	}
 	if _, err := os.Stat(tx.tempDir); err != nil {
 		t.Errorf("canceled recovery removed the transaction directory: %v", err)
@@ -252,7 +253,7 @@ func TestRecoverNewCompletesRootRemovalAfterCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := filepath.Join(root, "main.go")
-	if err := tx.Track(created); err != nil {
+	if err := tx.TrackWrite(created, []byte("partial")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
@@ -293,7 +294,7 @@ func TestRecoverNewRetriesAfterRootRemovalFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := filepath.Join(root, "main.go")
-	if err := tx.Track(created); err != nil {
+	if err := tx.TrackWrite(created, []byte("partial")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
@@ -340,7 +341,7 @@ func TestRecoverRefusesLiveTransaction(t *testing.T) {
 	}
 
 	created := filepath.Join(root, "created.txt")
-	if err := tx.Track(created); err != nil {
+	if err := tx.TrackWrite(created, []byte("data")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("data"), fileutil.FilePerms); err != nil {
@@ -367,7 +368,7 @@ func TestRecoverDiscardRemovesTransaction(t *testing.T) {
 	}
 
 	created := filepath.Join(root, "created.txt")
-	if err := tx.Track(created); err != nil {
+	if err := tx.TrackWrite(created, []byte("data")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("data"), fileutil.FilePerms); err != nil {
@@ -735,7 +736,7 @@ func TestJournalIgnoresTornTrailingRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := filepath.Join(root, "created.txt")
-	if err := tx.Track(created); err != nil {
+	if err := tx.TrackWrite(created, []byte("partial")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
@@ -801,7 +802,7 @@ func TestRecoverThroughSymlinkedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := filepath.Join(realRoot, "created.txt")
-	if err := tx.Track(created); err != nil {
+	if err := tx.TrackWrite(created, []byte("partial")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
@@ -849,7 +850,7 @@ func TestRecoverRemoveRootThroughSymlinkedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := filepath.Join(realRoot, "partial.txt")
-	if err := tx.Track(created); err != nil {
+	if err := tx.TrackWrite(created, []byte("partial")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {
@@ -890,7 +891,7 @@ func TestRecoverIgnoresRecycledPID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.Track(created); err != nil {
+	if err := tx.TrackWrite(created, []byte("partial")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(created, []byte("partial"), fileutil.FilePerms); err != nil {

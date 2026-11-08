@@ -403,6 +403,85 @@ func TestExecCommandTask_PredictedCreated(t *testing.T) { //nolint:cyclop // thr
 	})
 }
 
+// TestExecCommandTask_PredictedCreatedSnapshotContent verifies that a declared
+// created path is snapshotted after the command regardless of its exit status,
+// so a later external rewrite survives rollback.
+func TestExecCommandTask_PredictedCreatedSnapshotContent(t *testing.T) { //nolint:cyclop // success and failure command scenarios with explicit setup
+	const createdContent = "example.com/dep v1.0.0 h1:abc=\n"
+	const externalContent = "external rewrite\n"
+
+	t.Run("successful command snapshots the declared path", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "go.sum")
+
+		tx, err := transaction.New(root)
+		if err != nil {
+			t.Fatalf("transaction.New: %v", err)
+		}
+		t.Setenv("GO_WANT_EXEC_HELPER", "mutate")
+		t.Setenv("GO_WANT_EXEC_HELPER_PATH", path)
+		t.Setenv("GO_WANT_EXEC_HELPER_CONTENT", createdContent)
+
+		task := &ExecCommandTask{
+			Cmd:              os.Args[0],
+			Args:             []string{"-test.run=^TestExecCommandTaskHelper$"},
+			Desc:             "Create go.sum",
+			RunInTarget:      true,
+			PredictedCreated: []string{"go.sum"},
+		}
+		tc := types.TaskContext{Ctx: context.Background(), TargetPath: root, Tx: tx}
+
+		if err := task.Execute(tc); err != nil {
+			t.Fatalf("task failed: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(externalContent), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
+		if got := mustReadTestFile(t, path); got != externalContent {
+			t.Errorf("external rewrite after success = %q, want %q", got, externalContent)
+		}
+	})
+
+	t.Run("failed command still snapshots the declared path", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "go.sum")
+
+		tx, err := transaction.New(root)
+		if err != nil {
+			t.Fatalf("transaction.New: %v", err)
+		}
+		t.Setenv("GO_WANT_EXEC_HELPER", "mutate")
+		t.Setenv("GO_WANT_EXEC_HELPER_PATH", path)
+		t.Setenv("GO_WANT_EXEC_HELPER_CONTENT", createdContent)
+		t.Setenv("GO_WANT_EXEC_HELPER_FAIL", "1")
+
+		task := &ExecCommandTask{
+			Cmd:              os.Args[0],
+			Args:             []string{"-test.run=^TestExecCommandTaskHelper$"},
+			Desc:             "Create go.sum then fail",
+			RunInTarget:      true,
+			PredictedCreated: []string{"go.sum"},
+		}
+		tc := types.TaskContext{Ctx: context.Background(), TargetPath: root, Tx: tx}
+
+		if err := task.Execute(tc); err == nil {
+			t.Fatal("expected the helper command to fail")
+		}
+		if err := os.WriteFile(path, []byte(externalContent), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
+		if got := mustReadTestFile(t, path); got != externalContent {
+			t.Errorf("external rewrite after failure = %q, want %q", got, externalContent)
+		}
+	})
+}
+
 // TestExecCommandTask_DryRunSkipsTrackingAndExecution verifies that a dry run
 // neither registers predicted paths with the transaction nor executes the
 // command.

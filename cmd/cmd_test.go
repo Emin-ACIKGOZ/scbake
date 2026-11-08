@@ -101,10 +101,11 @@ type MockCreateTask struct{ TargetFile string }
 func (m *MockCreateTask) Description() string { return "Create Task" }
 func (m *MockCreateTask) Priority() int       { return 50 }
 func (m *MockCreateTask) Execute(tc types.TaskContext) error {
+	const content = "CREATED"
 	if tc.Tx != nil {
-		_ = tc.Tx.Track(m.TargetFile)
+		_ = tc.Tx.TrackWrite(m.TargetFile, []byte(content))
 	}
-	return os.WriteFile(m.TargetFile, []byte("CREATED"), fileutil.PrivateFilePerms)
+	return os.WriteFile(m.TargetFile, []byte(content), fileutil.PrivateFilePerms)
 }
 
 // MockHandlerGeneric allows for the injection of custom task sets into the template registry.
