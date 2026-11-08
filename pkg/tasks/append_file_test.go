@@ -270,6 +270,60 @@ func TestAppendFileTask_SecondAppendUpdatesCreatedHash(t *testing.T) {
 	}
 }
 
+// TestAppendFileTask_ExternalRewriteBeforeAppendIsKept verifies that an append
+// after a non-scbake writer replaced a transaction-created file must not
+// re-authorize deletion of the external bytes. The append still happens, but
+// rollback keeps the external-plus-appended content with a warning.
+func TestAppendFileTask_ExternalRewriteBeforeAppendIsKept(t *testing.T) { //nolint:cyclop // setup plus external-rewrite, append, warning, and residue assertions
+	rootDir := t.TempDir()
+	tx, err := transaction.New(rootDir)
+	if err != nil {
+		t.Fatalf("Failed to create transaction: %v", err)
+	}
+
+	tc := types.TaskContext{TargetPath: rootDir, Tx: tx}
+	create := &AppendFileTask{FilePath: "external.txt", Content: "transaction\n", Desc: "create", TaskPrio: 100}
+	appendTask := &AppendFileTask{FilePath: "external.txt", Content: "appended\n", Desc: "append", TaskPrio: 101}
+
+	if err := create.Execute(tc); err != nil {
+		t.Fatalf("Create append failed: %v", err)
+	}
+
+	path := filepath.Join(rootDir, "external.txt")
+	const external = "external content that must survive\n"
+	if err := os.WriteFile(path, []byte(external), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := appendTask.Execute(tc); err != nil {
+		t.Fatalf("Append after external rewrite failed: %v", err)
+	}
+
+	const want = external + "appended\n"
+	if got, err := fileutil.SafeReadFile(rootDir, "external.txt"); err != nil {
+		t.Fatalf("read before rollback: %v", err)
+	} else if string(got) != want {
+		t.Fatalf("content before rollback = %q, want %q", got, want)
+	}
+
+	var rollbackErr error
+	stderr := captureStderr(t, func() { rollbackErr = tx.Rollback() })
+	if rollbackErr != nil {
+		t.Fatalf("Rollback treated kept external content as an error: %v", rollbackErr)
+	}
+	if got, err := fileutil.SafeReadFile(rootDir, "external.txt"); err != nil {
+		t.Fatalf("rollback removed the external rewrite: %v", err)
+	} else if string(got) != want {
+		t.Errorf("kept content = %q, want %q", got, want)
+	}
+	if !strings.Contains(stderr, "content changed since this transaction wrote it") {
+		t.Errorf("rollback stderr = %q, want a content-change warning", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(rootDir, fileutil.InternalDir)); !os.IsNotExist(err) {
+		t.Errorf("rollback left transaction state: %v", err)
+	}
+}
+
 func TestAppendFileTask_Metadata(t *testing.T) {
 	task := &AppendFileTask{
 		FilePath: "test.txt",
