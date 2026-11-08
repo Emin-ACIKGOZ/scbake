@@ -319,6 +319,9 @@ func TestManagedRootGitIgnoreStaleEntryDoesNotCreateDrift(t *testing.T) { //noli
 		t.Fatalf("manifest does not contain the old .gitignore hash %q:\n%s", oldHash, body)
 	}
 	mustWrite(t, manifestPath, strings.Replace(body, oldHash, staleHash, 1))
+	// Refresh the committed base to the same stale render so the fixture models
+	// a coherent legacy entry rather than an intentionally invalid base.
+	mustWrite(t, filepath.Join(project, tasks.BaseShadowRelPath(fileutil.GitIgnore)), staleIgnore)
 
 	// Applying another managed file invokes the helper for the stale .gitignore.
 	out, err = runCLI("apply", "--with", "makefile", project)
