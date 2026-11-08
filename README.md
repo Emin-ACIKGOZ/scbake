@@ -175,7 +175,7 @@ scbake new my-backend --lang go --with makefile,ci_github
 
 ### `apply`: Apply Templates to an Existing Project
 
-Applies new language packs or tooling templates to an existing path. Because `scbake` uses its own transaction logic, it does **not** require a clean Git tree to start; rollback and opaque-command caveats still apply.
+Applies new language packs or tooling templates to an existing path. Because `scbake` uses its own transaction logic, it does **not** require a clean Git tree to start; rollback and opaque-command caveats still apply. `apply`, `update`, and `drift --repair` require an existing project root and fail instead of creating a missing target directory; use `new` to bootstrap a new project.
 
 ```bash
 scbake apply [--lang <lang>] [--with <template...>] [--template-dir <dir>] [--conflict-strategy <strategy>] [<path>]
@@ -295,11 +295,15 @@ Mutating commands (`new`, `apply`, `update`, `drift --repair`, `recover`, and
 rollback. The lock is scoped to the manifest root, so parallel subproject runs
 under one root serialize on the same file. If another scbake process already
 holds the lock, the command fails fast with exit **75** (`EX_TEMPFAIL`) and
-makes no project changes; retry after the active run finishes.
+makes no project changes; retry after the active run finishes. `new` is the
+exception: it creates the project directory and an empty manifest before locking,
+so a busy failure can leave that bootstrap residue for you to retry or remove.
 
 Read-only commands (`drift`, `list`, and template registry/cache commands) and
 every `--dry-run` run do not take the lock, so they remain usable while a writer
-is active. They still refuse a tree with an interrupted transaction journal.
+is active. `drift` and `apply --dry-run` still refuse a tree with an interrupted
+transaction journal; `list` and template commands do not read project
+transaction state.
 
 The kernel releases the lock when the process exits, including a crash or
 `SIGKILL`; a leftover `.scbake/lock` file is harmless because the lock is kernel

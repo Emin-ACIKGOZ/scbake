@@ -127,8 +127,11 @@ predicted.
 on `<root>/.scbake/lock` and hold it through commit or rollback. The lock is
 scoped to the manifest root, not a subproject, so parallel runs under one root
 serialize. A second mutator fails fast with exit 75 (`EX_TEMPFAIL`) before any
-project mutation; callers should retry after the active run finishes. Read-only
-commands and all `--dry-run` runs do not acquire the lock. The kernel releases
+project mutation; callers should retry after the active run finishes. `new` is
+the exception: it creates the directory and empty manifest before taking the
+lock, so a busy failure can leave that bootstrap residue. Existing-project
+commands also fail rather than creating a missing root. Read-only commands and
+all `--dry-run` runs do not acquire the lock. The kernel releases
 the lock when the process exits or crashes, so a leftover lock file is harmless;
 normal release removes the file and prunes an empty `.scbake` directory. The
 manifest mtime check remains as a fallback for non-scbake writers. The rollback
