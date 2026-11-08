@@ -94,10 +94,17 @@ func (t *CreateTemplateTask) Priority() int {
 // HashContent calculates the SHA-256 hash of the given bytes after normalizing
 // text line endings. CRLF and LF therefore hash identically, which keeps the
 // managed_files ledger stable across Git checkouts that rewrite EOL bytes.
-// Binary content (containing a NUL byte) is hashed byte-exact.
+// NUL-free content is normalized; NUL-bearing binary content is hashed
+// byte-exact.
 func HashContent(content []byte) string {
+	return rawContentHash(normalizeEOL(content))
+}
+
+// rawContentHash returns the byte-exact SHA-256 of content without EOL
+// normalization.
+func rawContentHash(content []byte) string {
 	hasher := sha256.New()
-	hasher.Write(normalizeEOL(content))
+	hasher.Write(content)
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
@@ -227,7 +234,12 @@ func reconcileMerge(
 	// corrupt base is not a valid common ancestor: the merge can silently keep
 	// one side and drop the other. Treat it as missing and preserve the local
 	// file via the artifact path.
-	if HashContent(base) != originalHash {
+	//
+	// Legacy migration: binaries before the EOL-insensitive contract recorded
+	// the raw SHA-256 of the rendered bytes. A migrated CRLF base therefore
+	// matches originalHash only byte-exactly, not through HashContent. Accept
+	// either form; a truly stale base still matches neither.
+	if HashContent(base) != originalHash && rawContentHash(base) != originalHash {
 		fmt.Fprintf(os.Stderr,
 			"⚠️  No valid pristine base for %s (hash mismatch); writing new template to artifact.\n",
 			outputRelPath)
