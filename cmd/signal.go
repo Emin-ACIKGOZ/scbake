@@ -5,11 +5,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 
+	"scbake/internal/filesystem/transaction"
 	"scbake/internal/util/fileutil"
 )
 
@@ -98,6 +100,9 @@ func commandExitCode(err error, sig os.Signal) int {
 		return exitCodeForSignal(sig)
 	}
 	if err != nil {
+		if errors.Is(err, transaction.ErrBusy) {
+			return fileutil.ExitBusy
+		}
 		return fileutil.ExitError
 	}
 	return fileutil.ExitSuccess

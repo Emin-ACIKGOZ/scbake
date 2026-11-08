@@ -31,6 +31,7 @@ func resetFlags() {
 	force = false
 	allowAncestorSearch = false
 	recoverDiscardFlag = false
+	driftRepairFlag = false
 }
 
 // executeCLI simulates command invocation by setting args on the root Cobra command.
@@ -321,6 +322,7 @@ func TestNew_CommitFailure_CleansDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(tmpDir, "broken-app")); !os.IsNotExist(err) {
 		t.Error("project directory should be cleaned on commit failure")
 	}
+	assertNoFailedProjectStaging(t, tmpDir)
 }
 
 // Verifies safety check against overwriting existing project names.

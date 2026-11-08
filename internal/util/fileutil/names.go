@@ -13,6 +13,9 @@ const (
 	// TmpDir is the subdirectory for transactional backups.
 	TmpDir = "tmp"
 
+	// LockFileName is the per-root advisory lock file held by mutating runs.
+	LockFileName = "lock"
+
 	// BaseDir is the subdirectory that stores the pristine rendered content of
 	// managed files. It is the common ancestor used by `update` three-way merges.
 	BaseDir = "base"
@@ -34,4 +37,8 @@ const (
 
 	// ExitTerminated is the conventional exit status after SIGTERM (128 + 15).
 	ExitTerminated = 143
+
+	// ExitBusy is EX_TEMPFAIL: another scbake process holds the project lock,
+	// so the command did not run and the caller may retry later.
+	ExitBusy = 75
 )
