@@ -790,11 +790,13 @@ func cleanCommittedTransaction(ctx context.Context, dir string) error {
 var renameRootForRemoval = os.Rename
 
 // removeBootstrappedRoot removes the project directory for an interrupted
-// `new`. It first renames the root into a sibling staging directory. The rename
-// is atomic: if it fails, the original root and its transaction journal are
-// untouched, so recovery can be retried. Once the rename succeeds the original
-// root path is gone, so release is called before the staged tree is deleted;
-// this lets Windows remove the still-open lock file with the rest of the tree.
+// `new`. It creates a sibling staging directory, releases the root lock, renames
+// the root into staging, then deletes the staged tree. Windows cannot rename a
+// directory containing an open lock file, so the lock must be released before
+// the rename. The release-before-rename race is accepted: the journal remains
+// until the rename succeeds, so a contender either retries or sees the
+// incomplete transaction. If release or the rename fails, the original root and
+// its journal are left untouched and recovery can be retried.
 func removeBootstrappedRoot(ctx context.Context, rootPath string, release func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -804,21 +806,20 @@ func removeBootstrappedRoot(ctx context.Context, rootPath string, release func()
 	if err != nil {
 		return fmt.Errorf("failed to stage bootstrapped project root %s for removal: %w", rootPath, err)
 	}
+	if release != nil {
+		if err := release(); err != nil {
+			_ = os.Remove(staging)
+			return fmt.Errorf("failed to release bootstrapped project root lock %s: %w", rootPath, err)
+		}
+	}
+
 	destination := filepath.Join(staging, filepath.Base(rootPath))
 	if err := renameRootForRemoval(rootPath, destination); err != nil {
 		_ = os.Remove(staging)
 		return fmt.Errorf("failed to remove bootstrapped project root %s: %w", rootPath, err)
 	}
-
-	var releaseErr error
-	if release != nil {
-		releaseErr = release()
-	}
 	if err := os.RemoveAll(staging); err != nil {
-		return errors.Join(releaseErr, fmt.Errorf("removed bootstrapped project root %s but failed to clean staging directory %s: %w", rootPath, staging, err))
-	}
-	if releaseErr != nil {
-		return fmt.Errorf("removed bootstrapped project root %s but failed to release its lock: %w", rootPath, releaseErr)
+		return fmt.Errorf("removed bootstrapped project root %s but failed to clean staging directory %s: %w", rootPath, staging, err)
 	}
 	return nil
 }

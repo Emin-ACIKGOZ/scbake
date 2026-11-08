@@ -89,31 +89,33 @@ func cleanupFailedProject(projectName string) {
 	}
 }
 
-// removeFailedProject mirrors removeBootstrappedRoot: rename the directory to a
-// unique sibling staging path while the lock is held, release, then delete the
-// staged tree so Windows can remove the lock file. If the rename fails, the
-// original directory is left untouched and no deletion runs under the lock.
+// removeFailedProject mirrors removeBootstrappedRoot: create a unique sibling
+// staging directory, release the lock, rename the directory into staging, then
+// delete the staged tree. Windows cannot rename a directory containing an open
+// lock file, so release must come first. If release or the rename fails, the
+// original directory is left untouched. The release-before-rename race is
+// accepted because the staging path is unique and cleanup only runs after a
+// failed `new`.
 func removeFailedProject(projectName string, release func() error) error {
 	parent := filepath.Dir(projectName)
 	staging, err := os.MkdirTemp(parent, ".scbake-remove-*")
 	if err != nil {
 		return fmt.Errorf("failed to stage failed project directory %s for removal: %w", projectName, err)
 	}
+	if release != nil {
+		if err := release(); err != nil {
+			_ = os.Remove(staging)
+			return fmt.Errorf("failed to release failed project directory lock %s: %w", projectName, err)
+		}
+	}
+
 	destination := filepath.Join(staging, filepath.Base(projectName))
 	if err := os.Rename(projectName, destination); err != nil {
 		_ = os.Remove(staging)
 		return fmt.Errorf("failed to remove failed project directory %s: %w", projectName, err)
 	}
-
-	var releaseErr error
-	if release != nil {
-		releaseErr = release()
-	}
 	if err := os.RemoveAll(staging); err != nil {
-		return errors.Join(releaseErr, fmt.Errorf("removed failed project directory %s but failed to clean staging directory %s: %w", projectName, staging, err))
-	}
-	if releaseErr != nil {
-		return fmt.Errorf("removed failed project directory %s but failed to release its lock: %w", projectName, releaseErr)
+		return fmt.Errorf("removed failed project directory %s but failed to clean staging directory %s: %w", projectName, staging, err)
 	}
 	return nil
 }
@@ -129,8 +131,9 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 	// Validate every flag before mutating the filesystem (SCB-012): a malformed
 	// --set pair, an unknown --set key, or a missing --lang/--with must fail
 	// before the project directory or its manifest is created. Runtime failures
-	// after bootstrap are cleaned up best-effort while holding the root lock.
-	// This mirrors the ordering already used by 'apply' (see cmd/apply.go).
+	// after bootstrap are cleaned up best-effort under the root lock, which is
+	// released before the directory is staged and deleted. This mirrors the
+	// ordering already used by 'apply' (see cmd/apply.go).
 	setVars, err := parseSetFlags(newSetFlag)
 	if err != nil {
 		return err
@@ -194,7 +197,7 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 // The empty manifest is written before RunApply acquires the root lock. A second
 // `new` is stopped by the existence check, and concurrent apply in this
 // brand-new directory is a narrow residual race; cleanup re-acquires the lock
-// and refuses to delete while another process is active.
+// and refuses to stage the directory while another process is active.
 func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporter, dirCreated *bool) (func(), error) {
 	cwd, err := os.Getwd()
 	if err != nil {
