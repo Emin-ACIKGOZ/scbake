@@ -35,6 +35,24 @@ type ScaffoldTask struct {
 	Sentinel string
 }
 
+// scaffoldTargetPaths holds the two forms of the target directory the task
+// needs. They are kept separate so destination tracking stays inside the
+// transaction's lexical containment domain while the staging leaf still gets
+// the name a direct scaffolder invocation would see.
+type scaffoldTargetPaths struct {
+	// lexical is the absolute target spelling without resolving symlinks. It
+	// stays under the same lexical root as Tx.Root(), so fileutil.SafePath
+	// accepts destinations built from it even when the project was reached
+	// through a symlinked path. Destination Lstat, Track/TrackWrite, and Rename
+	// all use this form.
+	lexical string
+
+	// resolved is the symlink-free target. It is used only to derive the
+	// staging leaf basename and to validate the target, because the scaffolder
+	// observes the resolved directory name when it derives a package name.
+	resolved string
+}
+
 // scaffoldStaging is the transaction-owned staging tree for one scaffold run.
 type scaffoldStaging struct {
 	// root is the stage-* directory removed after the run.
@@ -84,38 +102,38 @@ func (t *ScaffoldTask) Execute(tc types.TaskContext) error {
 
 	// Preflight every top-level destination before tracking or moving anything
 	// so a collision cannot leave tracked state or a partially moved project.
-	if err := preflightDestinations(target, entries); err != nil {
+	if err := preflightDestinations(target.lexical, entries); err != nil {
 		return err
 	}
 
 	// Track destinations before the move so rollback can remove exactly the
 	// bytes this transaction moved. Files are hashed; directories are tracked
 	// as creates and removed only when empty.
-	if err := trackScaffoldOutput(tc.Tx, staging.leaf, target); err != nil {
+	if err := trackScaffoldOutput(tc.Tx, staging.leaf, target.lexical); err != nil {
 		return fmt.Errorf("failed to track scaffold output: %w", err)
 	}
 
-	return moveScaffoldEntries(staging.leaf, target, entries)
+	return moveScaffoldEntries(staging.leaf, target.lexical, entries)
 }
 
-// resolveScaffoldTarget resolves the task target to an absolute, symlink-free
-// directory and validates it.
-func resolveScaffoldTarget(targetPath string) (string, error) {
+// resolveScaffoldTarget converts the task target into its lexical absolute
+// form and its symlink-resolved form, then validates the resolved directory.
+func resolveScaffoldTarget(targetPath string) (scaffoldTargetPaths, error) {
 	if targetPath == "" {
 		targetPath = "."
 	}
-	abs, err := filepath.Abs(targetPath)
+	lexical, err := filepath.Abs(targetPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve scaffold target %q: %w", targetPath, err)
+		return scaffoldTargetPaths{}, fmt.Errorf("failed to resolve scaffold target %q: %w", targetPath, err)
 	}
-	resolved, err := filepath.EvalSymlinks(abs)
+	resolved, err := filepath.EvalSymlinks(lexical)
 	if err != nil {
-		return "", fmt.Errorf("failed to canonicalize scaffold target %q: %w", targetPath, err)
+		return scaffoldTargetPaths{}, fmt.Errorf("failed to canonicalize scaffold target %q: %w", targetPath, err)
 	}
 	if err := validateScaffoldTarget(resolved); err != nil {
-		return "", err
+		return scaffoldTargetPaths{}, err
 	}
-	return resolved, nil
+	return scaffoldTargetPaths{lexical: lexical, resolved: resolved}, nil
 }
 
 // validateScaffoldTarget rejects the filesystem root and targets that are not
@@ -135,7 +153,7 @@ func validateScaffoldTarget(resolved string) error {
 }
 
 // prepareStaging creates the empty staging tree under the transaction temp dir.
-func (t *ScaffoldTask) prepareStaging(tc types.TaskContext, target string) (*scaffoldStaging, error) {
+func (t *ScaffoldTask) prepareStaging(tc types.TaskContext, target scaffoldTargetPaths) (*scaffoldStaging, error) {
 	root := tc.Tx.Root()
 	txTemp, err := tc.Tx.TempDir()
 	if err != nil {
@@ -157,7 +175,7 @@ func (t *ScaffoldTask) prepareStaging(tc types.TaskContext, target string) (*sca
 
 	// Use the resolved basename so generators that derive a package name from
 	// the cwd keep the same name a direct invocation would have produced.
-	staging.leaf = filepath.Join(stagingRoot, filepath.Base(target))
+	staging.leaf = filepath.Join(stagingRoot, filepath.Base(target.resolved))
 	if err := os.Mkdir(staging.leaf, fileutil.DirPerms); err != nil {
 		staging.remove()
 		return nil, fmt.Errorf("failed to create scaffold staging leaf %s: %w", staging.leaf, err)
