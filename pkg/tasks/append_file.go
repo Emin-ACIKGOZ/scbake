@@ -53,7 +53,29 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 		return nil
 	}
 
+	// A file created earlier in this transaction may already carry a hash from
+	// its first write. The append changes the whole file, so record the
+	// post-append bytes and replace that stale hash before writing. TrackWrite
+	// only updates paths this transaction created; a pre-existing user file is
+	// restored from its backup, which remains authoritative.
+	fullContent := appendResultBytes(existingContent, t.Content)
+	if err := trackAppendWrite(tc, absPath, t.FilePath, fullContent); err != nil {
+		return err
+	}
+
 	return appendFileContent(tc.TargetPath, t.FilePath, existingContent, t.Content)
+}
+
+// appendResultBytes returns the exact bytes appendFileContent will produce: the
+// existing content, a separating newline when it does not end with one, then
+// newContent.
+func appendResultBytes(existing []byte, newContent string) []byte {
+	full := make([]byte, 0, len(existing)+len(newContent)+1)
+	full = append(full, existing...)
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		full = append(full, '\n')
+	}
+	return append(full, newContent...)
 }
 
 // createMissingFile writes a missing append target. TrackWrite records the raw
