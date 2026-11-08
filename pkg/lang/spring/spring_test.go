@@ -95,6 +95,26 @@ func assertChmodTask(t *testing.T, task types.Task) {
 	}
 }
 
+// TestGetTasks_RelativeTargetUsesDirName ensures a relative "." target (as passed by 'new')
+// names the project after the current directory instead of ".", and that a hyphenated
+// directory yields a valid Java package segment.
+func TestGetTasks_RelativeTargetUsesDirName(t *testing.T) {
+	projectDir := filepath.Join(t.TempDir(), "my-app")
+	if err := os.Mkdir(projectDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(projectDir)
+
+	plan := getPlanOrFail(t, &Handler{}, ".")
+
+	urlArg := findSpringURL(t, plan[1].(*tasks.ExecCommandTask).Args)
+	for _, want := range []string{"artifactId=my-app", "name=my-app", "packageName=com.example.myapp"} {
+		if !strings.Contains(urlArg, want) {
+			t.Errorf("URL missing %q. URL: %s", want, urlArg)
+		}
+	}
+}
+
 // TestGetTasks_ExistingSpringProject validates idempotency.
 func TestGetTasks_ExistingSpringProject(t *testing.T) {
 	tempDir := t.TempDir()
