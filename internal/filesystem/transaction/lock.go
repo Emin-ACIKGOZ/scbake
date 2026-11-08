@@ -71,7 +71,11 @@ type rootLockPaths struct {
 	createRoot bool
 }
 
-// resolveRootLockPaths canonicalizes the root and validates both lock paths.
+// resolveRootLockPaths canonicalizes the root and derives its lock locations.
+// It must not resolve the state directory or lock file yet: .scbake is created
+// lazily and a concurrent release may prune it between resolution and open.
+// Containment is validated after the state directory exists in
+// ensureRootLockDir.
 func resolveRootLockPaths(root string, createRoot bool) (rootLockPaths, error) {
 	absRoot, err := CanonicalRoot(root)
 	if err != nil {
@@ -79,12 +83,6 @@ func resolveRootLockPaths(root string, createRoot bool) (rootLockPaths, error) {
 	}
 	stateDir := filepath.Join(absRoot, fileutil.InternalDir)
 	lockPath := filepath.Join(stateDir, fileutil.LockFileName)
-	if _, err := fileutil.SafePath(absRoot, stateDir); err != nil {
-		return rootLockPaths{}, fmt.Errorf("invalid lock directory: %w", err)
-	}
-	if _, err := fileutil.SafePath(absRoot, lockPath); err != nil {
-		return rootLockPaths{}, fmt.Errorf("invalid lock path: %w", err)
-	}
 	return rootLockPaths{
 		root:       absRoot,
 		stateDir:   stateDir,
@@ -134,13 +132,19 @@ func tryAcquireRootLock(paths rootLockPaths) (lock *RootLock, retry bool, err er
 // silently created as an empty directory.
 func ensureRootLockDir(paths rootLockPaths) error {
 	if paths.createRoot {
-		return os.MkdirAll(paths.stateDir, rootLockDirPerm)
+		if err := os.MkdirAll(paths.stateDir, rootLockDirPerm); err != nil {
+			return err
+		}
+	} else {
+		err := os.Mkdir(paths.stateDir, rootLockDirPerm)
+		if err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
 	}
-	err := os.Mkdir(paths.stateDir, rootLockDirPerm)
-	if err == nil || errors.Is(err, fs.ErrExist) {
-		return nil
+	if _, err := fileutil.SafePath(paths.root, paths.stateDir); err != nil {
+		return fmt.Errorf("invalid lock directory: %w", err)
 	}
-	return err
+	return nil
 }
 
 // Release removes the lock file while the lock is still held, then unlocks and
