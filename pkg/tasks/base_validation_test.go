@@ -228,6 +228,73 @@ func TestMergeAcceptsLegacyCRLFBase(t *testing.T) {
 	}
 }
 
+// TestMergeRejectsNormalizedLegacyCRLFBase covers the documented migration
+// caveat: the ledger still records the raw CRLF hash, but Git normalized the
+// migrated base to LF. Neither HashContent(base) (the normalized LF hash) nor
+// rawContentHash(base) (the raw LF hash) matches the raw CRLF ledger hash, so
+// the base is invalid and the merge must fail closed to an artifact.
+func TestMergeRejectsNormalizedLegacyCRLFBase(t *testing.T) { //nolint:cyclop // assertion-heavy artifact regression test
+	const (
+		originalLF = "alpha\nshared\nomega\n"
+		baseCRLF   = "alpha\r\nshared\r\nomega\r\n"
+		baseLF     = "alpha\nshared\nomega\n"
+		local      = "alpha-local\nshared\nomega\n"
+		updated    = "alpha\nshared\nomega-template\n"
+	)
+
+	root, tx, tc := mergeTestContext(t)
+	defer func() { _ = tx.Rollback() }()
+
+	if err := newMergeTask(originalLF).Execute(tc); err != nil {
+		t.Fatalf("initial execute: %v", err)
+	}
+
+	// A legacy ledger records the raw CRLF hash, but migration through Git
+	// normalized the committed base bytes to LF.
+	legacyHash := rawContentHash([]byte(baseCRLF))
+	if HashContent([]byte(baseLF)) == legacyHash || rawContentHash([]byte(baseLF)) == legacyHash {
+		t.Fatal("test setup: LF base unexpectedly matches the raw CRLF ledger hash")
+	}
+	basePath := filepath.Join(root, fileutil.CommittedBaseDir, "Makefile")
+	if err := os.WriteFile(basePath, []byte(baseLF), 0o600); err != nil {
+		t.Fatalf("write normalized legacy base: %v", err)
+	}
+	tc.Manifest.ManagedFiles["Makefile"] = legacyHash
+
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(local), 0o600); err != nil {
+		t.Fatalf("write local edit: %v", err)
+	}
+
+	out := captureStderr(t, func() {
+		if err := newMergeTask(updated).Execute(tc); err != nil {
+			t.Fatalf("merge execute: %v", err)
+		}
+	})
+	if !strings.Contains(out, "No valid pristine base for Makefile (hash mismatch)") {
+		t.Fatalf("missing invalid-base warning for the normalized legacy base:\n%s", out)
+	}
+
+	gotLocal, err := os.ReadFile(filepath.Join(root, "Makefile")) //nolint:gosec // test temp path
+	if err != nil {
+		t.Fatalf("read local file: %v", err)
+	}
+	if string(gotLocal) != local {
+		t.Fatalf("local file was modified: got %q, want %q", gotLocal, local)
+	}
+
+	artifact, err := os.ReadFile(filepath.Join(root, "Makefile.scbake-new")) //nolint:gosec // test temp path
+	if err != nil {
+		t.Fatalf("expected artifact for the normalized legacy base: %v", err)
+	}
+	if string(artifact) != updated {
+		t.Fatalf("artifact = %q, want %q", artifact, updated)
+	}
+
+	if got := tc.Manifest.ManagedFiles["Makefile"]; got != legacyHash {
+		t.Fatalf("invalid base advanced the ledger: got %q, want %q", got, legacyHash)
+	}
+}
+
 // TestMergeWholeFileCRLFEditIsClean covers the autocrlf/editor case: the local
 // file was rewritten with CRLF and the template introduces a disjoint change.
 // Normalizing all merge inputs must keep both edits instead of treating every
