@@ -33,13 +33,20 @@ type RootLock struct {
 // <root>/.scbake/lock. It creates .scbake with owner-only permissions when
 // missing; only callers that intend to mutate the project should call it.
 //
+// createRoot controls whether a missing project root may be created. `new`
+// passes true because it bootstraps the root; commands operating on an existing
+// project pass false so a bad path does not leave an empty directory behind.
+// It is variadic to keep the original single-argument form as a safe default
+// (no root creation).
+//
 // The lock file is unlinked on release rather than kept around, preserving
 // existing cleanup behavior. A process preempted between opening and locking
 // could otherwise lock an unlinked inode while another process locks a fresh
 // one at the same path; the post-acquire SameFile check discards a handle whose
 // path no longer names it and retries.
-func AcquireRootLock(root string) (*RootLock, error) {
-	paths, err := resolveRootLockPaths(root)
+func AcquireRootLock(root string, createRoot ...bool) (*RootLock, error) {
+	allowCreate := len(createRoot) > 0 && createRoot[0]
+	paths, err := resolveRootLockPaths(root, allowCreate)
 	if err != nil {
 		return nil, err
 	}
@@ -58,13 +65,14 @@ func AcquireRootLock(root string) (*RootLock, error) {
 
 // rootLockPaths holds the canonical root and its lock locations.
 type rootLockPaths struct {
-	root     string
-	stateDir string
-	lockPath string
+	root       string
+	stateDir   string
+	lockPath   string
+	createRoot bool
 }
 
 // resolveRootLockPaths canonicalizes the root and validates both lock paths.
-func resolveRootLockPaths(root string) (rootLockPaths, error) {
+func resolveRootLockPaths(root string, createRoot bool) (rootLockPaths, error) {
 	absRoot, err := CanonicalRoot(root)
 	if err != nil {
 		return rootLockPaths{}, fmt.Errorf("failed to resolve root path: %w", err)
@@ -77,16 +85,24 @@ func resolveRootLockPaths(root string) (rootLockPaths, error) {
 	if _, err := fileutil.SafePath(absRoot, lockPath); err != nil {
 		return rootLockPaths{}, fmt.Errorf("invalid lock path: %w", err)
 	}
-	return rootLockPaths{root: absRoot, stateDir: stateDir, lockPath: lockPath}, nil
+	return rootLockPaths{
+		root:       absRoot,
+		stateDir:   stateDir,
+		lockPath:   lockPath,
+		createRoot: createRoot,
+	}, nil
 }
 
 // tryAcquireRootLock makes one acquisition attempt. retry reports that .scbake
 // was pruned or the lock path was replaced, so the caller should reopen it.
 func tryAcquireRootLock(paths rootLockPaths) (lock *RootLock, retry bool, err error) {
-	if err := os.MkdirAll(paths.stateDir, rootLockDirPerm); err != nil {
+	if err := ensureRootLockDir(paths); err != nil {
 		// A releasing process may have pruned .scbake; recreate and retry.
-		if errors.Is(err, fs.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) && paths.createRoot {
 			return nil, true, nil
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, false, fmt.Errorf("project root %s does not exist: %w", paths.root, fs.ErrNotExist)
 		}
 		return nil, false, fmt.Errorf("failed to create lock directory %s: %w", paths.stateDir, err)
 	}
@@ -111,6 +127,20 @@ func tryAcquireRootLock(paths rootLockPaths) (lock *RootLock, retry bool, err er
 	// handle and retry from open.
 	_ = closeLockFile(f)
 	return nil, true, nil
+}
+
+// ensureRootLockDir creates .scbake. For existing-project commands it uses
+// os.Mkdir rather than MkdirAll so a missing root is reported instead of being
+// silently created as an empty directory.
+func ensureRootLockDir(paths rootLockPaths) error {
+	if paths.createRoot {
+		return os.MkdirAll(paths.stateDir, rootLockDirPerm)
+	}
+	err := os.Mkdir(paths.stateDir, rootLockDirPerm)
+	if err == nil || errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+	return err
 }
 
 // Release removes the lock file while the lock is still held, then unlocks and

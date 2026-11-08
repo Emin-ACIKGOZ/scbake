@@ -56,7 +56,7 @@ func acquireLockFile(_, path string) (*os.File, error) {
 		if isLockBusyError(err) {
 			return nil, ErrBusy
 		}
-		return nil, err
+		return nil, fmt.Errorf("failed to lock %s: %w", path, err)
 	}
 	return f, nil
 }
@@ -77,7 +77,7 @@ func lockFileEx(f *os.File) error {
 	if callErr == syscall.Errno(0) {
 		callErr = errors.New("LockFileEx failed")
 	}
-	return callErr
+	return fmt.Errorf("LockFileEx failed: %w", callErr)
 }
 
 // closeLockFile unlocks and closes without touching the path.
@@ -113,11 +113,11 @@ func releaseLockFile(f *os.File, path string) error {
 	return errors.Join(closeErr, removeErr)
 }
 
-// isLockBusyError maps contention and transient delete-pending errors to
-// ErrBusy. ERROR_ACCESS_DENIED is included because a delete-pending file
-// rejects new opens until the last handle closes.
+// isLockBusyError maps genuine lock contention to ErrBusy. ERROR_ACCESS_DENIED
+// is excluded on purpose: it also covers ACL and permission failures, which
+// must remain ordinary errors instead of exiting 75. A delete-pending lock can
+// surface as access-denied briefly; callers see that as a wrapped failure.
 func isLockBusyError(err error) bool {
-	return errors.Is(err, syscall.ERROR_ACCESS_DENIED) ||
-		errors.Is(err, errorSharingViolation) ||
+	return errors.Is(err, errorSharingViolation) ||
 		errors.Is(err, errorLockViolation)
 }

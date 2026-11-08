@@ -46,11 +46,10 @@ var newCmd = &cobra.Command{
 
 		if err := runNew(cmd.Context(), projectName, &dirCreated); err != nil {
 			// Cleanup: Only remove the directory if it was created during this
-			// session. Never remove it when another process won the root lock
-			// and is now working inside it.
-			if dirCreated && !errors.Is(err, transaction.ErrBusy) {
-				fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
-				_ = os.RemoveAll(projectName)
+			// session. cleanupFailedProject re-acquires the root lock and skips
+			// deletion when another process is using the directory.
+			if dirCreated {
+				cleanupFailedProject(projectName)
 			}
 			return err
 		}
@@ -58,6 +57,25 @@ var newCmd = &cobra.Command{
 		fmt.Printf("✅ Success! New project '%s' created.\n", projectName)
 		return nil
 	},
+}
+
+// cleanupFailedProject removes a project directory created by this invocation.
+// It re-acquires the root lock first so a failed run cannot delete a directory
+// another scbake process has started using. If locking is unavailable for a
+// reason other than busy, cleanup proceeds as before.
+func cleanupFailedProject(projectName string) {
+	lock, err := transaction.AcquireRootLock(projectName, false)
+	if err == nil {
+		defer func() { _ = lock.Release() }()
+	} else if errors.Is(err, transaction.ErrBusy) {
+		fmt.Fprintf(os.Stderr, "Not removing '%s': another scbake process is using it.\n", projectName)
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "Locking '%s' for cleanup failed: %v\n", projectName, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
+	_ = os.RemoveAll(projectName)
 }
 
 // runNew coordinates the project directory setup and delegates template application to the core engine.
@@ -70,9 +88,9 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 
 	// Validate every flag before mutating the filesystem (SCB-012): a malformed
 	// --set pair, an unknown --set key, or a missing --lang/--with must fail
-	// before the project directory or its manifest is created, so a failed 'new'
-	// leaves no residue behind. This mirrors the ordering already used by
-	// 'apply' (see cmd/apply.go).
+	// before the project directory or its manifest is created. Runtime failures
+	// after bootstrap are cleaned up best-effort while holding the root lock.
+	// This mirrors the ordering already used by 'apply' (see cmd/apply.go).
 	setVars, err := parseSetFlags(newSetFlag)
 	if err != nil {
 		return err
@@ -132,6 +150,11 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 
 // bootstrapProjectDir creates the project directory, changes working directory, and writes an initial manifest.
 // Returns a cleanup closure that restores the original working directory upon completion.
+//
+// The empty manifest is written before RunApply acquires the root lock. A second
+// `new` is stopped by the existence check, and concurrent apply in this
+// brand-new directory is a narrow residual race; cleanup re-acquires the lock
+// and refuses to delete while another process is active.
 func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporter, dirCreated *bool) (func(), error) {
 	cwd, err := os.Getwd()
 	if err != nil {

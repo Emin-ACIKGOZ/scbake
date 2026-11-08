@@ -608,7 +608,7 @@ func RecoverContext(ctx context.Context, rootPath string, discard bool) (int, er
 		return 0, nil
 	}
 
-	lock, err := AcquireRootLock(absRoot)
+	lock, err := AcquireRootLock(absRoot, false)
 	if err != nil {
 		return 0, err
 	}

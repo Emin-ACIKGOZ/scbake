@@ -180,11 +180,13 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 	return runApply(rc, reporter)
 }
 
-// withRootLock serializes mutating runs against the same project root. Dry runs
-// stay lock-free so they can inspect a project while another process writes;
-// their existing pending-transaction check remains the consistency guard. The
-// deferred release is registered before runApply/runUpdate defer their rollback,
-// so commit or rollback finishes before the lock is released.
+// withRootLock serializes mutating runs against the same project root. Only
+// `new` may create a missing root; apply/update must fail before creating an
+// empty directory. Dry runs stay lock-free so they can inspect a project while
+// another process writes; their existing pending-transaction check remains the
+// consistency guard. The deferred release is registered before runApply/runUpdate
+// defer their rollback, so commit or rollback finishes before the lock is
+// released.
 func withRootLock(rc RunContext, fn func() error) error {
 	if rc.DryRun {
 		return fn()
@@ -197,7 +199,7 @@ func withRootLock(rc RunContext, fn func() error) error {
 		return fmt.Errorf("failed to find project root: %w", err)
 	}
 
-	lock, err := transaction.AcquireRootLock(root)
+	lock, err := transaction.AcquireRootLock(root, rc.NewProject)
 	if err != nil {
 		return err
 	}
