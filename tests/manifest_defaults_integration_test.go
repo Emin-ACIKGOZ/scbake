@@ -176,3 +176,66 @@ func TestNewMakefileSetRecordsBuildToolAndTestCommand(t *testing.T) {
 	target := manifestTestTarget(t, readGeneratedMakefile(t, projectDir))
 	assertExplicitCommandTarget(t, target, customTest)
 }
+
+// assertPerProjectTestTarget verifies that the rendered test target runs the
+// per-project Go test command and does not hard-code a root `go test ./...`.
+func assertPerProjectTestTarget(t *testing.T, target string) {
+	t.Helper()
+
+	if !strings.Contains(target, "(cd . && $(MAKE_TEST_COMMAND_go))") {
+		t.Errorf("test target did not run the per-project Go test command:\n%s", target)
+	}
+	if strings.Contains(target, "go test ./...") {
+		t.Errorf("test target still renders the root go test ./... default:\n%s", target)
+	}
+}
+
+// TestApplyMakefileWithoutTestCommandRendersPerProjectTests drives the real
+// apply path: a Go project with no recorded test_command must get the
+// per-project test loop, not a root-level go test ./... (#146).
+func TestApplyMakefileWithoutTestCommandRendersPerProjectTests(t *testing.T) {
+	tmpDir := chdirToTempDir(t)
+
+	const projectName = "apply-proj"
+	if output, err := runCLI("new", projectName, "--lang", "go"); err != nil {
+		t.Fatalf("new go project failed: %v\nOutput: %s", err, output)
+	}
+
+	projectDir := filepath.Join(tmpDir, projectName)
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatalf("chdir to project: %v", err)
+	}
+	if output, err := runCLI("apply", "--with", "makefile"); err != nil {
+		t.Fatalf("apply makefile failed: %v\nOutput: %s", err, output)
+	}
+
+	assertMetadataKeysAbsent(t, projectDir, []string{"test_command"})
+	assertPerProjectTestTarget(t, manifestTestTarget(t, readGeneratedMakefile(t, projectDir)))
+}
+
+// TestUpdateLegacyDefaultTestCommandRendersPerProjectTests covers manifests that
+// already record the old go test ./... default: both new and update must keep
+// rendering the per-project test loop for them.
+func TestUpdateLegacyDefaultTestCommandRendersPerProjectTests(t *testing.T) {
+	tmpDir := chdirToTempDir(t)
+
+	const projectName = "legacy-proj"
+	if output, err := runCLI("new", projectName, "--lang", "go", "--with", "makefile",
+		"--set", "test_command=go test ./...",
+	); err != nil {
+		t.Fatalf("new with legacy test_command failed: %v\nOutput: %s", err, output)
+	}
+
+	projectDir := filepath.Join(tmpDir, projectName)
+	assertMetadataValues(t, projectDir, map[string]string{"test_command": "go test ./..."})
+	assertPerProjectTestTarget(t, manifestTestTarget(t, readGeneratedMakefile(t, projectDir)))
+
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatalf("chdir to project: %v", err)
+	}
+	if output, err := runCLI("update"); err != nil {
+		t.Fatalf("update failed: %v\nOutput: %s", err, output)
+	}
+
+	assertPerProjectTestTarget(t, manifestTestTarget(t, readGeneratedMakefile(t, projectDir)))
+}
