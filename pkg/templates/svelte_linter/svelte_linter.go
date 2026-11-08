@@ -10,6 +10,12 @@ import (
 	"scbake/pkg/tasks"
 )
 
+const (
+	packageJSONFile = "package.json"
+	packageLockFile = "package-lock.json"
+	nodeModulesDir  = "node_modules"
+)
+
 //go:embed eslint.config.js.tpl
 var templates embed.FS
 
@@ -36,7 +42,10 @@ func (h *Handler) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 		TaskPrio:     int(p1),
 	})
 
-	// Task 2: Install necessary ESLint dependencies
+	// Task 2: Install necessary ESLint dependencies.
+	// node_modules is tool-managed: tracking the directory cleans up a newly
+	// created tree, but pre-existing contents are not snapshotted because
+	// backing up dependency trees is intentionally out of scope.
 	plan = append(plan, &tasks.ExecCommandTask{
 		Cmd: "npm",
 		Args: []string{
@@ -49,9 +58,10 @@ func (h *Handler) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 			"prettier",
 			"eslint-config-prettier",
 		},
-		Desc:        "Install Svelte ESLint dependencies",
-		TaskPrio:    int(p2),
-		RunInTarget: true,
+		Desc:             "Install Svelte ESLint dependencies",
+		TaskPrio:         int(p2),
+		PredictedCreated: []string{packageJSONFile, packageLockFile, nodeModulesDir},
+		RunInTarget:      true,
 	})
 
 	// Task 3: Add robust 'lint' and 'lint:fix' scripts to package.json
@@ -63,9 +73,10 @@ func (h *Handler) GetTasks(_ string, _, _ string) ([]types.Task, error) {
 			"scripts.lint=npx eslint .",
 			"scripts.lint:fix=npx eslint . --fix",
 		},
-		Desc:        "Add standard lint scripts to package.json",
-		TaskPrio:    int(p3),
-		RunInTarget: true,
+		Desc:             "Add standard lint scripts to package.json",
+		TaskPrio:         int(p3),
+		PredictedCreated: []string{packageJSONFile},
+		RunInTarget:      true,
 	})
 
 	return plan, nil

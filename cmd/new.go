@@ -5,9 +5,12 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"scbake/internal/core"
+	"scbake/internal/filesystem/transaction"
 	"scbake/internal/templateregistry"
 	"scbake/internal/types"
 	"scbake/internal/ui"
@@ -43,10 +46,11 @@ var newCmd = &cobra.Command{
 		dirCreated := false
 
 		if err := runNew(cmd.Context(), projectName, &dirCreated); err != nil {
-			// Cleanup: Only remove the directory if it was created during this session.
+			// Cleanup: Only remove the directory if it was created during this
+			// session. cleanupFailedProject re-acquires the root lock and skips
+			// deletion when another process is using the directory.
 			if dirCreated {
-				fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
-				_ = os.RemoveAll(projectName)
+				cleanupFailedProject(projectName)
 			}
 			return err
 		}
@@ -54,6 +58,66 @@ var newCmd = &cobra.Command{
 		fmt.Printf("✅ Success! New project '%s' created.\n", projectName)
 		return nil
 	},
+}
+
+// cleanupFailedProject removes a project directory created by this invocation.
+// It re-acquires the root lock first so a failed run cannot delete a directory
+// another scbake process has started using. If locking is unavailable for a
+// reason other than busy, cleanup proceeds as before.
+func cleanupFailedProject(projectName string) {
+	lock, err := transaction.AcquireRootLock(projectName, false)
+	if err == nil {
+		defer func() { _ = lock.Release() }()
+		fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
+		if err := removeFailedProject(projectName, lock.Release); err != nil {
+			fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", projectName, err)
+		}
+		return
+	}
+	if errors.Is(err, transaction.ErrBusy) {
+		fmt.Fprintf(os.Stderr, "Not removing '%s': another scbake process is using it.\n", projectName)
+		return
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "Locking '%s' for cleanup failed: %v\n", projectName, err)
+	fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
+	if removeErr := removeFailedProject(projectName, nil); removeErr != nil {
+		fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", projectName, removeErr)
+	}
+}
+
+// removeFailedProject mirrors removeBootstrappedRoot: create a unique sibling
+// staging directory, release the lock, rename the directory into staging, then
+// delete the staged tree. Windows cannot rename a directory containing an open
+// lock file, so release must come first. If release or the rename fails, the
+// original directory is left untouched. The release-before-rename race is
+// accepted because the staging path is unique and cleanup only runs after a
+// failed `new`.
+func removeFailedProject(projectName string, release func() error) error {
+	parent := filepath.Dir(projectName)
+	staging, err := os.MkdirTemp(parent, ".scbake-remove-*")
+	if err != nil {
+		return fmt.Errorf("failed to stage failed project directory %s for removal: %w", projectName, err)
+	}
+	if release != nil {
+		if err := release(); err != nil {
+			_ = os.Remove(staging)
+			return fmt.Errorf("failed to release failed project directory lock %s: %w", projectName, err)
+		}
+	}
+
+	destination := filepath.Join(staging, filepath.Base(projectName))
+	if err := os.Rename(projectName, destination); err != nil {
+		_ = os.Remove(staging)
+		return fmt.Errorf("failed to remove failed project directory %s: %w", projectName, err)
+	}
+	if err := os.RemoveAll(staging); err != nil {
+		return fmt.Errorf("removed failed project directory %s but failed to clean staging directory %s: %w", projectName, staging, err)
+	}
+	return nil
 }
 
 // runNew coordinates the project directory setup and delegates template application to the core engine.
@@ -66,9 +130,10 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 
 	// Validate every flag before mutating the filesystem (SCB-012): a malformed
 	// --set pair, an unknown --set key, or a missing --lang/--with must fail
-	// before the project directory or its manifest is created, so a failed 'new'
-	// leaves no residue behind. This mirrors the ordering already used by
-	// 'apply' (see cmd/apply.go).
+	// before the project directory or its manifest is created. Runtime failures
+	// after bootstrap are cleaned up best-effort under the root lock, which is
+	// released before the directory is staged and deleted. This mirrors the
+	// ordering already used by 'apply' (see cmd/apply.go).
 	setVars, err := parseSetFlags(newSetFlag)
 	if err != nil {
 		return err
@@ -128,6 +193,11 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 
 // bootstrapProjectDir creates the project directory, changes working directory, and writes an initial manifest.
 // Returns a cleanup closure that restores the original working directory upon completion.
+//
+// The empty manifest is written before RunApply acquires the root lock. A second
+// `new` is stopped by the existence check, and concurrent apply in this
+// brand-new directory is a narrow residual race; cleanup re-acquires the lock
+// and refuses to stage the directory while another process is active.
 func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporter, dirCreated *bool) (func(), error) {
 	cwd, err := os.Getwd()
 	if err != nil {

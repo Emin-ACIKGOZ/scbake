@@ -82,6 +82,14 @@ type manifestChanges struct {
 
 // RunApply orchestrates the template application process.
 func RunApply(rc RunContext, reporter types.Reporter) error {
+	return withRootLock(rc, func() error {
+		return runApply(rc, reporter)
+	})
+}
+
+// runApply is RunApply without the root lock so RunUpdate can share one lock
+// across its manifest load and the nested apply.
+func runApply(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
 	// 1. Root Discovery & Manifest Load
@@ -139,6 +147,14 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 // already-generated project. It is `apply` driven by the manifest instead of by
 // flags, which is what makes it idempotent and non-interactive.
 func RunUpdate(rc RunContext, reporter types.Reporter) error {
+	return withRootLock(rc, func() error {
+		return runUpdate(rc, reporter)
+	})
+}
+
+// runUpdate is RunUpdate without the root lock; it calls runApply so the
+// update's initial manifest load and the apply run under the same lock.
+func runUpdate(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
 	m, rootPath, err := manifest.LoadWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
@@ -161,7 +177,37 @@ func RunUpdate(rc RunContext, reporter types.Reporter) error {
 	rc.ManifestPathArg = relPath
 	rc.Update = true
 
-	return RunApply(rc, reporter)
+	return runApply(rc, reporter)
+}
+
+// withRootLock serializes mutating runs against the same project root. Only
+// `new` may create a missing root; apply/update must fail before creating an
+// empty directory. Dry runs stay lock-free so they can inspect a project while
+// another process writes; their existing pending-transaction check remains the
+// consistency guard. The deferred release is registered before runApply/runUpdate
+// defer their rollback, so commit or rollback finishes before the lock is
+// released.
+func withRootLock(rc RunContext, fn func() error) error {
+	if rc.DryRun {
+		return fn()
+	}
+
+	root, err := manifest.FindProjectRootWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
+		AllowAncestorSearch: rc.AllowAncestorSearch,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to find project root: %w", err)
+	}
+
+	lock, err := transaction.AcquireRootLock(root, rc.NewProject)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = lock.Release()
+	}()
+
+	return fn()
 }
 
 // resolveUpdateSelection derives the language and tooling templates that were
@@ -364,25 +410,8 @@ func persistManifestState(
 		return err
 	}
 
-	// Persist metadata
-	if tc.Manifest.Metadata != nil {
-		if m.Metadata == nil {
-			m.Metadata = make(map[string]string)
-		}
-		for k, v := range tc.Manifest.Metadata {
-			m.Metadata[k] = v
-		}
-	}
-
-	// Persist managed files state
-	if tc.Manifest.ManagedFiles != nil {
-		if m.ManagedFiles == nil {
-			m.ManagedFiles = make(map[string]string)
-		}
-		for k, v := range tc.Manifest.ManagedFiles {
-			m.ManagedFiles[k] = v
-		}
-	}
+	persistManifestMetadata(m, tc)
+	persistManagedFiles(m, tc)
 
 	// We track the manifest file itself before saving.
 	// This ensures that if the Save succeeds but a subsequent step crashes (unlikely),
@@ -395,7 +424,45 @@ func persistManifestState(
 	if err := manifest.Save(m, rootPath); err != nil {
 		return fmt.Errorf("manifest save failed: %w", err)
 	}
+
+	snapshotManifestContent(tx, manifestPath)
 	return nil
+}
+
+// persistManifestMetadata copies the context's metadata into the manifest.
+func persistManifestMetadata(m *types.Manifest, tc types.TaskContext) {
+	if tc.Manifest.Metadata == nil {
+		return
+	}
+	if m.Metadata == nil {
+		m.Metadata = make(map[string]string)
+	}
+	for k, v := range tc.Manifest.Metadata {
+		m.Metadata[k] = v
+	}
+}
+
+// persistManagedFiles copies the context's managed-file state into the
+// manifest.
+func persistManagedFiles(m *types.Manifest, tc types.TaskContext) {
+	if tc.Manifest.ManagedFiles == nil {
+		return
+	}
+	if m.ManagedFiles == nil {
+		m.ManagedFiles = make(map[string]string)
+	}
+	for k, v := range tc.Manifest.ManagedFiles {
+		m.ManagedFiles[k] = v
+	}
+}
+
+// snapshotManifestContent records a newly created manifest's bytes so rollback
+// removes it only when they are unchanged. Best-effort: a failure keeps the
+// manifest on rollback rather than risking unverified content.
+func snapshotManifestContent(tx *transaction.Manager, manifestPath string) {
+	if err := tx.SnapshotCreatedContent(manifestPath); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Could not snapshot manifest content for rollback: %v\n", err)
+	}
 }
 
 // updateManifest merges new projects and templates into the existing manifest

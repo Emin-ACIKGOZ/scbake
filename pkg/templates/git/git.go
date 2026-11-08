@@ -119,9 +119,9 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 
 	// Task 3: Keep scbake's private state out of the worktree. The git-only
 	// flow has no .gitignore, and tooling templates such as makefile do not
-	// provide one either, so without this the finalized .scbake/base ledger
-	// leaves the new repository dirty. The exclude file is repository-local and
-	// never part of the scaffold.
+	// provide one either, so without this the private .scbake state leaves the
+	// new repository dirty. The exclude file is repository-local and never part
+	// of the scaffold.
 	prio, err = seq.Next()
 	if err != nil {
 		return nil, err

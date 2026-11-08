@@ -51,7 +51,7 @@ type Manager struct {
 	backups map[string]backupEntry
 
 	// created tracks absolute paths of files/dirs created during the transaction.
-	// They are stored in order of creation (append-only) for LIFO deletion.
+	// They are stored in creation order; rollback reorders them deepest-first.
 	created []string
 
 	// createdSet mirrors created for O(1) membership tests in alreadyTracked.
@@ -59,6 +59,12 @@ type Manager struct {
 	// set and vice versa. It exists only to avoid a linear scan that made
 	// tracking Θ(n²) in the number of created paths.
 	createdSet map[string]struct{}
+
+	// createdHashes maps a created path to the raw SHA-256 of the bytes the
+	// transaction wrote (or intended to write) there. A missing entry means the
+	// content identity is unknown, so rollback keeps the path instead of
+	// deleting unverified content.
+	createdHashes map[string]string
 
 	// journalPath is the path of the transaction journal, once one has been
 	// created. Journal appends open, fsync, and close the file so no handle is
@@ -115,6 +121,7 @@ func NewWithOptions(rootPath string, opts Options) (*Manager, error) {
 		backups:              make(map[string]backupEntry),
 		created:              make([]string, 0),
 		createdSet:           make(map[string]struct{}),
+		createdHashes:        make(map[string]string),
 		removeRootOnRecovery: opts.RemoveRootOnRecovery,
 	}
 	if opts.RemoveRootOnRecovery {
@@ -262,4 +269,5 @@ func (m *Manager) resetState() {
 	m.backups = make(map[string]backupEntry)
 	m.created = make([]string, 0)
 	m.createdSet = make(map[string]struct{})
+	m.createdHashes = make(map[string]string)
 }

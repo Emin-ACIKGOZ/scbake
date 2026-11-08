@@ -31,6 +31,7 @@ func resetFlags() {
 	force = false
 	allowAncestorSearch = false
 	recoverDiscardFlag = false
+	driftRepairFlag = false
 }
 
 // executeCLI simulates command invocation by setting args on the root Cobra command.
@@ -100,10 +101,11 @@ type MockCreateTask struct{ TargetFile string }
 func (m *MockCreateTask) Description() string { return "Create Task" }
 func (m *MockCreateTask) Priority() int       { return 50 }
 func (m *MockCreateTask) Execute(tc types.TaskContext) error {
+	const content = "CREATED"
 	if tc.Tx != nil {
-		_ = tc.Tx.Track(m.TargetFile)
+		_ = tc.Tx.TrackWrite(m.TargetFile, []byte(content))
 	}
-	return os.WriteFile(m.TargetFile, []byte("CREATED"), fileutil.PrivateFilePerms)
+	return os.WriteFile(m.TargetFile, []byte(content), fileutil.PrivateFilePerms)
 }
 
 // MockHandlerGeneric allows for the injection of custom task sets into the template registry.
@@ -321,6 +323,7 @@ func TestNew_CommitFailure_CleansDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(tmpDir, "broken-app")); !os.IsNotExist(err) {
 		t.Error("project directory should be cleaned on commit failure")
 	}
+	assertNoFailedProjectStaging(t, tmpDir)
 }
 
 // Verifies safety check against overwriting existing project names.

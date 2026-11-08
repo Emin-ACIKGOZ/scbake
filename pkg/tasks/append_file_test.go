@@ -6,6 +6,7 @@ import (
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
+	"strings"
 	"testing"
 )
 
@@ -221,6 +222,105 @@ func TestAppendFileTask_TransactionRollback(t *testing.T) {
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("File should be removed after rollback")
+	}
+}
+
+// TestAppendFileTask_SecondAppendUpdatesCreatedHash verifies that a second
+// append to a file this transaction created replaces the stale first-write hash
+// with the full post-append bytes, so rollback removes the file instead of
+// leaving conservative residue.
+func TestAppendFileTask_SecondAppendUpdatesCreatedHash(t *testing.T) {
+	rootDir := t.TempDir()
+	tx, err := transaction.New(rootDir)
+	if err != nil {
+		t.Fatalf("Failed to create transaction: %v", err)
+	}
+
+	tc := types.TaskContext{TargetPath: rootDir, Tx: tx}
+	first := &AppendFileTask{FilePath: "multi.txt", Content: "first\n", Desc: "first", TaskPrio: 100}
+	second := &AppendFileTask{FilePath: "multi.txt", Content: "second\n", Desc: "second", TaskPrio: 101}
+
+	if err := first.Execute(tc); err != nil {
+		t.Fatalf("First append failed: %v", err)
+	}
+	if err := second.Execute(tc); err != nil {
+		t.Fatalf("Second append failed: %v", err)
+	}
+
+	path := filepath.Join(rootDir, "multi.txt")
+	if got, err := fileutil.SafeReadFile(rootDir, "multi.txt"); err != nil {
+		t.Fatalf("read before rollback: %v", err)
+	} else if string(got) != "first\nsecond\n" {
+		t.Fatalf("content before rollback = %q, want %q", got, "first\nsecond\n")
+	}
+
+	var rollbackErr error
+	stderr := captureStderr(t, func() { rollbackErr = tx.Rollback() })
+	if rollbackErr != nil {
+		t.Fatalf("Rollback failed: %v", rollbackErr)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("rollback kept the appended created file as residue: %v", err)
+	}
+	if strings.Contains(stderr, "Keeping created path") {
+		t.Errorf("rollback warned about conservative residue: %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(rootDir, fileutil.InternalDir)); !os.IsNotExist(err) {
+		t.Errorf("rollback left transaction state: %v", err)
+	}
+}
+
+// TestAppendFileTask_ExternalRewriteBeforeAppendIsKept verifies that an append
+// after a non-scbake writer replaced a transaction-created file must not
+// re-authorize deletion of the external bytes. The append still happens, but
+// rollback keeps the external-plus-appended content with a warning.
+func TestAppendFileTask_ExternalRewriteBeforeAppendIsKept(t *testing.T) { //nolint:cyclop // setup plus external-rewrite, append, warning, and residue assertions
+	rootDir := t.TempDir()
+	tx, err := transaction.New(rootDir)
+	if err != nil {
+		t.Fatalf("Failed to create transaction: %v", err)
+	}
+
+	tc := types.TaskContext{TargetPath: rootDir, Tx: tx}
+	create := &AppendFileTask{FilePath: "external.txt", Content: "transaction\n", Desc: "create", TaskPrio: 100}
+	appendTask := &AppendFileTask{FilePath: "external.txt", Content: "appended\n", Desc: "append", TaskPrio: 101}
+
+	if err := create.Execute(tc); err != nil {
+		t.Fatalf("Create append failed: %v", err)
+	}
+
+	path := filepath.Join(rootDir, "external.txt")
+	const external = "external content that must survive\n"
+	if err := os.WriteFile(path, []byte(external), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := appendTask.Execute(tc); err != nil {
+		t.Fatalf("Append after external rewrite failed: %v", err)
+	}
+
+	const want = external + "appended\n"
+	if got, err := fileutil.SafeReadFile(rootDir, "external.txt"); err != nil {
+		t.Fatalf("read before rollback: %v", err)
+	} else if string(got) != want {
+		t.Fatalf("content before rollback = %q, want %q", got, want)
+	}
+
+	var rollbackErr error
+	stderr := captureStderr(t, func() { rollbackErr = tx.Rollback() })
+	if rollbackErr != nil {
+		t.Fatalf("Rollback treated kept external content as an error: %v", rollbackErr)
+	}
+	if got, err := fileutil.SafeReadFile(rootDir, "external.txt"); err != nil {
+		t.Fatalf("rollback removed the external rewrite: %v", err)
+	} else if string(got) != want {
+		t.Errorf("kept content = %q, want %q", got, want)
+	}
+	if !strings.Contains(stderr, "content changed since this transaction wrote it") {
+		t.Errorf("rollback stderr = %q, want a content-change warning", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(rootDir, fileutil.InternalDir)); !os.IsNotExist(err) {
+		t.Errorf("rollback left transaction state: %v", err)
 	}
 }
 

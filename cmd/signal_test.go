@@ -5,7 +5,9 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"scbake/internal/filesystem/transaction"
 	"scbake/internal/util/fileutil"
 	"syscall"
 	"testing"
@@ -20,9 +22,12 @@ func TestCommandExitCode(t *testing.T) {
 	}{
 		{"success", nil, nil, fileutil.ExitSuccess},
 		{"failure", errors.New("boom"), nil, fileutil.ExitError},
+		{"busy", transaction.ErrBusy, nil, fileutil.ExitBusy},
+		{"wrapped busy", fmt.Errorf("apply: %w", transaction.ErrBusy), nil, fileutil.ExitBusy},
 		{"SIGINT wins over success", nil, os.Interrupt, fileutil.ExitInterrupted},
 		{"SIGTERM wins over success", nil, syscall.SIGTERM, fileutil.ExitTerminated},
 		{"signal wins over failure", errors.New("boom"), os.Interrupt, fileutil.ExitInterrupted},
+		{"signal wins over busy", transaction.ErrBusy, os.Interrupt, fileutil.ExitInterrupted},
 	}
 
 	for _, tt := range tests {

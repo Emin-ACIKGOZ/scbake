@@ -33,14 +33,34 @@ func requireSingleInternalStateIgnore(t *testing.T, project string) {
 	}
 }
 
-// requireBaseShadow fails unless .scbake/base exists and contains a shadow file.
+// requireCommittedBaseBlock fails unless the root .gitignore contains the
+// .scbake/ ignore and all three committed-base re-include lines exactly once.
+func requireCommittedBaseBlock(t *testing.T, project string) {
+	t.Helper()
+
+	content := mustRead(t, filepath.Join(project, fileutil.GitIgnore))
+	for _, entry := range []string{".scbake/", "!.scbake-base/", "!.scbake-base/**", "!.gitignore"} {
+		count := 0
+		for _, line := range strings.Split(content, "\n") {
+			if strings.TrimRight(line, " \t\r") == entry {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("%s has %d %q entries, want 1:\n%s", fileutil.GitIgnore, count, entry, content)
+		}
+	}
+}
+
+// requireBaseShadow fails unless .scbake-base exists and contains a shadow
+// file, and the legacy .scbake/base tree is absent.
 func requireBaseShadow(t *testing.T, project string) {
 	t.Helper()
 
-	base := filepath.Join(project, fileutil.InternalDir, fileutil.BaseDir)
+	base := filepath.Join(project, fileutil.CommittedBaseDir)
 	info, err := os.Stat(base)
 	if err != nil {
-		t.Fatalf("base shadow directory is missing: %v", err)
+		t.Fatalf("committed base shadow directory is missing: %v", err)
 	}
 	if !info.IsDir() {
 		t.Fatalf("%s is not a directory", base)
@@ -57,10 +77,13 @@ func requireBaseShadow(t *testing.T, project string) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walking base shadow directory: %v", err)
+		t.Fatalf("walking committed base shadow directory: %v", err)
 	}
 	if !found {
-		t.Fatalf("base shadow directory %s contains no shadow files", base)
+		t.Fatalf("committed base shadow directory %s contains no shadow files", base)
+	}
+	if _, err := os.Stat(filepath.Join(project, fileutil.InternalDir, fileutil.BaseDir)); !os.IsNotExist(err) {
+		t.Fatalf("legacy .scbake/base must not exist (stat err: %v)", err)
 	}
 }
 
@@ -90,7 +113,8 @@ func requireInternalStateNotManaged(t *testing.T, m types.Manifest) {
 
 // TestNewWithMakefileIgnoresInternalState is the regression test for issue
 // #101: a tooling-only project has no language .gitignore, so the universal
-// helper must create one and keep the persistent .scbake/base state untracked.
+// helper must create one, keep the private .scbake state ignored, and re-include
+// the committed .scbake-base tree.
 func TestNewWithMakefileIgnoresInternalState(t *testing.T) {
 	work := t.TempDir()
 	t.Chdir(work)
@@ -102,6 +126,7 @@ func TestNewWithMakefileIgnoresInternalState(t *testing.T) {
 
 	project := filepath.Join(work, "tooling")
 	requireSingleInternalStateIgnore(t, project)
+	requireCommittedBaseBlock(t, project)
 	requireBaseShadow(t, project)
 
 	manifest := decodeManifest(t, project)
@@ -117,6 +142,7 @@ func TestNewWithMakefileIgnoresInternalState(t *testing.T) {
 			t.Fatalf("apply run %d failed: %v\n%s", i, err, out)
 		}
 		requireSingleInternalStateIgnore(t, project)
+		requireCommittedBaseBlock(t, project)
 		requireBaseShadow(t, project)
 	}
 }
@@ -139,6 +165,7 @@ func TestGoProjectDoesNotDuplicateInternalStateIgnore(t *testing.T) {
 
 	project := filepath.Join(work, "goapp")
 	requireSingleInternalStateIgnore(t, project)
+	requireCommittedBaseBlock(t, project)
 	requireBaseShadow(t, project)
 
 	manifest := decodeManifest(t, project)
@@ -150,6 +177,7 @@ func TestGoProjectDoesNotDuplicateInternalStateIgnore(t *testing.T) {
 		t.Fatalf("apply failed: %v\n%s", err, out)
 	}
 	requireSingleInternalStateIgnore(t, project)
+	requireCommittedBaseBlock(t, project)
 }
 
 // requireNoDrift fails when drift scans the freshly reconciled project.
@@ -162,6 +190,38 @@ func requireNoDrift(t *testing.T, project string) {
 	}
 	if !strings.Contains(out, "No drift detected") {
 		t.Fatalf("unexpected drift output:\n%s", out)
+	}
+}
+
+// TestCommittedBaseSanitizesGitSpecialNames proves the base tree never keeps a
+// raw .gitignore or .gitattributes basename: a copied ignore rule must not hide
+// sibling base payloads, and a copied attribute rule must not transform them.
+// The Go pack's root .gitignore exercises the root mapping; nested mapping is
+// covered by the unit round-trip test.
+func TestCommittedBaseSanitizesGitSpecialNames(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+
+	work := t.TempDir()
+	t.Chdir(work)
+
+	out, err := runCLI("new", "sanitized-base", "--lang", "go")
+	if err != nil {
+		t.Fatalf("new failed: %v\n%s", err, out)
+	}
+
+	project := filepath.Join(work, "sanitized-base")
+	raw := filepath.Join(project, fileutil.CommittedBaseDir, fileutil.GitIgnore)
+	if _, err := os.Stat(raw); !os.IsNotExist(err) {
+		t.Fatalf("raw %s must not exist in the base tree (stat err: %v)", raw, err)
+	}
+	shadow := filepath.Join(project, fileutil.CommittedBaseDir, fileutil.GitIgnore+fileutil.BaseShadowSuffix)
+	if _, err := os.Stat(shadow); err != nil {
+		t.Fatalf("sanitized base shadow missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(project, fileutil.InternalDir, fileutil.BaseDir)); !os.IsNotExist(err) {
+		t.Fatalf("legacy .scbake/base must not exist (stat err: %v)", err)
 	}
 }
 
@@ -259,6 +319,9 @@ func TestManagedRootGitIgnoreStaleEntryDoesNotCreateDrift(t *testing.T) { //noli
 		t.Fatalf("manifest does not contain the old .gitignore hash %q:\n%s", oldHash, body)
 	}
 	mustWrite(t, manifestPath, strings.Replace(body, oldHash, staleHash, 1))
+	// Refresh the committed base to the same stale render so the fixture models
+	// a coherent legacy entry rather than an intentionally invalid base.
+	mustWrite(t, filepath.Join(project, tasks.BaseShadowRelPath(fileutil.GitIgnore)), staleIgnore)
 
 	// Applying another managed file invokes the helper for the stale .gitignore.
 	out, err = runCLI("apply", "--with", "makefile", project)

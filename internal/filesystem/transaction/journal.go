@@ -59,6 +59,12 @@ type journalRecord struct {
 	Backup string `json:"backup,omitempty"`
 	Mode   uint32 `json:"mode,omitempty"`
 
+	// Hash is the raw, byte-exact SHA-256 of the content a create record marks
+	// as written by this transaction. It is optional so version 2 journals
+	// remain valid: an absent hash means the content identity is unknown and
+	// recovery must keep the path rather than delete it.
+	Hash string `json:"hash,omitempty"`
+
 	// RemoveRoot marks a transaction whose root directory was created by
 	// `scbake new`. Recovering it removes the whole bootstrap directory, the
 	// same way the command's handled-error cleanup does.
@@ -599,11 +605,28 @@ func RecoverContext(ctx context.Context, rootPath string, discard bool) (int, er
 		return 0, fmt.Errorf("failed to resolve root path: %w", err)
 	}
 
+	// A clean project has no transaction state. Return before acquiring the
+	// lock so `recover` does not create .scbake just to inspect it.
+	if _, ok := resolvedTmpDir(absRoot); !ok {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+
+	lock, err := AcquireRootLock(absRoot, false)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = lock.Release()
+	}()
+
 	if discard {
 		return discardTransactions(ctx, absRoot)
 	}
 
-	return recoverPendingTransactions(ctx, absRoot)
+	return recoverPendingTransactions(ctx, absRoot, lock.Release)
 }
 
 // CanonicalRoot returns rootPath as an absolute, symlink-resolved path so
@@ -627,8 +650,9 @@ func CanonicalRoot(rootPath string) (string, error) {
 }
 
 // recoverPendingTransactions refuses live transactions, then recovers each dead
-// one while checking the context between directories.
-func recoverPendingTransactions(ctx context.Context, rootPath string) (int, error) {
+// one while checking the context between directories. release is called before
+// the staged bootstrap root is deleted so Windows can remove the lock file.
+func recoverPendingTransactions(ctx context.Context, rootPath string, release func() error) (int, error) {
 	pending, err := ListPendingContext(ctx, rootPath)
 	if err != nil {
 		return 0, err
@@ -649,7 +673,7 @@ func recoverPendingTransactions(ctx context.Context, rootPath string) (int, erro
 		if err := ctx.Err(); err != nil {
 			return recovered, err
 		}
-		if err := recoverTransaction(ctx, rootPath, p.Dir); err != nil {
+		if err := recoverTransaction(ctx, rootPath, p.Dir, release); err != nil {
 			return recovered, err
 		}
 		recovered++
@@ -705,7 +729,7 @@ func refuseLiveTransactions(ctx context.Context, dirs []string) error {
 
 // recoverTransaction replays the journal in reverse, then removes the
 // transaction directory.
-func recoverTransaction(ctx context.Context, rootPath, dir string) error {
+func recoverTransaction(ctx context.Context, rootPath, dir string, release func() error) error {
 	journal, err := readRecoveryJournal(ctx, dir)
 	if err != nil {
 		return err
@@ -727,7 +751,7 @@ func recoverTransaction(ctx context.Context, rootPath, dir string) error {
 		if err := manager.rollbackChanges(ctx); err != nil {
 			return fmt.Errorf("failed to recover transaction %s: %w", dir, err)
 		}
-		return removeBootstrappedRoot(context.WithoutCancel(ctx), rootPath)
+		return removeBootstrappedRoot(context.WithoutCancel(ctx), rootPath, release)
 	}
 	if err := manager.RollbackContext(ctx); err != nil {
 		return fmt.Errorf("failed to recover transaction %s: %w", dir, err)
@@ -772,11 +796,14 @@ func cleanCommittedTransaction(ctx context.Context, dir string) error {
 var renameRootForRemoval = os.Rename
 
 // removeBootstrappedRoot removes the project directory for an interrupted
-// `new`. It first renames the root into a sibling staging directory. The rename
-// is atomic: if it fails, the original root and its transaction journal are
-// untouched, so recovery can be retried. Once the rename succeeds the original
-// root path is gone and the staged tree is deleted.
-func removeBootstrappedRoot(ctx context.Context, rootPath string) error {
+// `new`. It creates a sibling staging directory, releases the root lock, renames
+// the root into staging, then deletes the staged tree. Windows cannot rename a
+// directory containing an open lock file, so the lock must be released before
+// the rename. The release-before-rename race is accepted: the journal remains
+// until the rename succeeds, so a contender either retries or sees the
+// incomplete transaction. If release or the rename fails, the original root and
+// its journal are left untouched and recovery can be retried.
+func removeBootstrappedRoot(ctx context.Context, rootPath string, release func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -785,6 +812,13 @@ func removeBootstrappedRoot(ctx context.Context, rootPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to stage bootstrapped project root %s for removal: %w", rootPath, err)
 	}
+	if release != nil {
+		if err := release(); err != nil {
+			_ = os.Remove(staging)
+			return fmt.Errorf("failed to release bootstrapped project root lock %s: %w", rootPath, err)
+		}
+	}
+
 	destination := filepath.Join(staging, filepath.Base(rootPath))
 	if err := renameRootForRemoval(rootPath, destination); err != nil {
 		_ = os.Remove(staging)
@@ -801,46 +835,74 @@ func removeBootstrappedRoot(ctx context.Context, rootPath string) error {
 // backup must be a regular file inside the transaction directory.
 func managerFromJournal(rootPath, dir string, journal *transactionJournal) (*Manager, error) {
 	manager := &Manager{
-		rootPath:   rootPath,
-		tempDir:    dir,
-		backups:    make(map[string]backupEntry),
-		created:    make([]string, 0, len(journal.Entries)),
-		createdSet: make(map[string]struct{}),
+		rootPath:      rootPath,
+		tempDir:       dir,
+		backups:       make(map[string]backupEntry),
+		created:       make([]string, 0, len(journal.Entries)),
+		createdSet:    make(map[string]struct{}),
+		createdHashes: make(map[string]string),
 	}
 
 	for _, record := range journal.Entries {
-		path, err := fileutil.SafePath(rootPath, filepath.FromSlash(record.Path))
+		path, err := journalEntryPath(rootPath, dir, record)
 		if err != nil {
-			return nil, fmt.Errorf("invalid path in transaction journal %s: %w", dir, err)
+			return nil, err
 		}
-		if err := requireStrictDescendant(rootPath, path); err != nil {
-			return nil, fmt.Errorf("invalid path in transaction journal %s: %w", dir, err)
-		}
-
-		switch record.Op {
-		case journalOpCreate:
-			if _, ok := manager.createdSet[path]; ok {
-				continue
-			}
-			manager.created = append(manager.created, path)
-			manager.createdSet[path] = struct{}{}
-
-		case journalOpBackup:
-			backupPath, err := backupPathFromJournal(dir, record.Backup)
-			if err != nil {
-				return nil, err
-			}
-			manager.backups[path] = backupEntry{
-				tempPath: backupPath,
-				mode:     os.FileMode(record.Mode),
-			}
-
-		default:
-			return nil, fmt.Errorf("unexpected journal operation %q", record.Op)
+		if err := manager.applyJournalRecord(record, path, dir); err != nil {
+			return nil, err
 		}
 	}
 
 	return manager, nil
+}
+
+// journalEntryPath revalidates a journal record's path against the root. No
+// path written by the journal is trusted.
+func journalEntryPath(rootPath, dir string, record journalRecord) (string, error) {
+	path, err := fileutil.SafePath(rootPath, filepath.FromSlash(record.Path))
+	if err != nil {
+		return "", fmt.Errorf("invalid path in transaction journal %s: %w", dir, err)
+	}
+	if err := requireStrictDescendant(rootPath, path); err != nil {
+		return "", fmt.Errorf("invalid path in transaction journal %s: %w", dir, err)
+	}
+	return path, nil
+}
+
+// applyJournalRecord folds one validated record into the reconstructed state.
+func (m *Manager) applyJournalRecord(record journalRecord, path, dir string) error {
+	switch record.Op {
+	case journalOpCreate:
+		m.recordCreated(path, record.Hash)
+
+	case journalOpBackup:
+		backupPath, err := backupPathFromJournal(dir, record.Backup)
+		if err != nil {
+			return err
+		}
+		m.backups[path] = backupEntry{
+			tempPath: backupPath,
+			mode:     os.FileMode(record.Mode),
+		}
+
+	default:
+		return fmt.Errorf("unexpected journal operation %q", record.Op)
+	}
+	return nil
+}
+
+// recordCreated records a created path and its content hash. A later create
+// record for an already-created path carries an updated hash (for example a
+// TrackWrite after Track). Only a non-empty hash updates the recorded identity:
+// an empty record must never erase a known hash.
+func (m *Manager) recordCreated(path, hash string) {
+	if _, ok := m.createdSet[path]; !ok {
+		m.created = append(m.created, path)
+		m.createdSet[path] = struct{}{}
+	}
+	if hash != "" {
+		m.createdHashes[path] = hash
+	}
 }
 
 // requireStrictDescendant rejects a journal path that resolves to the root

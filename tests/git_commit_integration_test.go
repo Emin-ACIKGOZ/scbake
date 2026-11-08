@@ -54,8 +54,8 @@ func TestNewWithGitCustomTemplateWithoutInfo(t *testing.T) {
 
 // TestNewWithGitAndToolingLeavesCleanTree covers the non-Go tooling flow.
 // Templates such as makefile do not generate a .gitignore, but they do write
-// .scbake/base ledger state, so the repository-local exclude must keep the
-// worktree clean.
+// .scbake-base pristine state, so the generated .gitignore block and the
+// repository-local .scbake/ exclude must keep the worktree clean.
 func TestNewWithGitAndToolingLeavesCleanTree(t *testing.T) {
 	requireGit(t)
 	assertNewExcludesTransactionState(t, "new --with git,makefile", "new", "demo", "--with", "git,makefile")
@@ -87,7 +87,7 @@ func TestNewWithGitHonorsGlobalExcludesFile(t *testing.T) {
 // assertNewExcludesTransactionState runs new in an isolated working directory
 // and checks that the initial commit has no .scbake entries and is clean. It
 // returns the created project path.
-func assertNewExcludesTransactionState(t *testing.T, label string, args ...string) string {
+func assertNewExcludesTransactionState(t *testing.T, label string, args ...string) string { //nolint:cyclop // integration assertion helper
 	t.Helper()
 
 	work := t.TempDir()
@@ -107,8 +107,19 @@ func assertNewExcludesTransactionState(t *testing.T, label string, args ...strin
 
 	project := filepath.Join(work, "demo")
 	tracked := gitOutput(t, project, "ls-tree", "-r", "--name-only", "HEAD")
-	if strings.Contains(tracked, ".scbake") {
-		t.Errorf("initial commit contains scbake transaction state:\n%s", tracked)
+	for _, line := range strings.Split(strings.TrimSpace(tracked), "\n") {
+		if line == ".scbake" || strings.HasPrefix(line, ".scbake/") {
+			t.Errorf("initial commit contains private scbake transaction state %q:\n%s", line, tracked)
+		}
+	}
+	// #143: the merge base is committed under .scbake-base and must be staged
+	// by the initial `git add .`, not left behind as untracked state.
+	if _, err := os.Stat(filepath.Join(project, ".scbake-base")); err == nil {
+		if !strings.Contains(tracked, ".scbake-base/") {
+			t.Errorf("initial commit does not track the committed base:\n%s", tracked)
+		}
+	} else if !os.IsNotExist(err) {
+		t.Errorf("stat .scbake-base: %v", err)
 	}
 
 	exclude, err := os.ReadFile(filepath.Join(project, ".git", "info", "exclude")) //nolint:gosec // test-controlled path

@@ -30,15 +30,16 @@ func (m *MockTask) Priority() int       { return m.Prio }
 
 func (m *MockTask) Execute(tc types.TaskContext) error {
 	if m.PathToCreate != "" {
-		// Verify tracking works from within the core engine
+		// Verify content-aware tracking works from within the core engine.
+		const content = "test data"
 		if tc.Tx != nil {
-			if err := tc.Tx.Track(m.PathToCreate); err != nil {
+			if err := tc.Tx.TrackWrite(m.PathToCreate, []byte(content)); err != nil {
 				return err
 			}
 		}
 		// Create file
 		// G306: Use PrivateFilePerms for secure test file creation
-		if err := os.WriteFile(m.PathToCreate, []byte("test data"), fileutil.PrivateFilePerms); err != nil {
+		if err := os.WriteFile(m.PathToCreate, []byte(content), fileutil.PrivateFilePerms); err != nil {
 			return err
 		}
 

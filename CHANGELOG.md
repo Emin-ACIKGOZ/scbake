@@ -4,6 +4,52 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.11.1] - 2026-11-08
+
+### Bug Fixes
+
+- **transaction:** Verify created paths before rollback
+
+## [0.11.0] - 2026-11-08
+
+### Documentation
+
+- Clarify rollback scope for dependency trees
+
+### Features
+
+- **drift:** Report missing or invalid committed bases
+
+## [0.10.1] - 2026-11-08
+
+### Bug Fixes
+
+- **transaction:** Recreate pruned lock state directory
+
+## [0.10.0] - 2026-11-08
+
+### Bug Fixes
+
+- **tasks:** Store merge base under .scbake-base
+
+## [0.9.17] - 2026-11-08
+
+### Bug Fixes
+
+- **transaction:** Serialize runs with a per-root lock
+
+## [0.9.16] - 2026-11-08
+
+### Bug Fixes
+
+- **tasks:** Track external command side effects
+
+## [0.9.15] - 2026-11-07
+
+### Bug Fixes
+
+- **tasks:** Reject stale merge base shadows
+
 ## [0.9.14] - 2026-11-07
 
 ### Bug Fixes
