@@ -130,6 +130,10 @@ func TestAcquireRootLock_MissingRootPolicy(t *testing.T) {
 // root exists. A dangling .scbake symlink deterministically produces the same
 // ENOENT shape as a concurrent prune between Lstat and EvalSymlinks.
 func TestAcquireRootLock_PrunedStateDirDoesNotReportMissingRoot(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
 	root := t.TempDir()
 	stateDir := filepath.Join(root, fileutil.InternalDir)
 	if err := os.Symlink(filepath.Join(root, "missing-target"), stateDir); err != nil {
