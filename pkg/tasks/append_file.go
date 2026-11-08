@@ -41,9 +41,16 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 	existingContent, err := fileutil.SafeReadFile(tc.TargetPath, t.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// If file doesn't exist, create it with the content
+			// If file doesn't exist, create it with the content. TrackWrite
+			// records the raw hash of the bytes the transaction is about to
+			// write so rollback can verify them.
 			if tc.DryRun {
 				return nil
+			}
+			if tc.Tx != nil {
+				if err := tc.Tx.TrackWrite(absPath, []byte(t.Content)); err != nil {
+					return fmt.Errorf("failed to track file %s: %w", t.FilePath, err)
+				}
 			}
 			return fileutil.SafeWriteFile(tc.TargetPath, t.FilePath, []byte(t.Content), fileutil.FilePerms)
 		}

@@ -59,6 +59,12 @@ type journalRecord struct {
 	Backup string `json:"backup,omitempty"`
 	Mode   uint32 `json:"mode,omitempty"`
 
+	// Hash is the raw, byte-exact SHA-256 of the content a create record marks
+	// as written by this transaction. It is optional so version 2 journals
+	// remain valid: an absent hash means the content identity is unknown and
+	// recovery must keep the path rather than delete it.
+	Hash string `json:"hash,omitempty"`
+
 	// RemoveRoot marks a transaction whose root directory was created by
 	// `scbake new`. Recovering it removes the whole bootstrap directory, the
 	// same way the command's handled-error cleanup does.
@@ -829,11 +835,12 @@ func removeBootstrappedRoot(ctx context.Context, rootPath string, release func()
 // backup must be a regular file inside the transaction directory.
 func managerFromJournal(rootPath, dir string, journal *transactionJournal) (*Manager, error) {
 	manager := &Manager{
-		rootPath:   rootPath,
-		tempDir:    dir,
-		backups:    make(map[string]backupEntry),
-		created:    make([]string, 0, len(journal.Entries)),
-		createdSet: make(map[string]struct{}),
+		rootPath:      rootPath,
+		tempDir:       dir,
+		backups:       make(map[string]backupEntry),
+		created:       make([]string, 0, len(journal.Entries)),
+		createdSet:    make(map[string]struct{}),
+		createdHashes: make(map[string]string),
 	}
 
 	for _, record := range journal.Entries {
@@ -847,11 +854,21 @@ func managerFromJournal(rootPath, dir string, journal *transactionJournal) (*Man
 
 		switch record.Op {
 		case journalOpCreate:
+			// A later create record for an already-created path carries an
+			// updated hash (for example a TrackWrite after Track). Only a
+			// non-empty hash updates the recorded identity: an empty record
+			// must never erase a known hash.
 			if _, ok := manager.createdSet[path]; ok {
+				if record.Hash != "" {
+					manager.createdHashes[path] = record.Hash
+				}
 				continue
 			}
 			manager.created = append(manager.created, path)
 			manager.createdSet[path] = struct{}{}
+			if record.Hash != "" {
+				manager.createdHashes[path] = record.Hash
+			}
 
 		case journalOpBackup:
 			backupPath, err := backupPathFromJournal(dir, record.Backup)

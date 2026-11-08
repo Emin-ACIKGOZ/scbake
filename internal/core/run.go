@@ -441,6 +441,14 @@ func persistManifestState(
 	if err := manifest.Save(m, rootPath); err != nil {
 		return fmt.Errorf("manifest save failed: %w", err)
 	}
+
+	// If the manifest did not exist before this transaction, Track recorded it
+	// as created but had no bytes to hash. Snapshot the saved bytes so rollback
+	// removes it only when they are unchanged. Best-effort: a failure keeps the
+	// manifest on rollback rather than risking unverified content.
+	if err := tx.SnapshotCreatedContent(manifestPath); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Could not snapshot manifest content for rollback: %v\n", err)
+	}
 	return nil
 }
 

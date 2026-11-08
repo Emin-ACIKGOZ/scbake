@@ -7,7 +7,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"scbake/internal/util/fileutil"
+	"sort"
+	"strings"
 )
 
 // Rollback undoes all tracked changes.
@@ -75,34 +78,108 @@ func (m *Manager) rollback(ctx context.Context, cleanup bool) error {
 	return nil
 }
 
-// deleteCreatedPaths deletes created paths in REVERSE order (deepest first),
-// re-validating containment (SCB-001/SCB-002) before each delete. A created
-// entry must still resolve inside the root: a symlink swapped in after tracking
-// must never redirect RemoveAll outside the project. It returns the accumulated
-// errors instead of stopping at the first failure.
+// deleteCreatedPaths removes created paths under the rollback safety rule: a
+// path is deleted only when its identity is verified. Paths are processed
+// deepest-first (independently of tracking order) so empty created directories
+// can be removed after their contents. Containment (SCB-001/SCB-002) is
+// revalidated before each operation and a violation remains a hard error.
+//
+// A created regular file is removed only when a recorded raw SHA-256 matches
+// its current bytes; a missing hash, a mismatch, or a read failure keeps it and
+// prints a non-fatal warning. A created directory with no hash is removed only
+// when empty (never with RemoveAll); a recorded file hash at a directory keeps
+// it because a file hash must not authorize removing a replaced directory.
+// Warnings are deliberately not returned as errors: keeping residue must not
+// retain the journal or make recovery retry forever.
 func (m *Manager) deleteCreatedPaths(ctx context.Context) []error {
+	paths := append([]string(nil), m.created...)
+	sort.SliceStable(paths, func(i, j int) bool {
+		return pathDepth(paths[i]) > pathDepth(paths[j])
+	})
+
 	var errs []error
-	for i := len(m.created) - 1; i >= 0; i-- {
+	for _, path := range paths {
 		if err := ctx.Err(); err != nil {
 			return errs
 		}
-		path := m.created[i]
 
 		if _, err := fileutil.SafePath(m.rootPath, path); err != nil {
 			errs = append(errs, fmt.Errorf("refusing to delete created path %s: %w", path, err))
 			continue
 		}
 
-		// We use RemoveAll for safety, but Remove would suffice if strict LIFO is met.
-		// Lstat is used so a symlink is never followed: RemoveAll removes the
-		// link itself rather than its target.
-		if _, err := os.Lstat(path); err == nil {
-			if err := os.RemoveAll(path); err != nil {
+		info, err := os.Lstat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("failed to inspect created path %s: %w", path, err))
+			continue
+		}
+
+		hash := m.createdHashes[path]
+		switch {
+		case info.IsDir():
+			if hash != "" {
+				warnKeptCreatedPath(path, "created file was replaced by a directory")
+				continue
+			}
+			if err := m.removeCreatedDir(path); err != nil {
+				errs = append(errs, err)
+			}
+
+		case info.Mode().IsRegular():
+			if hash == "" {
+				warnKeptCreatedPath(path, "no recorded content hash")
+				continue
+			}
+			currentHash, err := hashFile(m.rootPath, path)
+			if err != nil {
+				warnKeptCreatedPath(path, fmt.Sprintf("could not verify content: %v", err))
+				continue
+			}
+			if currentHash != hash {
+				warnKeptCreatedPath(path, "content changed since this transaction wrote it")
+				continue
+			}
+			if err := os.Remove(path); err != nil {
 				errs = append(errs, fmt.Errorf("failed to delete created path %s: %w", path, err))
 			}
+
+		default:
+			// Symlinks and other special files are never followed or deleted:
+			// a recorded hash describes a regular file, not an arbitrary path.
+			warnKeptCreatedPath(path, "no longer a regular file")
 		}
 	}
 	return errs
+}
+
+// removeCreatedDir removes an unchanged created directory only when it is
+// empty. A directory with external children is kept with a warning; any other
+// removal failure is a real error.
+func (m *Manager) removeCreatedDir(path string) error {
+	err := os.Remove(path)
+	if err == nil {
+		return nil
+	}
+	entries, readErr := os.ReadDir(path)
+	if readErr == nil && len(entries) > 0 {
+		warnKeptCreatedPath(path, "created directory is not empty")
+		return nil
+	}
+	return fmt.Errorf("failed to delete created path %s: %w", path, err)
+}
+
+// warnKeptCreatedPath reports a path rollback deliberately left in place.
+func warnKeptCreatedPath(path, reason string) {
+	fmt.Fprintf(os.Stderr, "⚠️  Keeping created path %s: %s.\n", path, reason)
+}
+
+// pathDepth returns the number of path components below the filesystem root.
+// It is used only to order rollback removal deepest-first.
+func pathDepth(path string) int {
+	return strings.Count(filepath.Clean(path), string(filepath.Separator))
 }
 
 // restoreBackups restores every backed-up file, re-validating containment first

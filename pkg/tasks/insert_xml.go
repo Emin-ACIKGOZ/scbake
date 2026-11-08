@@ -77,6 +77,14 @@ func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
 		return fmt.Errorf("failed to insert XML into %s: %w", t.FilePath, err)
 	}
 
+	// If the file vanished between Track and this write, record the intended
+	// bytes so rollback can verify and remove only exactly what was written.
+	if tc.Tx != nil {
+		if err := tc.Tx.TrackWrite(absPath, []byte(newContent)); err != nil {
+			return fmt.Errorf("failed to track file %s: %w", t.FilePath, err)
+		}
+	}
+
 	if err := fileutil.SafeWriteFile(tc.TargetPath, t.FilePath, []byte(newContent), fileutil.FilePerms); err != nil {
 		return fmt.Errorf("failed to write modified XML file %s: %w", t.FilePath, err)
 	}

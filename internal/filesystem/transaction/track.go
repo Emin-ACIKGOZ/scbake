@@ -4,7 +4,10 @@
 package transaction
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"scbake/internal/util/fileutil"
@@ -13,7 +16,92 @@ import (
 
 // Track registers a path that is about to be modified or created.
 // It creates a backup if the file exists, or records it for deletion if it doesn't.
+//
+// Track does not record content identity: a created path tracked this way is
+// kept on rollback unless it is an unchanged empty directory. Use TrackWrite
+// when the exact bytes that will be written are already known.
 func (m *Manager) Track(path string) error {
+	return m.track(path, "")
+}
+
+// TrackWrite registers a path that is about to be created or overwritten with
+// content. For a path the transaction is creating, it journals the raw,
+// byte-exact SHA-256 of content before the caller writes it, so rollback only
+// removes bytes that still match what this transaction intended to write.
+//
+// An existing path is still backed up as usual; its content hash is not used
+// because restoring the backup is authoritative.
+func (m *Manager) TrackWrite(path string, content []byte) error {
+	return m.track(path, hashBytes(content))
+}
+
+// SnapshotCreatedContent records the current raw SHA-256 of a created regular
+// file when no hash has been recorded yet. It is for opaque writers (commands,
+// archive extraction, the manifest save) whose bytes are only observable after
+// the write. It is a no-op for paths this transaction did not create, absent
+// paths, and non-regular paths. The record is journaled and the hash is only
+// remembered once it is durable.
+func (m *Manager) SnapshotCreatedContent(path string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	absPath, err := m.resolveAndValidate(path)
+	if err != nil {
+		return err
+	}
+	if _, ok := m.createdSet[absPath]; !ok {
+		return nil
+	}
+	if m.createdHashes[absPath] != "" {
+		return nil
+	}
+
+	info, err := os.Lstat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to snapshot created path %s: %w", absPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+
+	hash, err := hashFile(m.rootPath, absPath)
+	if err != nil {
+		return fmt.Errorf("failed to hash created path %s: %w", absPath, err)
+	}
+	return m.trackCreated(absPath, hash)
+}
+
+// hashBytes returns the raw, byte-exact SHA-256 of content as lower-case hex.
+// It deliberately does not normalize line endings: rollback authority is over
+// the exact bytes the transaction wrote, not a text projection of them.
+func hashBytes(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+// hashFile returns the raw SHA-256 of the file at absPath, reading it through
+// the symlink-safe, no-follow helper.
+func hashFile(rootPath, absPath string) (string, error) {
+	f, err := fileutil.SafeOpenFile(rootPath, absPath, os.O_RDONLY, 0)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// track is the shared implementation of Track and TrackWrite. A non-empty hash
+// only applies to a path the transaction creates; an existing path is backed up
+// and restored instead.
+func (m *Manager) track(path, hash string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -22,8 +110,17 @@ func (m *Manager) Track(path string) error {
 		return err
 	}
 
-	// Check if we have already tracked this file to avoid double-backup overhead
+	// Check if we have already tracked this file to avoid double-backup overhead.
 	if m.alreadyTracked(absPath) {
+		if hash == "" {
+			return nil
+		}
+		// A path already recorded as created (for example Track followed by
+		// TrackWrite in the append task) can still gain a content hash. A
+		// backed-up path is restored from its backup, so a hash adds nothing.
+		if _, created := m.createdSet[absPath]; created {
+			return m.trackCreated(absPath, hash)
+		}
 		return nil
 	}
 
@@ -31,7 +128,7 @@ func (m *Manager) Track(path string) error {
 	if os.IsNotExist(err) {
 		// Case 1: File/Dir does not exist. Journal it as created before the
 		// task writes, so a crash after the write can still remove it.
-		return m.trackCreated(absPath)
+		return m.trackCreated(absPath, hash)
 	}
 	if err != nil {
 		// Some other error (permission, etc)
@@ -168,18 +265,33 @@ func (m *Manager) journalPathFor(absPath string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-// trackCreated journals and records a path the task is about to create.
-func (m *Manager) trackCreated(absPath string) error {
+// trackCreated journals and records a path the task is about to create. A
+// non-empty hash is journaled before the write so rollback can verify that the
+// bytes still belong to this transaction. A duplicate record for an already
+// created path updates only the recorded hash.
+func (m *Manager) trackCreated(absPath, hash string) error {
+	if hash != "" && m.createdHashes[absPath] == hash {
+		return nil
+	}
 	journalPath, err := m.journalPathFor(absPath)
 	if err != nil {
 		return err
 	}
-	durable, err := m.appendJournal(journalRecord{Op: journalOpCreate, Path: journalPath})
+	durable, err := m.appendJournal(journalRecord{
+		Op:   journalOpCreate,
+		Path: journalPath,
+		Hash: hash,
+	})
 	if durable {
 		// Keep the in-memory entry even when closing the journal failed: the
 		// durable record describes this path, so rollback must still remove it.
-		m.created = append(m.created, absPath)
-		m.createdSet[absPath] = struct{}{}
+		if _, exists := m.createdSet[absPath]; !exists {
+			m.created = append(m.created, absPath)
+			m.createdSet[absPath] = struct{}{}
+		}
+		if hash != "" {
+			m.createdHashes[absPath] = hash
+		}
 	}
 	return err
 }

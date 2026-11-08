@@ -381,7 +381,7 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 // through the symlink-safe helpers.
 func trackAndWrite(tc types.TaskContext, path string, content []byte, perm os.FileMode) error {
 	if tc.Tx != nil {
-		if err := tc.Tx.Track(path); err != nil {
+		if err := tc.Tx.TrackWrite(path, content); err != nil {
 			return fmt.Errorf("failed to track file %s: %w", path, err)
 		}
 	}
@@ -499,7 +499,7 @@ func writeBaseShadow(tc types.TaskContext, ledgerKey string, content []byte) err
 	if err != nil {
 		return fmt.Errorf("invalid base shadow path for %s: %w", ledgerKey, err)
 	}
-	if err := tc.Tx.Track(absPath); err != nil {
+	if err := tc.Tx.TrackWrite(absPath, content); err != nil {
 		return fmt.Errorf("failed to track base shadow %s: %w", absPath, err)
 	}
 	if err := trackBaseAncestors(tc, absPath); err != nil {

@@ -419,9 +419,14 @@ state, not file existence. Normal release removes the file and prunes an empty
 fallback for non-scbake writers; the root lock is the primary scbake-vs-scbake
 concurrency guard.
 
-Rollback's content-hash check (delete a created file only if it still contains
-what this transaction wrote) is deferred to follow-up work, so #133 remains
-open.
+Rollback verifies created paths before removing them. A created regular file is
+deleted only when a content hash journaled before the write still matches the
+file's current raw bytes; a created directory is removed only when it is empty.
+Paths with no recorded hash — such as legacy journals, an interrupted write, or
+opaque command output that was not declared — are kept with a warning instead of
+being deleted. Declared command outputs, archive extraction destinations, and a
+newly saved manifest are snapshotted after their write so they remain cleanable.
+This closes #133.
 
 
 ### `template registry`: Manage Remote Registries
