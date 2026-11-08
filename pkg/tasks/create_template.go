@@ -101,16 +101,43 @@ func HashContent(content []byte) string {
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
-// normalizeEOL returns content with CRLF collapsed to LF. This is the
-// EOL-insensitive text-hash contract: line endings are not project content, so
-// a working file rewritten by a Windows editor still matches the recorded
-// pristine render. Any content containing a NUL byte is treated as binary and
-// returned unchanged, so binary hashes remain byte-exact.
+// normalizeEOL returns content with every run of one or more CR bytes that is
+// immediately followed by LF collapsed to a single LF. This is a single-pass
+// projection, so it is idempotent even for pathological CR runs: "\r\r\n"
+// becomes "\n" on the first pass and cannot change again. Lone CR bytes and
+// CR runs not followed by LF are preserved as content.
+//
+// This is the EOL-insensitive text-hash contract: line endings are not project
+// content, so a working file rewritten by a Windows editor still matches the
+// recorded pristine render. Any content containing a NUL byte is treated as
+// binary and returned unchanged, so binary hashes remain byte-exact.
 func normalizeEOL(content []byte) []byte {
 	if bytes.IndexByte(content, 0) >= 0 {
 		return content
 	}
-	return bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
+	if !bytes.Contains(content, []byte("\r\n")) {
+		return content
+	}
+	out := make([]byte, 0, len(content))
+	for i := 0; i < len(content); {
+		if content[i] != '\r' {
+			out = append(out, content[i])
+			i++
+			continue
+		}
+		end := i
+		for end < len(content) && content[end] == '\r' {
+			end++
+		}
+		if end < len(content) && content[end] == '\n' {
+			out = append(out, '\n')
+			i = end + 1
+			continue
+		}
+		out = append(out, content[i:end]...)
+		i = end
+	}
+	return out
 }
 
 // checkReconciliation evaluates drift and conflict strategies.
