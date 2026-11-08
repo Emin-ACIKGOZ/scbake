@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,6 +85,41 @@ func TestAcquireRootLock_StaleFileHarmless(t *testing.T) {
 	if err := lock.Release(); err != nil {
 		t.Fatalf("Release() failed: %v", err)
 	}
+}
+
+// TestAcquireRootLock_MissingRootPolicy verifies the createRoot parameter: only
+// commands that bootstrap a project may create the root, while commands that
+// operate on an existing project fail without leaving an empty directory.
+func TestAcquireRootLock_MissingRootPolicy(t *testing.T) {
+	parent := t.TempDir()
+
+	t.Run("existing project does not create", func(t *testing.T) {
+		root := filepath.Join(parent, "missing")
+		lock, err := AcquireRootLock(root)
+		if lock != nil {
+			_ = lock.Release()
+			t.Fatal("AcquireRootLock returned a lock for a missing root")
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("AcquireRootLock error = %v, want fs.ErrNotExist", err)
+		}
+		assertNotExist(t, root)
+	})
+
+	t.Run("new may create", func(t *testing.T) {
+		root := filepath.Join(parent, "created")
+		lock, err := AcquireRootLock(root, true)
+		if err != nil {
+			t.Fatalf("AcquireRootLock(createRoot=true) failed: %v", err)
+		}
+		if _, err := os.Stat(root); err != nil {
+			t.Errorf("AcquireRootLock(createRoot=true) did not create the root: %v", err)
+		}
+		if err := lock.Release(); err != nil {
+			t.Fatalf("Release() failed: %v", err)
+		}
+		assertNotExist(t, filepath.Join(root, fileutil.InternalDir))
+	})
 }
 
 // TestAcquireRootLock_CreatesPrivateState verifies the state directory and lock
@@ -232,6 +268,10 @@ func TestAcquireRootLock_RejectsSymlinkEscape(t *testing.T) {
 // TestAcquireRootLock_RevalidatesReplacedPath covers the unlink/revalidation
 // primitive used to close the remove-on-release race: a handle whose path was
 // replaced is not considered valid and Release must not delete the replacement.
+//
+// The old name is freed with a rename rather than DeleteFile. Windows allows a
+// rename while a share-delete handle is open, but DeleteFile would leave the
+// path delete-pending and reject the replacement create with access-denied.
 func TestAcquireRootLock_RevalidatesReplacedPath(t *testing.T) {
 	root := t.TempDir()
 	lock := acquireForTest(t, root)
@@ -241,12 +281,14 @@ func TestAcquireRootLock_RevalidatesReplacedPath(t *testing.T) {
 		t.Fatal("freshly acquired lock does not match its path")
 	}
 
-	if err := os.Remove(lock.path); err != nil {
-		t.Fatal(err)
+	oldPath := lock.path + ".old"
+	if err := os.Rename(lock.path, oldPath); err != nil {
+		t.Fatalf("freeing the old lock name: %v", err)
 	}
+	t.Cleanup(func() { _ = os.Remove(oldPath) })
 	replacement := []byte("replacement-lock")
 	if err := os.WriteFile(lock.path, replacement, fileutil.PrivateFilePerms); err != nil {
-		t.Fatal(err)
+		t.Fatalf("creating the replacement lock: %v", err)
 	}
 	if lockPathMatches(lock.file, lock.path) {
 		t.Fatal("a replaced lock path still matched the old handle")

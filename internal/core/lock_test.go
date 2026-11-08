@@ -5,6 +5,7 @@ package core
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"scbake/internal/filesystem/transaction"
@@ -198,6 +199,47 @@ func TestRunUpdateSharesSingleRootLock(t *testing.T) {
 	if err := probe.Release(); err != nil {
 		t.Fatalf("Release() of probe failed: %v", err)
 	}
+}
+
+// TestRunApplyAndUpdateMissingRootDoNotCreateDirectory verifies mutating runs on
+// a nonexistent target fail before creating an empty project root and surface an
+// ordinary filesystem error rather than ErrBusy.
+func TestRunApplyAndUpdateMissingRootDoNotCreateDirectory(t *testing.T) {
+	reporter := ui.NewPlainReporter(5, false)
+
+	t.Run("apply", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "missing")
+		err := RunApply(lockTestRunContext(missing, "editorconfig"), reporter)
+		if err == nil {
+			t.Fatal("apply on a missing target unexpectedly succeeded")
+		}
+		if errors.Is(err, transaction.ErrBusy) {
+			t.Fatalf("apply on a missing target returned ErrBusy: %v", err)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("apply error = %v, want fs.ErrNotExist", err)
+		}
+		if _, statErr := os.Stat(missing); !os.IsNotExist(statErr) {
+			t.Errorf("apply created the missing root (stat err: %v)", statErr)
+		}
+	})
+
+	t.Run("update", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "missing")
+		err := RunUpdate(RunContext{TargetPath: missing, ManifestPathArg: "."}, reporter)
+		if err == nil {
+			t.Fatal("update on a missing target unexpectedly succeeded")
+		}
+		if errors.Is(err, transaction.ErrBusy) {
+			t.Fatalf("update on a missing target returned ErrBusy: %v", err)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("update error = %v, want fs.ErrNotExist", err)
+		}
+		if _, statErr := os.Stat(missing); !os.IsNotExist(statErr) {
+			t.Errorf("update created the missing root (stat err: %v)", statErr)
+		}
+	})
 }
 
 // TestRunApply_DryRunIgnoresRootLock verifies read-only dry runs do not contend
