@@ -51,13 +51,13 @@ func assertCreateDirTask(t *testing.T, task types.Task, expectedPath string) {
 
 func assertViteInitTask(t *testing.T, task types.Task) {
 	t.Helper()
-	viteTask, ok := task.(*tasks.ExecCommandTask)
+	viteTask, ok := task.(*tasks.ScaffoldTask)
 	if !ok || viteTask.Cmd != "npm" {
-		t.Fatal("Second task should be 'npm create'")
+		t.Fatal("Second task should be a staged 'npm create'")
 	}
 
-	if !viteTask.RunInTarget {
-		t.Fatal("Vite command must run in target directory")
+	if viteTask.Sentinel != "package.json" {
+		t.Fatalf("Vite scaffold sentinel = %q, want package.json", viteTask.Sentinel)
 	}
 
 	if !contains(viteTask.Args, "svelte") {
