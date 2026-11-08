@@ -82,7 +82,6 @@ func TestMissingTargetCommandsFailWithoutCreatingRoot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			resetFlags()
 			t.Cleanup(resetFlags)
-			driftRepairFlag = false
 
 			missing := filepath.Join(t.TempDir(), "missing")
 			args := append(append([]string{}, tc.args...), missing)
@@ -188,4 +187,71 @@ func waitForCmdFile(t *testing.T, path string, timeout time.Duration) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// assertNoFailedProjectStaging fails when a cleanup staging directory is left
+// behind in dir.
+func assertNoFailedProjectStaging(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading %s: %v", dir, err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".scbake-remove-") {
+			t.Errorf("cleanup left staging directory %s", filepath.Join(dir, entry.Name()))
+		}
+	}
+}
+
+// TestRemoveFailedProjectStagesWhileLockedThenReleases verifies failed-new
+// cleanup renames the project while the lock is held, releases it, and only
+// then removes the staged tree, leaving no staging residue.
+//
+//nolint:cyclop // Lock setup, staging inspection from the release callback, and cleanup assertions.
+func TestRemoveFailedProjectStagesWhileLockedThenReleases(t *testing.T) {
+	parent := t.TempDir()
+	project := filepath.Join(parent, "demo")
+	if err := os.Mkdir(project, fileutil.DirPerms); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "partial.txt"), []byte("partial"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := transaction.AcquireRootLock(project, false)
+	if err != nil {
+		t.Fatalf("AcquireRootLock failed: %v", err)
+	}
+
+	released := false
+	err = removeFailedProject(project, func() error {
+		released = true
+		entries, readErr := os.ReadDir(parent)
+		if readErr != nil {
+			return readErr
+		}
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.Name(), ".scbake-remove-") {
+				continue
+			}
+			staged := filepath.Join(parent, entry.Name(), filepath.Base(project))
+			if _, statErr := os.Stat(filepath.Join(staged, "partial.txt")); statErr != nil {
+				t.Errorf("staged project is missing its content at release: %v", statErr)
+			}
+			return lock.Release()
+		}
+		return errors.New("staging directory was deleted before release")
+	})
+	if err != nil {
+		_ = lock.Release()
+		t.Fatalf("removeFailedProject failed: %v", err)
+	}
+	if !released {
+		t.Fatal("removeFailedProject did not call release")
+	}
+	if _, err := os.Lstat(project); !os.IsNotExist(err) {
+		t.Errorf("removeFailedProject left the original project (stat err: %v)", err)
+	}
+	assertNoFailedProjectStaging(t, parent)
 }
