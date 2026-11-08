@@ -160,7 +160,7 @@ TL;DR:
 - Use `--force` to overwrite
 
 **"Transaction rollback"**
-- If a task fails, scbake automatically rolls back all changes
+- If a task fails, scbake rolls back tracked project-file changes. Tool-managed dependency trees such as `node_modules` may be left partially updated; delete and reinstall from the lockfile if needed.
 - Fix the issue and try again
 
 ## Next Steps
