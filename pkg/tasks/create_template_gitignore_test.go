@@ -57,21 +57,45 @@ func readGitIgnore(t *testing.T, root string) string {
 	return string(data)
 }
 
-// countInternalStateIgnoreLines counts standalone .scbake/ entries. Leading
-// whitespace is part of a Git pattern, so only trailing whitespace is ignored.
-func countInternalStateIgnoreLines(content string) int {
+// countIgnoreLine counts standalone occurrences of entry. Leading whitespace is
+// part of a Git pattern, so only trailing whitespace is ignored.
+func countIgnoreLine(content, entry string) int {
 	count := 0
 	for _, line := range strings.Split(content, "\n") {
-		if strings.TrimRight(line, " \t\r") == internalStateIgnoreEntry {
+		if strings.TrimRight(line, " \t\r") == entry {
 			count++
 		}
 	}
 	return count
 }
 
+// requireCommittedBaseBlock fails unless all three .scbake-base re-include
+// lines appear exactly once and exactly one supported .scbake ignore spelling
+// is present.
+func requireCommittedBaseBlock(t *testing.T, content string) {
+	t.Helper()
+	for _, entry := range committedBaseIgnoreEntries {
+		if got := countIgnoreLine(content, entry); got != 1 {
+			t.Fatalf("%q appears %d times, want exactly 1:\n%s", entry, got, content)
+		}
+	}
+	spellings := 0
+	for _, entry := range []string{".scbake", ".scbake/", "/.scbake", "/.scbake/"} {
+		spellings += countIgnoreLine(content, entry)
+	}
+	if spellings != 1 {
+		t.Fatalf("found %d .scbake ignore spellings, want exactly 1:\n%s", spellings, content)
+	}
+}
+
+// committedBaseIgnoreBlock is the exact append expected on a file that already
+// carries a .scbake/ entry.
+const committedBaseIgnoreBlock = "!.scbake-base/\n!.scbake-base/**\n!.gitignore\n"
+
 // TestWriteBaseShadow_CreatesGitIgnoreIgnoringInternalState covers a project
 // without a language pack: the universal helper must create .gitignore so the
-// persistent .scbake/base state is never left untracked.
+// private .scbake state is ignored while the committed .scbake-base tree is
+// re-included for Git.
 func TestWriteBaseShadow_CreatesGitIgnoreIgnoringInternalState(t *testing.T) {
 	root := t.TempDir()
 	tx, err := transaction.New(root)
@@ -85,16 +109,17 @@ func TestWriteBaseShadow_CreatesGitIgnoreIgnoringInternalState(t *testing.T) {
 	}
 
 	got := readGitIgnore(t, root)
-	if count := countInternalStateIgnoreLines(got); count != 1 {
-		t.Fatalf(".gitignore has %d .scbake/ entries, want 1:\n%s", count, got)
+	requireCommittedBaseBlock(t, got)
+	if _, err := os.Stat(filepath.Join(root, fileutil.CommittedBaseDir, "Makefile")); err != nil {
+		t.Fatalf("committed base shadow was not written: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, fileutil.InternalDir, fileutil.BaseDir, "Makefile")); err != nil {
-		t.Fatalf("base shadow was not written: %v", err)
+	if _, err := os.Stat(filepath.Join(root, fileutil.InternalDir, fileutil.BaseDir)); !os.IsNotExist(err) {
+		t.Fatalf("legacy .scbake/base must not be created (stat err: %v)", err)
 	}
 }
 
 // TestWriteBaseShadow_AppendsAfterMissingTrailingNewline verifies a user's
-// existing .gitignore is preserved and the new entry starts on its own line.
+// existing .gitignore is preserved and each new entry starts on its own line.
 func TestWriteBaseShadow_AppendsAfterMissingTrailingNewline(t *testing.T) {
 	root := t.TempDir()
 	const initial = "node_modules"
@@ -112,32 +137,68 @@ func TestWriteBaseShadow_AppendsAfterMissingTrailingNewline(t *testing.T) {
 		t.Fatalf("writeBaseShadow() failed: %v", err)
 	}
 
-	want := initial + "\n" + internalStateIgnoreEntry + "\n"
+	want := initial + "\n" + internalStateIgnoreEntry + "\n" + committedBaseIgnoreBlock
 	if got := readGitIgnore(t, root); got != want {
 		t.Fatalf(".gitignore = %q, want %q", got, want)
 	}
 }
 
 // TestWriteBaseShadow_DoesNotDuplicateInternalStateIgnore covers every common
-// spelling of an existing .scbake ignore entry. The original bytes must be
-// preserved exactly, including a missing trailing newline. Leading whitespace
-// is part of the Git pattern, so an indented entry is not a duplicate.
+// spelling of an existing .scbake ignore entry plus pre-existing and partial
+// committed-base blocks. The original bytes must be preserved exactly,
+// including a missing trailing newline, and only missing lines are appended.
+// Leading whitespace is part of the Git pattern, so an indented entry is not a
+// duplicate.
 func TestWriteBaseShadow_DoesNotDuplicateInternalStateIgnore(t *testing.T) {
 	tests := []struct {
 		name    string
 		initial string
 		want    string
 	}{
-		{name: ".scbake", initial: ".scbake", want: ".scbake"},
-		{name: ".scbake slash", initial: ".scbake/", want: ".scbake/"},
-		{name: "root .scbake", initial: "/.scbake", want: "/.scbake"},
-		{name: "root .scbake slash", initial: "/.scbake/", want: "/.scbake/"},
-		{name: "among other entries", initial: "*.log\n.scbake/\ntmp/\n", want: "*.log\n.scbake/\ntmp/\n"},
-		{name: "trailing whitespace", initial: ".scbake/ \t\r\n", want: ".scbake/ \t\r\n"},
+		{
+			name:    ".scbake",
+			initial: ".scbake",
+			want:    ".scbake\n" + committedBaseIgnoreBlock,
+		},
+		{
+			name:    ".scbake slash",
+			initial: ".scbake/",
+			want:    ".scbake/\n" + committedBaseIgnoreBlock,
+		},
+		{
+			name:    "root .scbake",
+			initial: "/.scbake",
+			want:    "/.scbake\n" + committedBaseIgnoreBlock,
+		},
+		{
+			name:    "root .scbake slash",
+			initial: "/.scbake/",
+			want:    "/.scbake/\n" + committedBaseIgnoreBlock,
+		},
+		{
+			name:    "among other entries",
+			initial: "*.log\n.scbake/\ntmp/\n",
+			want:    "*.log\n.scbake/\ntmp/\n" + committedBaseIgnoreBlock,
+		},
+		{
+			name:    "trailing whitespace",
+			initial: ".scbake/ \t\r\n",
+			want:    ".scbake/ \t\r\n" + committedBaseIgnoreBlock,
+		},
 		{
 			name:    "leading whitespace is not an ignore",
 			initial: "  .scbake/  \n",
-			want:    "  .scbake/  \n" + internalStateIgnoreEntry + "\n",
+			want:    "  .scbake/  \n" + internalStateIgnoreEntry + "\n" + committedBaseIgnoreBlock,
+		},
+		{
+			name:    "complete block is unchanged",
+			initial: ".scbake/\n" + committedBaseIgnoreBlock,
+			want:    ".scbake/\n" + committedBaseIgnoreBlock,
+		},
+		{
+			name:    "partial block appends only the missing lines",
+			initial: ".scbake/\n!.scbake-base/\n",
+			want:    ".scbake/\n!.scbake-base/\n!.scbake-base/**\n!.gitignore\n",
 		},
 	}
 
@@ -158,9 +219,11 @@ func TestWriteBaseShadow_DoesNotDuplicateInternalStateIgnore(t *testing.T) {
 				t.Fatalf("writeBaseShadow() failed: %v", err)
 			}
 
-			if got := readGitIgnore(t, root); got != tt.want {
+			got := readGitIgnore(t, root)
+			if got != tt.want {
 				t.Fatalf(".gitignore mismatch:\n got %q\nwant %q", got, tt.want)
 			}
+			requireCommittedBaseBlock(t, got)
 		})
 	}
 }
@@ -182,9 +245,7 @@ func TestWriteBaseShadow_IdempotentInternalStateIgnore(t *testing.T) {
 	}
 
 	got := readGitIgnore(t, root)
-	if count := countInternalStateIgnoreLines(got); count != 1 {
-		t.Fatalf("repeated writes produced %d .scbake/ entries, want 1:\n%s", count, got)
-	}
+	requireCommittedBaseBlock(t, got)
 }
 
 // TestEnsureInternalStateIgnored_NoOps verifies the helper is inert in dry-run
@@ -245,8 +306,9 @@ func TestEnsureInternalStateIgnored_NoOps(t *testing.T) { //nolint:cyclop // ass
 
 // TestEnsureInternalStateIgnored_ManagedRootGitIgnoreIsNotMutated verifies that
 // a managed root .gitignore is only reconciled through its rendered content. If
-// it is missing or no longer ignores .scbake, the helper warns with regeneration
-// guidance instead of mutating the file and desynchronizing the ledger.
+// it is missing, no longer ignores .scbake, or no longer re-includes
+// .scbake-base, the helper warns with regeneration guidance instead of mutating
+// the file and desynchronizing the ledger.
 func TestEnsureInternalStateIgnored_ManagedRootGitIgnoreIsNotMutated(t *testing.T) { //nolint:cyclop // assertion-heavy regression test
 	tests := []struct {
 		name    string
@@ -255,6 +317,7 @@ func TestEnsureInternalStateIgnored_ManagedRootGitIgnoreIsNotMutated(t *testing.
 	}{
 		{name: "missing file", missing: true},
 		{name: "missing entry", initial: "node_modules\n"},
+		{name: "missing base re-include", initial: ".scbake/\n"},
 	}
 
 	for _, tt := range tests {
@@ -287,7 +350,7 @@ func TestEnsureInternalStateIgnored_ManagedRootGitIgnoreIsNotMutated(t *testing.
 				!strings.Contains(out, "regenerate it with 'scbake apply' or 'scbake update'") {
 				t.Fatalf("warning does not mention regeneration:\n%s", out)
 			}
-			if !strings.Contains(out, "is missing or does not ignore .scbake/") {
+			if !strings.Contains(out, "is missing the .scbake/ ignore or the .scbake-base/ re-include") {
 				t.Fatalf("warning does not describe the stale ignore:\n%s", out)
 			}
 
@@ -372,10 +435,11 @@ func TestWriteManagedFile_RootGitIgnoreInjectsEntryBeforeHashing(t *testing.T) {
 	}
 
 	onDisk := readGitIgnore(t, root)
-	want := "Hello Root from v1.0.0\n" + internalStateIgnoreEntry + "\n"
+	want := "Hello Root from v1.0.0\n" + internalStateIgnoreEntry + "\n" + committedBaseIgnoreBlock
 	if onDisk != want {
 		t.Fatalf(".gitignore = %q, want %q", onDisk, want)
 	}
+	requireCommittedBaseBlock(t, onDisk)
 	if got, wantHash := manifest.ManagedFiles[fileutil.GitIgnore], HashContent([]byte(onDisk)); got != wantHash {
 		t.Fatalf("managed_files[%q] = %q, want on-disk hash %q", fileutil.GitIgnore, got, wantHash)
 	}
@@ -450,10 +514,15 @@ func TestWriteManagedFile_EquivalentRootGitIgnorePaths(t *testing.T) { //nolint:
 			}
 			want := initial
 			if tt.wantInject {
-				want += internalStateIgnoreEntry + "\n"
+				want += internalStateIgnoreEntry + "\n" + committedBaseIgnoreBlock
 			}
 			if string(onDisk) != want {
 				t.Fatalf("%s = %q, want %q", tt.wantKey, onDisk, want)
+			}
+			if tt.wantInject {
+				requireCommittedBaseBlock(t, string(onDisk))
+			} else if strings.Contains(string(onDisk), "!.scbake-base/") {
+				t.Fatalf("subproject %s inherited the committed-base block: %q", tt.wantKey, onDisk)
 			}
 			if got, wantHash := manifest.ManagedFiles[tt.wantKey], HashContent(onDisk); got != wantHash {
 				t.Fatalf("managed_files[%q] = %q, want on-disk hash %q", tt.wantKey, got, wantHash)
@@ -471,9 +540,7 @@ func TestWriteManagedFile_EquivalentRootGitIgnorePaths(t *testing.T) { //nolint:
 				t.Fatalf("%s changed after base shadow write: got %q, want %q", tt.wantKey, after, want)
 			}
 			if tt.wantInject {
-				if got := countInternalStateIgnoreLines(string(after)); got != 1 {
-					t.Fatalf("%s has %d .scbake/ entries, want 1", tt.wantKey, got)
-				}
+				requireCommittedBaseBlock(t, string(after))
 			}
 		})
 	}
@@ -524,10 +591,13 @@ func TestWriteManagedFile_SubprojectGitIgnoreNotInjected(t *testing.T) {
 		t.Fatalf("managed_files[%q] = %q, want %q", key, got, wantHash)
 	}
 
-	// The root still gets the universal entry through the fallback helper.
-	if got := readGitIgnore(t, root); got != internalStateIgnoreEntry+"\n" {
-		t.Fatalf("root .gitignore = %q, want %q", got, internalStateIgnoreEntry+"\n")
+	// The root still gets the universal ignore and committed-base block through
+	// the fallback helper.
+	wantRoot := internalStateIgnoreEntry + "\n" + committedBaseIgnoreBlock
+	if got := readGitIgnore(t, root); got != wantRoot {
+		t.Fatalf("root .gitignore = %q, want %q", got, wantRoot)
 	}
+	requireCommittedBaseBlock(t, readGitIgnore(t, root))
 }
 
 // TestEnsureInternalStateIgnored_UnwritableRootGitIgnoreIsBestEffort verifies a
@@ -568,7 +638,7 @@ func TestEnsureInternalStateIgnored_UnwritableRootGitIgnoreIsBestEffort(t *testi
 		if got := readGitIgnore(t, root); got != initial {
 			t.Fatalf("read-only .gitignore was modified: got %q, want %q", got, initial)
 		}
-		if _, err := os.Stat(filepath.Join(root, fileutil.InternalDir, fileutil.BaseDir, "Makefile")); err != nil {
+		if _, err := os.Stat(filepath.Join(root, fileutil.CommittedBaseDir, "Makefile")); err != nil {
 			t.Fatalf("base shadow was not written: %v", err)
 		}
 	})
