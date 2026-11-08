@@ -482,6 +482,61 @@ func TestExecCommandTask_PredictedCreatedSnapshotContent(t *testing.T) { //nolin
 	})
 }
 
+// TestExecCommandTask_SecondOpaqueWriterKeepsStaleHash documents the intended
+// conservative behavior for a second opaque writer: the post-command snapshot
+// only fills a missing hash, so a later command that rewrites an already-
+// created path leaves the first hash stale. Rollback then sees different bytes
+// and keeps the later output with a warning rather than deleting it.
+func TestExecCommandTask_SecondOpaqueWriterKeepsStaleHash(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "go.sum")
+	const firstContent = "example.com/first v1.0.0 h1:first=\n"
+	const secondContent = "example.com/second v2.0.0 h1:second=\n"
+
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New: %v", err)
+	}
+	t.Setenv("GO_WANT_EXEC_HELPER", "mutate")
+	t.Setenv("GO_WANT_EXEC_HELPER_PATH", path)
+
+	task := &ExecCommandTask{
+		Cmd:              os.Args[0],
+		Args:             []string{"-test.run=^TestExecCommandTaskHelper$"},
+		Desc:             "Opaque writer",
+		RunInTarget:      true,
+		PredictedCreated: []string{"go.sum"},
+	}
+	tc := types.TaskContext{Ctx: context.Background(), TargetPath: root, Tx: tx}
+
+	t.Setenv("GO_WANT_EXEC_HELPER_CONTENT", firstContent)
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("first command failed: %v", err)
+	}
+	t.Setenv("GO_WANT_EXEC_HELPER_CONTENT", secondContent)
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("second command failed: %v", err)
+	}
+	if got := mustReadTestFile(t, path); got != secondContent {
+		t.Fatalf("second writer content = %q, want %q", got, secondContent)
+	}
+
+	var rollbackErr error
+	stderr := captureStderr(t, func() { rollbackErr = tx.Rollback() })
+	if rollbackErr != nil {
+		t.Fatalf("Rollback treated stale-hash residue as an error: %v", rollbackErr)
+	}
+	if got := mustReadTestFile(t, path); got != secondContent {
+		t.Errorf("rollback deleted the later opaque write: got %q", got)
+	}
+	if !strings.Contains(stderr, "content changed since this transaction wrote it") {
+		t.Errorf("rollback stderr = %q, want a stale-content warning", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(root, fileutil.InternalDir)); !os.IsNotExist(err) {
+		t.Errorf("rollback left transaction state: %v", err)
+	}
+}
+
 // TestExecCommandTask_DryRunSkipsTrackingAndExecution verifies that a dry run
 // neither registers predicted paths with the transaction nor executes the
 // command.

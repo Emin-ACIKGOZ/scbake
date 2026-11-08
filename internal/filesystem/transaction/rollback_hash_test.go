@@ -113,6 +113,85 @@ func TestRollback_CreatedFileChangedKeptWithWarning(t *testing.T) {
 	assertNotExist(t, tempDir)
 }
 
+func TestRollback_CreatedFileCRLFOnlyRewriteKept(t *testing.T) {
+	root := t.TempDir()
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(root, "created.txt")
+	createTrackedFile(t, tx, path, "line one\nline two\n")
+	// A CRLF-only rewrite is different raw bytes even though it is the same
+	// text. Rollback authority is byte-exact, so the file must be kept.
+	const rewritten = "line one\r\nline two\r\n"
+	if err := os.WriteFile(path, []byte(rewritten), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+	tempDir := tx.tempDir
+
+	var rollbackErr error
+	stderr := captureStderr(t, func() { rollbackErr = tx.Rollback() })
+	if rollbackErr != nil {
+		t.Fatalf("Rollback treated a CRLF-only rewrite as an error: %v", rollbackErr)
+	}
+	if got := readTestFile(t, path); got != rewritten {
+		t.Errorf("kept content = %q, want the CRLF rewrite %q", got, rewritten)
+	}
+	if !strings.Contains(stderr, "content changed since this transaction wrote it") {
+		t.Errorf("rollback stderr = %q, want a content-change warning", stderr)
+	}
+	assertNotExist(t, tempDir)
+}
+
+func TestRollback_CreatedFileReplacedByInRootSymlinkKept(t *testing.T) { //nolint:cyclop // symlink setup plus retained-target and warning assertions
+	if runtime.GOOS == osWindows {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+
+	root := t.TempDir()
+	target := filepath.Join(root, "target.txt")
+	if err := os.WriteFile(target, []byte("target\n"), fileutil.FilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "created.txt")
+	createTrackedFile(t, tx, path, "created\n")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	// The link resolves inside the root, so containment accepts it; rollback
+	// must still refuse to follow or remove a non-regular created path.
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	tempDir := tx.tempDir
+
+	var rollbackErr error
+	stderr := captureStderr(t, func() { rollbackErr = tx.Rollback() })
+	if rollbackErr != nil {
+		t.Fatalf("Rollback treated an in-root symlink replacement as an error: %v", rollbackErr)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("created path was removed: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("created path mode = %v, want a kept symlink", info.Mode())
+	}
+	if got := readTestFile(t, target); got != "target\n" {
+		t.Errorf("symlink target content = %q, want %q", got, "target\n")
+	}
+	if !strings.Contains(stderr, "no longer a regular file") {
+		t.Errorf("rollback stderr = %q, want a non-regular-file warning", stderr)
+	}
+	assertNotExist(t, tempDir)
+}
+
 func TestRollback_CreatedFileWithoutHashKept(t *testing.T) {
 	root := t.TempDir()
 	tx, err := New(root)

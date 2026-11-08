@@ -6,6 +6,7 @@ import (
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
+	"strings"
 	"testing"
 )
 
@@ -221,6 +222,51 @@ func TestAppendFileTask_TransactionRollback(t *testing.T) {
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("File should be removed after rollback")
+	}
+}
+
+// TestAppendFileTask_SecondAppendUpdatesCreatedHash verifies that a second
+// append to a file this transaction created replaces the stale first-write hash
+// with the full post-append bytes, so rollback removes the file instead of
+// leaving conservative residue.
+func TestAppendFileTask_SecondAppendUpdatesCreatedHash(t *testing.T) {
+	rootDir := t.TempDir()
+	tx, err := transaction.New(rootDir)
+	if err != nil {
+		t.Fatalf("Failed to create transaction: %v", err)
+	}
+
+	tc := types.TaskContext{TargetPath: rootDir, Tx: tx}
+	first := &AppendFileTask{FilePath: "multi.txt", Content: "first\n", Desc: "first", TaskPrio: 100}
+	second := &AppendFileTask{FilePath: "multi.txt", Content: "second\n", Desc: "second", TaskPrio: 101}
+
+	if err := first.Execute(tc); err != nil {
+		t.Fatalf("First append failed: %v", err)
+	}
+	if err := second.Execute(tc); err != nil {
+		t.Fatalf("Second append failed: %v", err)
+	}
+
+	path := filepath.Join(rootDir, "multi.txt")
+	if got, err := fileutil.SafeReadFile(rootDir, "multi.txt"); err != nil {
+		t.Fatalf("read before rollback: %v", err)
+	} else if string(got) != "first\nsecond\n" {
+		t.Fatalf("content before rollback = %q, want %q", got, "first\nsecond\n")
+	}
+
+	var rollbackErr error
+	stderr := captureStderr(t, func() { rollbackErr = tx.Rollback() })
+	if rollbackErr != nil {
+		t.Fatalf("Rollback failed: %v", rollbackErr)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("rollback kept the appended created file as residue: %v", err)
+	}
+	if strings.Contains(stderr, "Keeping created path") {
+		t.Errorf("rollback warned about conservative residue: %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(rootDir, fileutil.InternalDir)); !os.IsNotExist(err) {
+		t.Errorf("rollback left transaction state: %v", err)
 	}
 }
 
