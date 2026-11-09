@@ -41,10 +41,9 @@ var emptyLanguageTestRef = regexp.MustCompile(`(?m)^[ \t]*\(cd[^\n]*\$\(MAKE_TES
 //  1. rendering never errors or panics for arbitrary string data;
 //  2. no recipe contains an empty subshell `(cd ... && )` or the empty-suffix
 //     variable `$(MAKE_TEST_COMMAND_)`;
-//  3. a present, non-empty test_command is used verbatim and suppresses the
-//     per-language test loop;
-//  4. no projects and no test_command yields the neutral message and never a
-//     Go test default;
+//  3. a present, non-empty, non-legacy test_command is used verbatim and
+//     suppresses the per-language test loop;
+//  4. no projects and no usable root command yields a clear failing target;
 //  5. supported languages (go/svelte/spring) emit their
 //     MAKE_TEST_COMMAND_<lang> recipe, while unsupported/custom/empty
 //     languages emit only the neutral skip line.
@@ -80,7 +79,7 @@ func FuzzMakefileTestTarget(f *testing.F) {
 		// An explicit non-empty command is user-authored text: it is rendered
 		// verbatim, and the generated-recipe invariants must not be applied to
 		// bytes the user supplied.
-		if hasTestCommand && testCommand != "" {
+		if hasTestCommand && testCommand != "" && testCommand != "go test ./..." {
 			assertExplicitTestCommand(t, target, testCommand, input)
 			return
 		}
@@ -134,7 +133,7 @@ func assertGeneratedTestTarget(t *testing.T, out, target, language, path string,
 	assertTestCommandsDefined(t, out)
 
 	if count == 0 {
-		assertNeutralNoProject(t, out, target, input)
+		assertNeutralNoProject(t, target, input)
 		return
 	}
 	assertPerLanguageTestSelection(t, target, language, path, input)
@@ -153,16 +152,16 @@ func assertNoEmptyGeneratedRecipes(t *testing.T, target, input string) {
 	}
 }
 
-// assertNeutralNoProject checks that an empty manifest gets the neutral,
-// non-Go test target.
-func assertNeutralNoProject(t *testing.T, out, target, input string) {
+// assertNeutralNoProject checks that an empty manifest fails with actionable
+// guidance rather than claiming there is nothing to test successfully.
+func assertNeutralNoProject(t *testing.T, target, input string) {
 	t.Helper()
 
-	if strings.Contains(out, "go test ./...") {
-		t.Fatalf("no-project Makefile emitted the Go test default for input %+v:\n%s", input, out)
+	if strings.Contains(target, "go test ./...") {
+		t.Fatalf("no-project Makefile emitted the legacy Go default for input %+v:\n%s", input, target)
 	}
-	if !strings.Contains(target, "No projects configured; nothing to test.") {
-		t.Fatalf("no-project test target is not the neutral message for input %+v:\n%s", input, target)
+	if !strings.Contains(target, "No projects configured; set metadata.test_command to run root-level tests.") || !strings.Contains(target, "@exit 1") {
+		t.Fatalf("no-project test target must fail with root-test guidance for input %+v:\n%s", input, target)
 	}
 }
 

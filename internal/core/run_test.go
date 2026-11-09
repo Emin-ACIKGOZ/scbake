@@ -216,6 +216,106 @@ func TestExecuteAndFinalize_EmptyPlan(t *testing.T) {
 	}
 }
 
+func TestRunApplyMakefileWithoutProjectsFailsClearly(t *testing.T) {
+	rootDir := t.TempDir()
+	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
+	if err := os.WriteFile(manifestPath, nil, fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RunApply(RunContext{
+		WithFlag:        []string{"makefile"},
+		TargetPath:      rootDir,
+		ManifestPathArg: ".",
+	}, ui.NewPlainReporter(10, false))
+	if err != nil {
+		t.Fatalf("RunApply failed: %v", err)
+	}
+
+	generated, err := os.ReadFile(filepath.Join(rootDir, "Makefile")) //nolint:gosec // test temp path
+	if err != nil {
+		t.Fatalf("read generated Makefile: %v", err)
+	}
+	if !strings.Contains(string(generated), "No projects configured; set metadata.test_command to run root-level tests.") || !strings.Contains(string(generated), "@exit 1") {
+		t.Fatalf("fresh apply should generate a clearly failing test target:\n%s", generated)
+	}
+}
+
+func TestRunApplyMakefileUsesPerProjectTestsWhenTestCommandIsUnset(t *testing.T) {
+	rootDir := t.TempDir()
+	m := &types.Manifest{
+		Projects: []types.Project{
+			{Name: "backend", Path: "backend", Language: "go"},
+			{Name: "api", Path: "api", Language: "go"},
+		},
+		Templates: []types.Template{{Name: "makefile", Path: "."}},
+	}
+	if err := manifest.Save(m, rootDir); err != nil {
+		t.Fatalf("save manifest without test_command: %v", err)
+	}
+
+	if err := RunApply(RunContext{
+		TargetPath:      rootDir,
+		ManifestPathArg: ".",
+		WithFlag:        []string{"makefile"},
+	}, ui.NewPlainReporter(10, false)); err != nil {
+		t.Fatalf("RunApply failed: %v", err)
+	}
+
+	generated, err := os.ReadFile(filepath.Join(rootDir, "Makefile")) // #nosec G304 -- rootDir is t.TempDir and filename is fixed
+	if err != nil {
+		t.Fatalf("read generated Makefile: %v", err)
+	}
+	out := string(generated)
+	for _, want := range []string{
+		"(cd backend && $(MAKE_TEST_COMMAND_go))",
+		"(cd api && $(MAKE_TEST_COMMAND_go))",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("generated Makefile missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "No projects configured") || strings.Contains(out, "@exit 1") {
+		t.Fatalf("unset test_command should use per-project tests:\n%s", out)
+	}
+	if _, exists := m.Metadata["test_command"]; exists {
+		t.Fatalf("test setup unexpectedly has metadata.test_command: %#v", m.Metadata)
+	}
+}
+
+func TestRunUpdateLegacyMakefileWithoutProjectsFailsClearly(t *testing.T) {
+	rootDir := t.TempDir()
+	manifestPath := filepath.Join(rootDir, fileutil.ManifestFileName)
+	legacyManifest := "[metadata]\ntest_command = \"go test ./...\"\n"
+	if err := os.WriteFile(manifestPath, []byte(legacyManifest), fileutil.PrivateFilePerms); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed the manifest's recorded template and managed file through a fresh
+	// apply, then exercise the manifest-driven update path used by legacy projects.
+	if err := RunApply(RunContext{
+		WithFlag:        []string{"makefile"},
+		TargetPath:      rootDir,
+		ManifestPathArg: ".",
+	}, ui.NewPlainReporter(10, false)); err != nil {
+		t.Fatalf("seed legacy project with RunApply: %v", err)
+	}
+	if err := RunUpdate(RunContext{
+		TargetPath:      rootDir,
+		ManifestPathArg: ".",
+	}, ui.NewPlainReporter(10, false)); err != nil {
+		t.Fatalf("RunUpdate failed: %v", err)
+	}
+
+	generated, err := os.ReadFile(filepath.Join(rootDir, "Makefile")) //nolint:gosec // test temp path
+	if err != nil {
+		t.Fatalf("read updated Makefile: %v", err)
+	}
+	if !strings.Contains(string(generated), "No projects configured; set metadata.test_command to run root-level tests.") || !strings.Contains(string(generated), "@exit 1") {
+		t.Fatalf("legacy update should generate a clearly failing test target:\n%s", generated)
+	}
+}
+
 func TestExecuteAndFinalize_Success(t *testing.T) {
 	rootDir := t.TempDir()
 

@@ -144,17 +144,62 @@ func assertTestCommandsDefined(t *testing.T, out string) {
 	}
 }
 
-// TestMakefile_NilMetadataNoProjectsIsNeutral is a regression guard for #148:
-// a project created without a language must not render a Go test default when
-// there is no test_command metadata and no projects.
-func TestMakefile_NilMetadataNoProjectsIsNeutral(t *testing.T) {
+// TestMakefile_FreshApplyWithoutProjectsFailsClearly prevents a newly applied
+// Makefile from reporting success when there is no project or root test command.
+func TestMakefile_FreshApplyWithoutProjectsFailsClearly(t *testing.T) {
 	out := renderMakefile(t, &types.Manifest{})
+	target := makefileTestTarget(t, out)
 
-	if strings.Contains(out, "go test ./...") {
-		t.Errorf("no-project Makefile must not contain a Go test default:\n%s", out)
+	if strings.Contains(target, "go test ./...") {
+		t.Errorf("no-project test target must not run the legacy Go default:\n%s", target)
 	}
-	if !strings.Contains(out, "No projects configured; nothing to test.") {
-		t.Errorf("no-project Makefile must explain that there is nothing to test:\n%s", out)
+	if !strings.Contains(target, "No projects configured; set metadata.test_command to run root-level tests.") {
+		t.Errorf("no-project test target must explain how to configure root tests:\n%s", target)
+	}
+	if !strings.Contains(target, "@exit 1") {
+		t.Errorf("no-project test target must fail instead of reporting success:\n%s", target)
+	}
+}
+
+// TestMakefile_LegacyUpdateUsesPerProjectCommands keeps manifests created with
+// the old default test_command from running root tests instead of each project.
+func TestMakefile_LegacyUpdateUsesPerProjectCommands(t *testing.T) {
+	m := &types.Manifest{
+		Projects: []types.Project{{Name: "backend", Path: "services/backend", Language: "go"}},
+		Metadata: map[string]string{"test_command": "go test ./..."},
+	}
+	out := renderMakefile(t, m)
+	target := makefileTestTarget(t, out)
+
+	if !strings.Contains(target, "(cd services/backend && $(MAKE_TEST_COMMAND_go))") {
+		t.Errorf("legacy manifest should use the project's Go test command:\n%s", target)
+	}
+	if strings.Contains(target, "\ngo test ./...") {
+		t.Errorf("legacy test_command should not be executed as a root override:\n%s", target)
+	}
+}
+
+// TestMakefile_LegacyUpdateWithoutProjectsFailsClearly documents and protects
+// the compatibility behavior when an old manifest has no projects to test.
+func TestMakefile_LegacyUpdateWithoutProjectsFailsClearly(t *testing.T) {
+	m := &types.Manifest{Metadata: map[string]string{"test_command": "go test ./..."}}
+	target := makefileTestTarget(t, renderMakefile(t, m))
+
+	if !strings.Contains(target, "No projects configured; set metadata.test_command to run root-level tests.") || !strings.Contains(target, "@exit 1") {
+		t.Errorf("legacy no-project manifest should fail with root-test guidance:\n%s", target)
+	}
+}
+
+func TestMakefile_ExplicitRootTestCommandWorksWithoutProjects(t *testing.T) {
+	const command = "go test ./... -race"
+	m := &types.Manifest{Metadata: map[string]string{"test_command": command}}
+	target := makefileTestTarget(t, renderMakefile(t, m))
+
+	if !strings.Contains(target, command) {
+		t.Errorf("explicit root test command was ignored:\n%s", target)
+	}
+	if strings.Contains(target, "@exit 1") || strings.Contains(target, "No projects configured") {
+		t.Errorf("explicit root test command should bypass the no-project failure:\n%s", target)
 	}
 }
 
@@ -268,18 +313,21 @@ func TestMakefile_CustomLanguageWithoutTestCommandIsSafe(t *testing.T) {
 func TestMakefile_BenignProjectRendersUnchanged(t *testing.T) {
 	m := &types.Manifest{
 		Projects: []types.Project{{Name: "backend", Path: "services/backend", Language: "go"}},
-		Metadata: map[string]string{"test_command": "go test ./..."},
+		Metadata: map[string]string{"test_command": "go test ./... -race"},
 	}
 	out := renderMakefile(t, m)
+	target := makefileTestTarget(t, out)
 
 	for _, want := range []string{
 		`@echo "Building backend (go)..."`,
 		"(cd services/backend && $(MAKE_BUILD_COMMAND_go))",
-		"go test ./...",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("generated Makefile missing %q:\n%s", want, out)
 		}
+	}
+	if !strings.Contains(target, "go test ./... -race") {
+		t.Errorf("test target missing explicit root command:\n%s", target)
 	}
 }
 

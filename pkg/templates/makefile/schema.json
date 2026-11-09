@@ -9,7 +9,7 @@
     "test_command": {
       "type": "string",
       "required": false,
-      "description": "Optional override for the test target. When unset, tests run per project using language-specific commands."
+      "description": "Optional root-level test command. When unset, tests run per project using language-specific commands. The legacy default `go test ./...` is reserved for compatibility and still selects per-project commands; use a distinct command to override testing at the repository root."
     }
   }
 }

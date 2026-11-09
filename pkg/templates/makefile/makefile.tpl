@@ -10,7 +10,7 @@ help:
 	@echo "Available commands (Targets dynamically generated from scbake.toml):"
 	@echo "------------------------------------------------------------------"
 	@echo "  build         : Builds all tracked projects."
-	@echo "  test          : Runs per-project language tests, or test_command override; skips unsupported/no-project cases."
+	@echo "  test          : Runs per-project tests or an explicit root test_command; fails when no tests are configured."
 	@echo "  clean         : Cleans all tracked projects."
 	@echo "  lint          : Runs linting/formatting on all tracked projects."
 	@echo "  lint-fix      : Runs linting/formatting with auto-fix on all tracked projects."
@@ -27,7 +27,7 @@ build:
 # --- Test Target ---
 test:
 	@echo "Running tests..."
-	{{- if index .Metadata "test_command" }}
+	{{- if and (index .Metadata "test_command") (ne (index .Metadata "test_command") "go test ./...") }}
 	{{ index .Metadata "test_command" }}
 	{{- else if .Projects }}
 	{{- range .Projects }}
@@ -39,7 +39,8 @@ test:
 	{{- end }}
 	{{- end }}
 	{{- else }}
-	@echo "No projects configured; nothing to test."
+	@echo "No projects configured; set metadata.test_command to run root-level tests."
+	@exit 1
 	{{- end }}
 
 # --- Main Clean Target ---
