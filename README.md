@@ -204,9 +204,15 @@ scbake apply --with maven_linter
 ### `update`: Update a Generated Project
 
 Re-applies the managed template file writes recorded in `scbake.toml`, bringing a
-generated project up to date **without clobbering local edits**. It does not
-replay side-effecting commands or custom tasks such as license generation, file
-appends, or XML insertions.
+generated project up to date **without clobbering local edits**. It replays
+managed template and license writes, but does not replay side-effecting commands
+or custom tasks such as file appends or XML insertions.
+
+On a compliance project, `update` and `drift --repair` fetch license text from
+spdx.org when the license inputs have changed, no prior input fingerprint is
+recorded, or the managed LICENSE is missing or locally modified. If the
+recorded license inputs are unchanged and LICENSE is clean, the task skips the
+fetch, so that path works offline. Plain `drift` does not need the network.
 
 ```bash
 scbake update [--template-dir <dir>] [--conflict-strategy <strategy>] [<path>]

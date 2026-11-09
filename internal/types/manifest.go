@@ -19,6 +19,10 @@ type Manifest struct {
 	// root (e.g. "services/api/LICENSE"), so monorepo subprojects that generate
 	// the same relative filename get distinct entries instead of colliding.
 	ManagedFiles map[string]string `toml:"managed_files,omitempty"`
+	// ManagedInputs tracks the inputs used to generate managed files, allowing
+	// tasks to skip expensive or network-dependent regeneration when both inputs
+	// and on-disk files are unchanged.
+	ManagedInputs map[string]string `toml:"managed_inputs,omitempty"`
 }
 
 // Project represents a distinct code unit, like a Go backend or a React frontend.
@@ -43,11 +47,12 @@ func (m *Manifest) DeepCopy() *Manifest {
 	}
 
 	result := &Manifest{
-		SbakeVersion: m.SbakeVersion,
-		Projects:     make([]Project, len(m.Projects)),
-		Templates:    make([]Template, len(m.Templates)),
-		Metadata:     make(map[string]string),
-		ManagedFiles: make(map[string]string),
+		SbakeVersion:  m.SbakeVersion,
+		Projects:      make([]Project, len(m.Projects)),
+		Templates:     make([]Template, len(m.Templates)),
+		Metadata:      make(map[string]string),
+		ManagedFiles:  make(map[string]string),
+		ManagedInputs: make(map[string]string),
 	}
 
 	// Deep copy metadata
@@ -58,6 +63,9 @@ func (m *Manifest) DeepCopy() *Manifest {
 	// Deep copy managed files
 	for k, v := range m.ManagedFiles {
 		result.ManagedFiles[k] = v
+	}
+	for k, v := range m.ManagedInputs {
+		result.ManagedInputs[k] = v
 	}
 
 	// Deep copy projects

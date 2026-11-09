@@ -245,7 +245,7 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 func managedWriteTasks(plan []types.Task) []types.Task {
 	out := make([]types.Task, 0, len(plan))
 	for _, t := range plan {
-		if _, ok := t.(*tasks.CreateTemplateTask); ok {
+		if _, ok := t.(types.ManagedWriter); ok {
 			out = append(out, t)
 		}
 	}
@@ -412,6 +412,7 @@ func persistManifestState(
 
 	persistManifestMetadata(m, tc)
 	persistManagedFiles(m, tc)
+	persistManagedInputs(m, tc)
 
 	// We track the manifest file itself before saving.
 	// This ensures that if the Save succeeds but a subsequent step crashes (unlikely),
@@ -456,12 +457,32 @@ func persistManagedFiles(m *types.Manifest, tc types.TaskContext) {
 	}
 }
 
+// persistManagedInputs copies the managed input fingerprints recorded by tasks
+// into the manifest.
+func persistManagedInputs(m *types.Manifest, tc types.TaskContext) {
+	mergeStringMap(&m.ManagedInputs, tc.Manifest.ManagedInputs)
+}
+
 // snapshotManifestContent records a newly created manifest's bytes so rollback
 // removes it only when they are unchanged. Best-effort: a failure keeps the
 // manifest on rollback rather than risking unverified content.
 func snapshotManifestContent(tx *transaction.Manager, manifestPath string) {
 	if err := tx.SnapshotCreatedContent(manifestPath); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Could not snapshot manifest content for rollback: %v\n", err)
+	}
+}
+
+// mergeStringMap copies every entry of src into *dst, allocating *dst when it is
+// nil. A nil src leaves *dst untouched.
+func mergeStringMap(dst *map[string]string, src map[string]string) {
+	if src == nil {
+		return
+	}
+	if *dst == nil {
+		*dst = make(map[string]string, len(src))
+	}
+	for k, v := range src {
+		(*dst)[k] = v
 	}
 }
 

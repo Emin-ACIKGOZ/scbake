@@ -395,8 +395,9 @@ flags. Two properties make it safe:
   under `.scbake-base/<path>`. When both the template and the working file
   changed, `update` runs a conservative line-oriented three-way merge
   (`internal/merge`) against that base. Non-overlapping edits merge; overlaps
-  fall back to an artifact. Only `CreateTemplateTask` writes are replayed, so
-  environment commands never re-run.
+  fall back to an artifact. Managed writes implement `ManagedWriter`, so both
+`CreateTemplateTask` and `LicenseTask` are replayed; environment commands,
+append tasks, and XML insertion tasks never re-run.
 
 The base lives at the project root rather than under the ignored `.scbake/`
 directory so a normal commit carries it to a clone. The root `.gitignore` must
@@ -472,7 +473,11 @@ It opens no transaction, takes no project lock, renders no template, and never
 touches the network, so it is safe as a CI gate; it exits non-zero when any
 blocking finding remains. `--repair` delegates to `core.RunUpdate`, so detection
 and repair share one reconciliation implementation (`internal/drift`). Detection
-does not backfill a missing base; a no-op `update` does not either.
+does not backfill a missing base; a no-op `update` does not either. Because repair
+replays `LicenseTask`, a compliance project's repair fetches the license text from
+spdx.org when the license inputs changed, no prior input fingerprint is recorded,
+or LICENSE is missing or locally modified. If the inputs are unchanged and LICENSE
+is clean, the task skips the fetch; plain detection never needs the network.
 
 Detection is deliberately conservative: a locally edited file is drift even
 when `update`'s default `merge` strategy is a no-op that preserves the edit.
