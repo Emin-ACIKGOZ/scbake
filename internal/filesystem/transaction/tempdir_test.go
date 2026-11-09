@@ -32,16 +32,7 @@ func TestTempDirStartsJournalBeforeReturning(t *testing.T) {
 		t.Fatalf("journal was not created before TempDir returned: %v", err)
 	}
 
-	pending, err := ListPending(root)
-	if err != nil {
-		t.Fatalf("ListPending: %v", err)
-	}
-	if len(pending) != 1 {
-		t.Fatalf("ListPending returned %d transactions, want 1", len(pending))
-	}
-	if pending[0].Dir != tempDir {
-		t.Errorf("pending dir = %q, want %q", pending[0].Dir, tempDir)
-	}
+	assertSinglePendingDir(t, root, tempDir)
 
 	second, err := m.TempDir()
 	if err != nil {
@@ -49,6 +40,32 @@ func TestTempDirStartsJournalBeforeReturning(t *testing.T) {
 	}
 	if second != tempDir {
 		t.Errorf("TempDir is not idempotent: %q then %q", tempDir, second)
+	}
+}
+
+// assertSinglePendingDir checks that ListPending reports exactly the temp dir
+// created by TempDir. Compare by file identity, not path spelling: ListPending
+// resolves the temp directory (on macOS /var is a symlink to /private/var), and
+// Windows may return an 8.3 short name for the same directory.
+func assertSinglePendingDir(t *testing.T, root, tempDir string) {
+	t.Helper()
+	pending, err := ListPending(root)
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("ListPending returned %d transactions, want 1", len(pending))
+	}
+	pendingInfo, err := os.Stat(pending[0].Dir)
+	if err != nil {
+		t.Fatalf("stat pending dir %q: %v", pending[0].Dir, err)
+	}
+	tempInfo, err := os.Stat(tempDir)
+	if err != nil {
+		t.Fatalf("stat TempDir %q: %v", tempDir, err)
+	}
+	if !os.SameFile(pendingInfo, tempInfo) {
+		t.Errorf("pending dir = %q, want the same directory as %q", pending[0].Dir, tempDir)
 	}
 }
 
