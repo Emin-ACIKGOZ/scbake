@@ -121,7 +121,7 @@ func TestSvelteApplySymlinkedRepoRoot(t *testing.T) {
 
 	target := filepath.Join(realDir, "apps", "web")
 	assertScaffoldedSvelteFiles(t, target, "web")
-	assertManifestProject(t, filepath.Join(realDir, "scbake.toml"), "apps/web", "web")
+	assertManifestProject(t, realDir, "apps/web", "web")
 	assertNoScaffoldResidue(t, realDir)
 }
 
@@ -310,27 +310,30 @@ func assertScaffoldedSvelteFiles(t *testing.T, project, wantName string) {
 func assertScaffoldedSvelteProject(t *testing.T, project, wantName, wantPath string) {
 	t.Helper()
 	assertScaffoldedSvelteFiles(t, project, wantName)
-	assertManifestProject(t, filepath.Join(project, "scbake.toml"), wantPath, "")
+	assertManifestProject(t, project, wantPath, "")
 }
 
 // assertManifestProject checks the svelte language and project path in a
 // manifest. A non-empty wantName additionally checks the recorded project name.
-func assertManifestProject(t *testing.T, manifestPath, wantPath, wantName string) {
+func assertManifestProject(t *testing.T, project, wantPath, wantName string) {
 	t.Helper()
 
-	manifest, err := os.ReadFile(manifestPath) //nolint:gosec // test-controlled path
-	if err != nil {
-		t.Fatalf("reading %s: %v", manifestPath, err)
+	m := decodeManifest(t, project)
+	var matches int
+	for _, p := range m.Projects {
+		if p.Path != wantPath {
+			continue
+		}
+		matches++
+		if p.Language != "svelte" {
+			t.Errorf("manifest project %q language = %q, want svelte", wantPath, p.Language)
+		}
+		if wantName != "" && p.Name != wantName {
+			t.Errorf("manifest project %q name = %q, want %q", wantPath, p.Name, wantName)
+		}
 	}
-	text := string(manifest)
-	if !strings.Contains(text, `language = "svelte"`) {
-		t.Errorf("manifest does not record language svelte:\n%s", text)
-	}
-	if !strings.Contains(text, `path = "`+wantPath+`"`) {
-		t.Errorf("manifest does not record path %s:\n%s", wantPath, text)
-	}
-	if wantName != "" && !strings.Contains(text, `name = "`+wantName+`"`) {
-		t.Errorf("manifest does not record project name %s:\n%s", wantName, text)
+	if matches != 1 {
+		t.Fatalf("manifest has %d projects at path %q, want 1", matches, wantPath)
 	}
 }
 
