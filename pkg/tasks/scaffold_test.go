@@ -338,8 +338,10 @@ func TestScaffoldTaskRejectsEscapingTargetSymlink(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an escaping target symlink to be rejected")
 	}
-	if !strings.Contains(err.Error(), "security violation") || !strings.Contains(err.Error(), "resolves outside") {
-		t.Errorf("error = %v, want a symlink containment security violation", err)
+	if !strings.Contains(err.Error(), "refusing to scaffold into") ||
+		!strings.Contains(err.Error(), "path traversal rejected") ||
+		!strings.Contains(err.Error(), "resolves outside") {
+		t.Errorf("error = %v, want the preflight containment rejection", err)
 	}
 	entries, readErr := os.ReadDir(outside)
 	if readErr != nil {

@@ -88,6 +88,11 @@ func (t *ScaffoldTask) Execute(tc types.TaskContext) error {
 	if err != nil {
 		return err
 	}
+	// Fail an escaping target before starting the generator. Tracking would
+	// reject it later, but only after the child has already run.
+	if _, err := fileutil.SafePath(tc.Tx.Root(), target.lexical); err != nil {
+		return fmt.Errorf("refusing to scaffold into %s: %w", target.lexical, err)
+	}
 	staging, err := t.prepareStaging(tc, target)
 	if err != nil {
 		return err
