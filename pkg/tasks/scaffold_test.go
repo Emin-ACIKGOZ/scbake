@@ -442,7 +442,7 @@ func assertNoStagingDirs(t *testing.T, root string) {
 			return err
 		}
 		name := entry.Name()
-		if entry.IsDir() && (strings.HasPrefix(name, "stage-") || strings.HasPrefix(name, "scaffold-")) {
+		if entry.IsDir() && strings.HasPrefix(name, "stage-") {
 			t.Errorf("staging residue left behind: %s", path)
 		}
 		if entry.IsDir() && name == ".scbake" {

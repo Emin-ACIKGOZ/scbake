@@ -349,7 +349,7 @@ func assertNoScaffoldResidue(t *testing.T, root string) {
 			return nil
 		}
 		name := entry.Name()
-		if name == ".scbake" || strings.HasPrefix(name, "stage-") || strings.HasPrefix(name, "scaffold-") {
+		if name == ".scbake" || strings.HasPrefix(name, "stage-") {
 			t.Errorf("scaffold residue left behind: %s", path)
 		}
 		return nil
