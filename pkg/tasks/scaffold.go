@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/types"
@@ -198,16 +197,8 @@ func (s *scaffoldStaging) remove() {
 // is configured, verifies that it produced the expected regular file. The
 // sentinel turns a silent "canceled, wrote nothing" exit into a clear error.
 func (t *ScaffoldTask) runScaffolder(tc types.TaskContext, stagingLeaf string) error {
-	//nolint:gosec // Command and args are defined by the language handler.
-	cmd := exec.CommandContext(tc.Ctx, t.Cmd, t.Args...)
-	cmd.Dir = stagingLeaf
-	cmd.WaitDelay = commandWaitDelay
-	cmd.Env = scrubRegistryTokens(cmd.Environ())
-
-	var stderr limitedBuffer
-	cmd.Stderr = &stderr
-	if runErr := cmd.Run(); runErr != nil {
-		return commandExecutionError(tc.Ctx, t.Cmd, t.Args, runErr, &stderr)
+	if err := runCommand(tc.Ctx, t.Cmd, t.Args, stagingLeaf); err != nil {
+		return err
 	}
 
 	if t.Sentinel == "" {

@@ -117,27 +117,13 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 		return err
 	}
 
-	// The command and arguments must be carefully controlled via the manifest to prevent injection.
-	// G204: Command arguments are defined in the task manifest, which is the intended behavior
-	//nolint:gosec
-	cmd := exec.CommandContext(tc.Ctx, t.Cmd, t.Args...)
-	cmd.WaitDelay = commandWaitDelay
-
-	// Set the working directory for the command
+	// Set the working directory for the command.
+	dir := "."
 	if t.RunInTarget {
-		cmd.Dir = tc.TargetPath
-	} else {
-		cmd.Dir = "."
+		dir = tc.TargetPath
 	}
 
-	// Children must not inherit registry credentials.
-	cmd.Env = scrubRegistryTokens(cmd.Environ())
-
-	// We capture stderr to provide better error messages
-	var stderr limitedBuffer
-	cmd.Stderr = &stderr
-
-	runErr := cmd.Run()
+	runErr := runCommand(tc.Ctx, t.Cmd, t.Args, dir)
 
 	// Snapshot declared/archive destinations after the command, whether it
 	// succeeded or failed, so rollback can verify the bytes it created before
@@ -145,10 +131,27 @@ func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 	// fail because cleanup lost a hash, and the safe outcome is to keep it.
 	snapshotCreatedContent(tc, snapshotPaths)
 
-	if runErr != nil {
-		return commandExecutionError(tc.Ctx, t.Cmd, t.Args, runErr, &stderr)
-	}
+	return runErr
+}
 
+// runCommand executes an external command in dir with the repository's child
+// process policy: bounded stderr for diagnostics, registry credentials removed
+// from the environment, and WaitDelay bounding inherited pipes.
+func runCommand(ctx context.Context, name string, args []string, dir string) error {
+	// G204: Command arguments are defined by the task handler and the manifest,
+	// which is the intended behavior.
+	//nolint:gosec
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.WaitDelay = commandWaitDelay
+	cmd.Env = scrubRegistryTokens(cmd.Environ())
+
+	var stderr limitedBuffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return commandExecutionError(ctx, name, args, err, &stderr)
+	}
 	return nil
 }
 
