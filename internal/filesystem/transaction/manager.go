@@ -160,16 +160,15 @@ func (m *Manager) Root() string {
 	return m.rootPath
 }
 
-// TempDir returns the transaction's private temporary directory, starting the
-// durable journal first when necessary. It is intended for tasks that need an
-// owned staging area: paths under it are removed by Commit/Rollback together
-// with the temp dir, and a crash leaves a journal that ListPending/Recover can
-// see. Nothing under it may outlive the transaction.
+// TempDir returns the transaction's private temporary directory, starting and
+// syncing the durable journal first when necessary. It is intended for tasks
+// that need an owned staging area: Commit/Rollback remove the directory and
+// everything under it, and a crash leaves a journal that ListPending/Recover
+// can see. Nothing under it may outlive the transaction.
 //
-// The journal must be written and synced before the directory is returned so a
-// crash after this call is always visible to recovery; callers may hand the
-// path to a child process that runs before any tracked mutation. TempDir is
-// idempotent for `new`, whose journal already exists.
+// Callers may hand the path to a child process that runs before any tracked
+// mutation. TempDir is idempotent: repeated calls return the same directory,
+// and `new` already has a journal before the first call.
 func (m *Manager) TempDir() (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

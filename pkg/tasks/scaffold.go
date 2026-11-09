@@ -14,20 +14,18 @@ import (
 	"scbake/internal/util/fileutil"
 )
 
-// ScaffoldTask runs an external project generator in a fresh empty staging
-// directory and moves its top-level output into the target. It exists for
-// scaffolders such as create-vite that refuse a non-empty target: the target
-// already contains scbake.toml and .scbake, but the staging leaf is empty.
+// ScaffoldTask runs an external project generator in a fresh staging leaf and
+// moves its top-level output into the target. It is for generators such as
+// create-vite that cancel when the target is non-empty; scbake may already have
+// created scbake.toml, .scbake, or other project files there.
 //
-// The staging leaf is named after the canonical target basename so generators
-// that derive a package/project name from the cwd's basename keep the name the
-// direct invocation would have produced.
+// The staging leaf is named after the resolved target basename so generators
+// that derive a package name from the cwd produce the name a direct invocation
+// would have.
 //
-// Staging removal after a successful move is deliberately best-effort (MF1).
-// A cleanup failure is reported as a warning and never returned as a task
-// error: returning an error after the move would roll back a project that was
-// already completed. Commit/Rollback own the transaction temp dir that
-// contains the staging tree and remove it on the normal paths.
+// Staging cleanup after a successful move is best-effort; see
+// scaffoldStaging.remove. Commit/Rollback also remove the staging tree with the
+// transaction temp dir.
 type ScaffoldTask struct {
 	// Cmd and Args are the command to run (e.g. npm create vite@latest ...).
 	Cmd  string
@@ -75,12 +73,12 @@ func (t *ScaffoldTask) Description() string { return t.Desc }
 // Priority implements types.Task.
 func (t *ScaffoldTask) Priority() int { return t.TaskPrio }
 
-// Execute stages the scaffold, validates it, tracks every destination, and
-// moves the top-level entries into the target. A handled failure leaves the
-// target untouched: nothing is moved until every destination is tracked.
+// Execute stages the scaffold, validates its sentinel, preflights every
+// destination, tracks the output, and only then moves it into the target.
+// Failures before the move leave the target untouched; a partial move is undone
+// by the caller's transaction rollback.
 func (t *ScaffoldTask) Execute(tc types.TaskContext) error {
 	if tc.DryRun {
-		// Dry-run prints the task description and performs no filesystem writes.
 		return nil
 	}
 	if tc.Tx == nil {
@@ -95,9 +93,6 @@ func (t *ScaffoldTask) Execute(tc types.TaskContext) error {
 	if err != nil {
 		return err
 	}
-	// MF1: cleanup is best-effort. By the time the deferred call runs the
-	// project may already be moved into place, so a removal failure only warns
-	// and must never be converted into a task error that triggers rollback.
 	defer staging.remove()
 
 	if err := t.runScaffolder(tc, staging.leaf); err != nil {
@@ -182,8 +177,6 @@ func (t *ScaffoldTask) prepareStaging(tc types.TaskContext, target scaffoldTarge
 	}
 	staging := &scaffoldStaging{root: stagingRoot}
 
-	// Use the resolved basename so generators that derive a package name from
-	// the cwd keep the same name a direct invocation would have produced.
 	staging.leaf = filepath.Join(stagingRoot, filepath.Base(target.resolved))
 	if err := os.Mkdir(staging.leaf, fileutil.DirPerms); err != nil {
 		staging.remove()
@@ -192,11 +185,9 @@ func (t *ScaffoldTask) prepareStaging(tc types.TaskContext, target scaffoldTarge
 	return staging, nil
 }
 
-// remove best-effort deletes the staging tree. It intentionally returns no
-// error (MF1): a cleanup failure after a successful move must only warn, not
-// fail the task and roll back a completed project. Staging is inside the
-// transaction temp dir, so Commit/Rollback remove it even when this attempt
-// fails.
+// remove best-effort deletes the staging tree. It returns no error: after a
+// successful move, a cleanup failure must not fail the task and roll back the
+// completed project. Commit/Rollback remove the staging tree with the temp dir.
 func (s *scaffoldStaging) remove() {
 	if err := os.RemoveAll(s.root); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Could not remove scaffold staging %s: %v\n", s.root, err)

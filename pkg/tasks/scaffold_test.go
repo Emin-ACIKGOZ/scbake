@@ -281,9 +281,9 @@ func stageMoveFixture(t *testing.T, root string) (target, stagingLeaf string, en
 	return target, stagingLeaf, entries
 }
 
-// TestMoveScaffoldEntriesRechecksDestination covers MF2 deterministically: a
-// destination created after the preflight (the preflight-to-rename window) is
-// rejected by the per-entry recheck instead of being overwritten untracked.
+// TestMoveScaffoldEntriesRechecksDestination covers the preflight-to-rename
+// race deterministically: a destination created after preflight is rejected by
+// the per-entry recheck instead of being overwritten untracked.
 func TestMoveScaffoldEntriesRechecksDestination(t *testing.T) {
 	target, stagingLeaf, entries := stageMoveFixture(t, t.TempDir())
 
@@ -319,9 +319,9 @@ func TestMoveScaffoldEntriesRechecksDestination(t *testing.T) {
 	}
 }
 
-// TestScaffoldTaskRejectsEscapingTargetSymlink verifies that the lexical-target
-// fix preserves the security boundary: a target that is itself a symlink
-// resolving outside the transaction root is rejected before anything moves.
+// TestScaffoldTaskRejectsEscapingTargetSymlink verifies the security boundary:
+// a target that is itself a symlink resolving outside the transaction root is
+// rejected before anything moves.
 func TestScaffoldTaskRejectsEscapingTargetSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("creating symlinks requires additional privileges on Windows")
@@ -375,15 +375,14 @@ func TestScaffoldTaskDryRunWritesNothing(t *testing.T) {
 	}
 }
 
-// TestScaffoldTaskCleanupFailureIsNotFatal verifies MF1: after a successful
-// move, an undeletable staging tree only warns; it must not turn the completed
-// scaffold into a task error.
+// TestScaffoldTaskCleanupFailureIsNotFatal verifies that a cleanup failure
+// after a successful move is not fatal and does not roll back the completed
+// scaffold.
 //
 // The fixture uses directory permissions to force the failure. On systems that
 // allow the owner to remove such a tree anyway (for example when tests run as
-// root), cleanup succeeds and the test passes without exercising the warning
-// path. The production guarantee is documented on scaffoldStaging.remove and
-// at the deferred call in ScaffoldTask.Execute.
+// root), cleanup succeeds and the test passes without exercising the failure.
+// The guarantee under test is documented on scaffoldStaging.remove.
 func TestScaffoldTaskCleanupFailureIsNotFatal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permission bits do not block removal on Windows")
@@ -419,8 +418,8 @@ func TestScaffoldTaskCleanupFailureIsNotFatal(t *testing.T) {
 	}
 }
 
-// TestScaffoldTaskRejectsFilesystemRoot verifies that staging can never be
-// created at the filesystem root with a nonsensical empty basename.
+// TestScaffoldTaskRejectsFilesystemRoot verifies that a target at the
+// filesystem root is rejected before staging is created.
 func TestScaffoldTaskRejectsFilesystemRoot(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("filesystem root differs on Windows")
@@ -432,8 +431,8 @@ func TestScaffoldTaskRejectsFilesystemRoot(t *testing.T) {
 	}
 }
 
-// assertNoStagingDirs walks root and fails if any stage-* or scaffold-* directory
-// survived a successful task.
+// assertNoStagingDirs walks root and fails if staging residue or transaction
+// state (.scbake) survived a successful task.
 func assertNoStagingDirs(t *testing.T, root string) {
 	t.Helper()
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {

@@ -54,9 +54,10 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 	_, checkErr := os.Stat(packageJSONPath)
 
 	if os.IsNotExist(checkErr) {
-		// Task 1: Run 'npm create vite@latest .' in an empty staging leaf,
-		// then move the generated project into the target. create-vite refuses
-		// the target because it already contains scbake.toml and .scbake.
+		// Task 1: Run 'npm create vite@latest .' in an empty staging leaf and
+		// move the output into the target. create-vite cancels when the target
+		// is non-empty; for `new`, the target already holds scbake.toml and
+		// .scbake.
 		p, err := langSeq.Next()
 		if err != nil {
 			return nil, err
@@ -73,9 +74,8 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 			},
 			Desc:     "Run npm create vite@latest . (staged)",
 			TaskPrio: int(p), // Now 100
-			// create-vite refuses a target containing scbake.toml/.scbake, so
-			// the task scaffolds into an empty staging leaf and moves the
-			// output into the target. package.json proves it did not cancel.
+			// create-vite cancels with exit 0 and writes nothing, so
+			// package.json proves it produced a project.
 			Sentinel: packageJSONFile,
 		})
 

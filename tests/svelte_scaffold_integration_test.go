@@ -14,11 +14,11 @@ import (
 	"testing"
 )
 
-// fakeCreateViteNpm models the decisive create-vite 9.3.4 contract offline:
-// a non-empty working directory cancels successfully and writes nothing, while
-// an empty directory produces the Svelte template. `npm install` requires
-// package.json, and `npm pkg set` is accepted. The script is intentionally a
-// shell script: tests skip on Windows, where ./tests is not run in CI.
+// fakeCreateViteNpm stands in for create-vite: a non-empty working directory
+// cancels with exit 0 and writes nothing; an empty directory gets the Svelte
+// template. `npm install` requires package.json, and `npm pkg set` succeeds.
+// The fixture is a POSIX shell script, so these tests skip on Windows (./tests
+// does not run there in CI).
 const fakeCreateViteNpm = `#!/bin/sh
 set -eu
 
@@ -59,10 +59,10 @@ esac
 const svelteIssue136WantName = "sv"
 
 // TestSvelteNewScaffoldsInNonEmptyTarget is the offline regression test for
-// issue #136. The scaffold target already contains scbake.toml and .scbake by
-// the time the language handler runs; before the fix create-vite saw a
-// non-empty directory, printed "Operation canceled", exited 0, and the
-// following npm install failed with ENOENT.
+// issue #136. By the time the language handler runs, the target already
+// contains scbake.toml and .scbake; before the fix create-vite saw a non-empty
+// directory, canceled with exit 0, and the following npm install failed with
+// ENOENT.
 func TestSvelteNewScaffoldsInNonEmptyTarget(t *testing.T) {
 	skipUnlessShellFixture(t)
 
@@ -334,8 +334,8 @@ func assertManifestProject(t *testing.T, manifestPath, wantPath, wantName string
 	}
 }
 
-// assertNoScaffoldResidue fails when the transaction journal, staging tree, or
-// a top-level scaffold-* directory survived a successful run.
+// assertNoScaffoldResidue fails when transaction state (.scbake), a staging
+// directory, or another scaffold artifact survived a successful run.
 func assertNoScaffoldResidue(t *testing.T, root string) {
 	t.Helper()
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {

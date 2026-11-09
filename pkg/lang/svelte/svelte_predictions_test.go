@@ -12,7 +12,7 @@ import (
 )
 
 // TestGetTasks_ExecPredictedPaths asserts the paths declared for the opaque
-// npm install and npm-pkg-set commands. create-vite is now a ScaffoldTask,
+// npm install and npm pkg set commands. create-vite runs as a ScaffoldTask,
 // which tracks its own output instead of declaring predictions.
 func TestGetTasks_ExecPredictedPaths(t *testing.T) {
 	plan := getPlanOrFail(t, &Handler{}, filepath.Join(t.TempDir(), "app"))

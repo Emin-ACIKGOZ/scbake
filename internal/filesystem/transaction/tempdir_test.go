@@ -45,8 +45,8 @@ func TestTempDirStartsJournalBeforeReturning(t *testing.T) {
 
 // assertSinglePendingDir checks that ListPending reports exactly the temp dir
 // created by TempDir. Compare by file identity, not path spelling: ListPending
-// resolves the temp directory (on macOS /var is a symlink to /private/var), and
-// Windows may return an 8.3 short name for the same directory.
+// canonicalizes the temp directory (on macOS /var resolves to /private/var,
+// and Windows path normalization can change 8.3 short names).
 func assertSinglePendingDir(t *testing.T, root, tempDir string) {
 	t.Helper()
 	pending, err := ListPending(root)
