@@ -141,7 +141,7 @@ Each call to `seq.Next()` gives you the next available priority in your band. Ta
 
 ## Available Task Types
 
-The `pkg/tasks` package provides five reusable task types. Use them to compose your handler:
+The `pkg/tasks` package provides six reusable task types. Use them to compose your handler:
 
 ### 1. **CreateTemplateTask** - Create files from templates
 
@@ -246,6 +246,35 @@ This task:
 - ✅ Skips the append when the content is already present as a standalone block
 - ✅ Integrates with the transaction system for rollback
 - ✅ Validates paths to prevent directory traversal attacks
+
+### 6. **ScaffoldTask** - Stage a project generator
+
+Use this for generators that refuse to run in a non-empty directory. The task
+runs the command in an empty staging leaf under the transaction temp directory,
+checks a sentinel file, and moves the generated top-level entries into the
+target:
+
+```go
+plan = append(plan, &tasks.ScaffoldTask{
+	Cmd:      "npm",
+	Args:     []string{"create", "vite@latest", ".", "--", "--template", "svelte"},
+	TaskPrio: int(p),
+	Desc:     "Scaffold Svelte project",
+	Sentinel: "package.json",
+})
+```
+
+**Important fields**:
+- `Cmd` and `Args` - The generator command; no shell interpretation.
+- `Sentinel` - A path relative to the staging leaf that must exist as a regular
+  file after the command. It catches generators that exit successfully after
+  canceling without writing anything.
+- `TaskPrio` and `Desc` - The usual task ordering and progress description.
+
+The staging leaf is named after the resolved (symlink-free) target basename so
+generators that derive a package name from the working directory keep the
+expected name. The task preflights existing top-level destinations and fails
+before moving anything instead of overwriting them.
 
 ---
 

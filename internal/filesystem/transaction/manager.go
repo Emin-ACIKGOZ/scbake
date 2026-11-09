@@ -160,6 +160,24 @@ func (m *Manager) Root() string {
 	return m.rootPath
 }
 
+// TempDir returns the transaction's private temporary directory, starting and
+// syncing the durable journal first when necessary. It is intended for tasks
+// that need an owned staging area: Commit/Rollback remove the directory and
+// everything under it, and a crash leaves a journal that ListPending/Recover
+// can see. Nothing under it may outlive the transaction.
+//
+// Callers may hand the path to a child process that runs before any tracked
+// mutation. TempDir is idempotent: repeated calls return the same directory,
+// and `new` already has a journal before the first call.
+func (m *Manager) TempDir() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.startJournal(); err != nil {
+		return "", err
+	}
+	return m.tempDir, nil
+}
+
 // Commit finalizes the transaction by deleting the temporary backup directory and pruning structural scaffolding.
 // This should be called only after all tasks have succeeded.
 // After Commit, Rollback is a no-op: the transaction's changes are permanent.

@@ -527,6 +527,7 @@ Discovery is bounded by the nearest Git root: a manifest at or below that root w
 - **ExecCommandTask**: Executes shell commands with optional output tracking
 - **CreateDirTask**: Creates directories with transaction tracking
 - **InsertXMLTask**: Modifies existing XML files by inserting fragments at specified paths
+- **ScaffoldTask**: Runs a project generator in an empty staging leaf and moves its output into the target, with a sentinel check and fail-closed collision preflight
 
 ### Example: Modifying Existing XML Files
 

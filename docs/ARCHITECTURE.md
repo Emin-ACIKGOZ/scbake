@@ -68,7 +68,7 @@ type Task interface {
 }
 ```
 
-**Five built-in task types** (in `pkg/tasks/`):
+**Six built-in task types** (in `pkg/tasks/`):
 
 | Type | Purpose | Example |
 |------|---------|---------|
@@ -77,6 +77,7 @@ type Task interface {
 | **ExecCommandTask** | Run shell commands | `go mod init` |
 | **CreateDirTask** | Create directory structure | Create `src/` directory |
 | **InsertXMLTask** | Insert XML into existing files | Add plugin to `pom.xml` |
+| **ScaffoldTask** | Run a generator in an empty staging leaf, then move its output into the target | Scaffold a Vite + Svelte project |
 
 **Key insight**: Tasks are **self-contained operations** with their own error handling; file tasks integrate with transaction tracking.
 
@@ -529,7 +530,8 @@ scbake/
 │       ├── append_file.go           # AppendFileTask
 │       ├── exec_command.go          # ExecCommandTask
 │       ├── create_directory.go      # CreateDirTask
-│       └── insert_xml.go            # InsertXMLTask
+│       ├── insert_xml.go            # InsertXMLTask
+│       └── scaffold.go              # ScaffoldTask
 └── docs/                            # Documentation
     ├── EXTENDING.md                 # Extension guide
     └── ARCHITECTURE.md              # This file

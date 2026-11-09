@@ -54,13 +54,15 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 	_, checkErr := os.Stat(packageJSONPath)
 
 	if os.IsNotExist(checkErr) {
-		// Task 1: Run 'npm create vite@latest .' inside the target directory.
-		// This initializes the project into the existing (empty) directory.
+		// Task 1: Run 'npm create vite@latest .' in an empty staging leaf and
+		// move the output into the target. create-vite cancels when the target
+		// is non-empty; for `new`, the target already holds scbake.toml and
+		// .scbake.
 		p, err := langSeq.Next()
 		if err != nil {
 			return nil, err
 		}
-		plan = append(plan, &tasks.ExecCommandTask{
+		plan = append(plan, &tasks.ScaffoldTask{
 			Cmd: npmCmd,
 			Args: []string{
 				"create",
@@ -70,18 +72,11 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 				"--template",
 				"svelte",
 			},
-			Desc:     "Run npm create vite@latest .",
+			Desc:     "Run npm create vite@latest . (staged)",
 			TaskPrio: int(p), // Now 100
-			// create-vite writes these top-level entries when package.json is
-			// absent. Declaring the files lets rollback restore same-named
-			// pre-existing content. A created directory is removed only when
-			// empty, so a populated one is kept as residue.
-			PredictedCreated: []string{
-				".gitignore", "index.html", "jsconfig.json", packageJSONFile,
-				"README.md", "svelte.config.js", "vite.config.js",
-				"public", "src", ".vscode",
-			},
-			RunInTarget: true, // Runs inside targetPath
+			// create-vite cancels with exit 0 and writes nothing, so
+			// package.json proves it produced a project.
+			Sentinel: packageJSONFile,
 		})
 
 		// Task 2: Run 'npm install'
