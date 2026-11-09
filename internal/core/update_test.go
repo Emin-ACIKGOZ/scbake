@@ -4,11 +4,14 @@
 package core
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"scbake/internal/manifest"
@@ -18,7 +21,8 @@ import (
 	"scbake/pkg/templates/compliance"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/mitchellh/go-spdx"
 )
 
 // TestResolveUpdateSelection verifies I6: the manifest reproduces exactly the
@@ -102,6 +106,46 @@ func TestManagedWriteTasks_KeepsLicenseTask(t *testing.T) {
 	}
 }
 
+// fakeSPDX answers SPDX lookups from memory, so core tests never reach spdx.org.
+// When fail is set, every request returns an error, as an offline machine would.
+type fakeSPDX struct {
+	calls int
+	fail  bool
+}
+
+// RoundTrip implements http.RoundTripper.
+func (f *fakeSPDX) RoundTrip(req *http.Request) (*http.Response, error) {
+	f.calls++
+	if f.fail {
+		return nil, errors.New("network unavailable in test: " + req.URL.String())
+	}
+	id := strings.TrimSuffix(path.Base(req.URL.Path), ".json")
+	body, err := json.Marshal(spdx.LicenseInfo{
+		ID:   id,
+		Text: id + " License\n\nCopyright <year> <copyright holder>\n",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Request:    req,
+	}, nil
+}
+
+// installFakeSPDX routes spdx.DefaultClient through a fakeSPDX for the test and
+// restores the real client afterwards.
+func installFakeSPDX(t *testing.T) *fakeSPDX {
+	t.Helper()
+	f := &fakeSPDX{}
+	previous := spdx.DefaultClient
+	spdx.DefaultClient = &spdx.Client{HTTP: &http.Client{Transport: f}}
+	t.Cleanup(func() { spdx.DefaultClient = previous })
+	return f
+}
+
 // runManagedWrites executes the tasks that `update` keeps, the same way
 // `update` does, against root with the given conflict strategy.
 func runManagedWrites(t *testing.T, root string, m *types.Manifest, strategy string, plan []types.Task) error {
@@ -119,6 +163,7 @@ func runManagedWrites(t *testing.T, root string, m *types.Manifest, strategy str
 // TestUpdateRestoresDeletedLicense is the end-to-end regression for #142: after
 // LICENSE is deleted, the update/repair path must select LicenseTask and recreate it.
 func TestUpdateRestoresDeletedLicense(t *testing.T) {
+	installFakeSPDX(t)
 	root := t.TempDir()
 	m := &types.Manifest{Metadata: map[string]string{"license": "MIT", "copyright_holder": "Acme"}}
 	plan := []types.Task{
@@ -146,6 +191,7 @@ func TestUpdateRestoresDeletedLicense(t *testing.T) {
 // TestUpdateLicenseHandEditFollowsConflictStrategy verifies that a hand-edited
 // LICENSE is handled by the same conflict strategies as other managed files.
 func TestUpdateLicenseHandEditFollowsConflictStrategy(t *testing.T) {
+	installFakeSPDX(t)
 	const edited = "my own license text\n"
 	plan := []types.Task{&compliance.LicenseTask{TaskPrio: 100}}
 
@@ -192,6 +238,7 @@ func TestUpdateLicenseHandEditFollowsConflictStrategy(t *testing.T) {
 // `update` and `drift --repair` use) with the default merge strategy: a changed
 // metadata.license must be applied to the existing LICENSE.
 func TestRunUpdateAppliesChangedLicense(t *testing.T) {
+	installFakeSPDX(t)
 	root := t.TempDir()
 	m := &types.Manifest{
 		Templates: []types.Template{{Name: "compliance", Path: "."}},
@@ -233,60 +280,58 @@ func TestRunUpdateAppliesChangedLicense(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), "Apache License") {
+	if !strings.Contains(string(got), "Apache-2.0 License") {
 		t.Fatalf("LICENSE was not updated to Apache-2.0; starts with %q", firstLine(string(got)))
 	}
 }
 
-func TestRunUpdateSkipsSPDXFetchForCleanUnchangedLicenseOffline(t *testing.T) {
-	for _, dryRun := range []bool{false, true} {
-		t.Run(fmt.Sprintf("dry-run=%t", dryRun), func(t *testing.T) {
-			root := t.TempDir()
-			licenseText := []byte("previously generated, clean LICENSE\n")
-			year := time.Now().Year()
-			inputHash := sha256.Sum256([]byte(fmt.Sprintf("MIT\x00Acme\x00%d", year)))
-			m := &types.Manifest{
-				Templates: []types.Template{{Name: "compliance", Path: "."}},
-				Metadata:  map[string]string{"license": "MIT", "copyright_holder": "Acme"},
-				ManagedFiles: map[string]string{
-					"LICENSE": tasks.HashContent(licenseText),
-				},
-				ManagedInputs: map[string]string{
-					"compliance.LICENSE": hex.EncodeToString(inputHash[:]),
-				},
-			}
-			if err := manifest.Save(m, root); err != nil {
-				t.Fatalf("manifest.Save: %v", err)
-			}
-			if err := os.WriteFile(filepath.Join(root, "LICENSE"), licenseText, 0o600); err != nil {
-				t.Fatal(err)
-			}
+// TestUpdateAndRepairOfflineOnCleanComplianceProject is the offline check for
+// #142: once a compliance project's LICENSE is recorded, update and drift
+// --repair (both run RunUpdate) must succeed with no SPDX request, including
+// under --dry-run. The network stub fails every request, so any fetch errors.
+func TestUpdateAndRepairOfflineOnCleanComplianceProject(t *testing.T) {
+	net := installFakeSPDX(t)
+	root := t.TempDir()
+	m := &types.Manifest{
+		Templates: []types.Template{{Name: "compliance", Path: "."}},
+		Metadata:  map[string]string{"license": "MIT", "copyright_holder": "Acme"},
+	}
+	if err := manifest.Save(m, root); err != nil {
+		t.Fatalf("manifest.Save: %v", err)
+	}
+	rc := RunContext{TargetPath: root, ManifestPathArg: ".", ConflictStrategy: types.ConflictMerge}
 
-			// If LicenseTask attempts its network lookup, the local-only proxy makes
-			// the test fail deterministically instead of depending on external access.
-			t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
-			t.Setenv("https_proxy", "http://127.0.0.1:1")
-			before, err := os.ReadFile(filepath.Join(root, "LICENSE")) //nolint:gosec // test temp directory
-			if err != nil {
-				t.Fatal(err)
-			}
-			rc := RunContext{
-				TargetPath:       root,
-				ManifestPathArg:  ".",
-				ConflictStrategy: types.ConflictMerge,
-				DryRun:           dryRun,
-			}
-			if err := RunUpdate(rc, ui.NewPlainReporter(1, dryRun)); err != nil {
-				t.Fatalf("RunUpdate should reuse clean LICENSE offline: %v", err)
-			}
-			after, err := os.ReadFile(filepath.Join(root, "LICENSE")) //nolint:gosec // test temp directory
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(after) != string(before) {
-				t.Fatalf("unchanged license was modified: got %q, want %q", after, before)
-			}
-		})
+	// Online first run generates LICENSE and records its managed_files and
+	// managed_inputs, the state an offline run depends on.
+	if err := RunUpdate(rc, ui.NewPlainReporter(1, false)); err != nil {
+		t.Fatalf("online RunUpdate: %v", err)
+	}
+	if net.calls == 0 {
+		t.Fatal("online RunUpdate did not use the SPDX client; stub is not in effect")
+	}
+	licensePath := filepath.Join(root, "LICENSE")
+	before, err := os.ReadFile(licensePath) // #nosec G304 -- test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	net.fail = true
+	net.calls = 0
+	for _, dryRun := range []bool{false, true} {
+		rc.DryRun = dryRun
+		if err := RunUpdate(rc, ui.NewPlainReporter(1, dryRun)); err != nil {
+			t.Fatalf("offline RunUpdate (dry-run=%t) on clean project: %v", dryRun, err)
+		}
+	}
+	if net.calls != 0 {
+		t.Fatalf("clean offline runs made %d SPDX requests, want 0", net.calls)
+	}
+	after, err := os.ReadFile(licensePath) // #nosec G304 -- test-controlled path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("clean LICENSE was modified offline")
 	}
 }
 
