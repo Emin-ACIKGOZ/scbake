@@ -18,8 +18,9 @@ import (
 // 2. Restores backed-up files (overwriting current state).
 // 3. Deletes the temp directory and structural scaffolding.
 //
-// After a successful Commit the rollback is disabled: the transaction's
-// changes are permanent and Rollback is a no-op.
+// Once Commit publishes the commit marker, rollback is disabled: the transaction's
+// changes are permanent and Rollback is a no-op, including when Commit returns
+// ErrCommitted.
 func (m *Manager) Rollback() error {
 	return m.RollbackContext(context.Background())
 }
