@@ -312,8 +312,11 @@ func TestCommit_Cleanup(t *testing.T) {
 }
 
 // blockTempDirRemoval makes os.RemoveAll(dir) fail until the returned release
-// function is called. On Windows an open file handle blocks deletion; elsewhere
-// the directory is made read-only so its entries cannot be unlinked.
+// function is called. On Windows an open file handle blocks deletion of one
+// backup, so RemoveAll deletes the other entries first. Elsewhere the parent
+// directory is made read-only: RemoveAll can unlink the entries inside dir but
+// cannot remove dir itself. Either way the failure happens after the commit
+// marker is published, so Commit reports ErrCommitted.
 func blockTempDirRemoval(t *testing.T, dir string) func() {
 	t.Helper()
 
@@ -336,10 +339,16 @@ func blockTempDirRemoval(t *testing.T, dir string) func() {
 		return func() { _ = held.Close() }
 	}
 
-	if err := os.Chmod(dir, 0o500); err != nil { // #nosec G302 -- deliberately removes write permission for this test
-		t.Fatalf("failed to make %s read-only: %v", dir, err)
+	parent := filepath.Dir(dir)
+	info, err := os.Stat(parent)
+	if err != nil {
+		t.Fatalf("failed to stat %s: %v", parent, err)
 	}
-	return func() { _ = os.Chmod(dir, 0o700) } // #nosec G302 -- restore directory write access after the test
+	origMode := info.Mode().Perm()
+	if err := os.Chmod(parent, 0o500); err != nil { // #nosec G302 -- deliberately removes write permission for this test
+		t.Fatalf("failed to make %s read-only: %v", parent, err)
+	}
+	return func() { _ = os.Chmod(parent, origMode) } // #nosec G302 -- restore the parent's original mode after the test
 }
 
 // TestCommit_CleanupFailureAfterMarkerIsCommittedWithWarning is a regression
@@ -378,6 +387,61 @@ func TestCommit_CleanupFailureAfterMarkerIsCommittedWithWarning(t *testing.T) {
 	}
 	if string(got) != "modified" {
 		t.Errorf("Rollback after committed Commit: got %q, want %q (changes must stay permanent)", got, "modified")
+	}
+}
+
+// TestCommit_HalfDeletedCleanupStaysCommitted covers a cleanup that fails after
+// some backups were already removed. Once the commit marker is published, the
+// transaction is committed even though part of the backup directory is gone:
+// Commit reports ErrCommitted, Rollback is a no-op, and no tracked file is
+// restored, including the files whose backups were deleted.
+func TestCommit_HalfDeletedCleanupStaysCommitted(t *testing.T) {
+	rootDir := t.TempDir()
+	fileA := filepath.Join(rootDir, "a.txt")
+	fileB := filepath.Join(rootDir, "b.txt")
+	createFile(t, fileA, "original-a", fileutil.FilePerms)
+	createFile(t, fileB, "original-b", fileutil.FilePerms)
+
+	tx, err := New(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{fileA, fileB} {
+		if err := tx.Track(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("modified-"+filepath.Base(path)), fileutil.FilePerms); err != nil {
+			t.Fatal(err)
+		}
+	}
+	txDir := tx.tempDir
+
+	release := blockTempDirRemoval(t, txDir)
+	commitErr := tx.Commit()
+	release()
+	if !errors.Is(commitErr, ErrCommitted) {
+		t.Fatalf("Commit error = %v, want ErrCommitted", commitErr)
+	}
+	if _, err := os.Stat(txDir); err != nil {
+		t.Fatalf("expected the half-deleted transaction dir to remain after failed cleanup: %v", err)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback after committed Commit returned error: %v", err)
+	}
+	assertFileContent(t, fileA, "modified-a.txt")
+	assertFileContent(t, fileB, "modified-b.txt")
+}
+
+// assertFileContent fails the test unless the file at path holds want.
+func assertFileContent(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path) // #nosec G304 -- paths are created under t.TempDir with fixed names
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Errorf("%s: got %q, want %q (changes must stay permanent)", filepath.Base(path), got, want)
 	}
 }
 

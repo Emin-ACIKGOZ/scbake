@@ -76,8 +76,8 @@ type Manager struct {
 	removeRootOnRecovery bool
 
 	// committed records that the transaction was finalized with Commit().
-	// After a commit, Rollback() must be a no-op: the deferred rollback safety
-	// net (RunApply) runs after Commit() even on success.
+	// Once the commit marker is published, Rollback() must be a no-op: the
+	// deferred rollback safety net (RunApply) runs after Commit() even on success.
 	committed bool
 }
 
@@ -180,7 +180,9 @@ func (m *Manager) TempDir() (string, error) {
 
 // Commit finalizes the transaction by deleting the temporary backup directory and pruning structural scaffolding.
 // This should be called only after all tasks have succeeded.
-// After Commit, Rollback is a no-op: the transaction's changes are permanent.
+// Once Commit publishes the commit marker, Rollback is a no-op: the transaction's
+// changes are permanent, even if Commit then returns ErrCommitted. If Commit
+// fails before the marker is published, Rollback still restores tracked files.
 func (m *Manager) Commit() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
