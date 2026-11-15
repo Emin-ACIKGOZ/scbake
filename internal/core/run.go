@@ -87,17 +87,37 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	})
 }
 
+// loadManifestForRun resolves the project root and manifest for a run. A
+// dry-run `new` has not created its project directory yet, so it plans against
+// an empty manifest rooted at the directory the real run would create; loading
+// a parent manifest would leak projects, metadata, or an invalid path into the
+// preview.
+func loadManifestForRun(rc RunContext) (*types.Manifest, string, error) {
+	if rc.NewProject && rc.DryRun {
+		root, err := filepath.Abs(rc.TargetPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to resolve target path: %w", err)
+		}
+		return &types.Manifest{SbakeVersion: manifest.DefaultSbakeVersion}, root, nil
+	}
+	m, root, err := manifest.LoadWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
+		AllowAncestorSearch: rc.AllowAncestorSearch,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
+	}
+	return m, root, nil
+}
+
 // runApply is RunApply without the root lock so RunUpdate can share one lock
-// across its manifest load and the nested apply.
+// around the initial manifest load and the apply run.
 func runApply(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
 	// 1. Root Discovery & Manifest Load
-	m, rootPath, err := manifest.LoadWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
-		AllowAncestorSearch: rc.AllowAncestorSearch,
-	})
+	m, rootPath, err := loadManifestForRun(rc)
 	if err != nil {
-		return fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
+		return err
 	}
 
 	// 2. Initialize Transaction Engine
@@ -801,6 +821,17 @@ func CheckLangPrerequisites(langFlag string) error {
 	return nil
 }
 
+// projectNameSource returns the value a generated manifest's project name is
+// derived from. For `new`, the manifest path stays "." while the directory
+// being created supplies the name; a real run has changed into it, and a dry
+// run plans against the relative project name.
+func projectNameSource(rc RunContext) string {
+	if rc.NewProject {
+		return rc.TargetPath
+	}
+	return rc.ManifestPathArg
+}
+
 // handleLangFlag processes the --lang flag, adding language tasks and project info.
 func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *manifestChanges) (string, error) {
 	// `update` only writes managed files, so language toolchains (go, npm,
@@ -831,7 +862,13 @@ func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *m
 	stampTemplateName(langTasks, rc.LangFlag)
 	plan.Tasks = append(plan.Tasks, langTasks...)
 
-	projectName, err := util.SanitizeModuleName(rc.ManifestPathArg)
+	// For `new`, the manifest's project path stays "." (it is relative to the
+	// project root), but the project name must come from the directory being
+	// created. A real run has changed into that directory, so its TargetPath is
+	// "."; a dry run passes the relative project name instead. Deriving the name
+	// from TargetPath in both cases keeps the preview and the generated manifest
+	// in agreement.
+	projectName, err := util.SanitizeModuleName(projectNameSource(rc))
 	if err != nil {
 		return "", fmt.Errorf("could not determine project name: %w", err)
 	}

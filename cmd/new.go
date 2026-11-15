@@ -153,6 +153,16 @@ func validateNewSelection() (map[string]string, string, error) {
 	return setVars, resolved, nil
 }
 
+// newTargetPath returns the planning path for a new project. A real run has
+// already changed into the project, so "." is its context; a dry run has not
+// created the directory, so it plans against the relative project name.
+func newTargetPath(projectName string) string {
+	if dryRun {
+		return projectName
+	}
+	return "."
+}
+
 // runNew coordinates the project directory setup and delegates template application to the core engine.
 func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 	// Reject traversal or absolute project names before touching the filesystem
@@ -174,12 +184,17 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 	}
 	defer restoreWD()
 
-	// Delegate template and language pack application to the core executor
+	// Delegate template and language pack application to the core executor.
+	// A real run has already changed into the new project, so "." is its
+	// context. A dry run has not created or entered the directory, so plan
+	// against the relative project name instead of the parent directory; core
+	// resolves it to an absolute root only for consistency checks.
+	targetPath := newTargetPath(projectName)
 	reporter.Step("🚀", "Applying templates...")
 	rc := core.RunContext{
 		LangFlag:            newLangFlag,
 		WithFlag:            newWithFlag,
-		TargetPath:          ".",
+		TargetPath:          targetPath,
 		DryRun:              dryRun,
 		Force:               force,
 		ConflictStrategy:    newConflictStrategyFlag,
