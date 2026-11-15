@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"scbake/internal/templateregistry"
+	"scbake/pkg/lang"
+	"scbake/pkg/templates"
 
 	"github.com/spf13/cobra"
 )
@@ -118,14 +120,27 @@ var pullCmd = &cobra.Command{
 	Use:   "pull <name> [--registry <registry>]",
 	Short: "Pull a template from a registry",
 	Long: `Downloads a template archive from a registry and caches it locally.
+Only built-in tooling templates and language packs can be pulled: a registry
+overrides files belonging to a name scbake already knows and cannot add new
+names. Use 'scbake list templates' or 'scbake list langs' to see valid names.
 Use --registry to specify which registry to pull from.
 Authentication uses the stored token or the SCBAKE_REGISTRY_TOKEN_<NAME> env var.
-The template is then available as an override for scbake new/apply.`,
+Pulled files are used as overrides by handlers that read template files; the
+git, svelte, and spring handlers currently scaffold without overridable
+templates.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		templateName := args[0]
 		if err := templateregistry.ValidateName(templateName); err != nil {
 			return fmt.Errorf("invalid template name: %w", err)
+		}
+		if _, err := templates.GetHandler(templateName); err != nil {
+			if _, langErr := lang.GetHandler(templateName); langErr != nil {
+				return fmt.Errorf(
+					"cannot pull %q: registries only override built-in templates and language packs, they cannot add new names",
+					templateName,
+				)
+			}
 		}
 		if pullRegistryName != "" {
 			if err := templateregistry.ValidateName(pullRegistryName); err != nil {

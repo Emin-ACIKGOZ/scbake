@@ -77,7 +77,7 @@ graph LR
   Override any embedded `.tpl` file with your own version by passing `--template-dir` or setting the `SCBAKE_TEMPLATE_DIR` environment variable. Files in the override directory shadow the compiled-in defaults, enabling team-specific customizations without recompiling.
 
 - **Private Template Registries**  
-  Define named remote registries to host and distribute team templates. Use `scbake template registry add` to register a source, then `scbake template pull` to cache templates locally. The resolution chain checks **local overrides → registry cache → embedded defaults**, so you can layer customizations at every level.
+  Define named remote registries to host and distribute team templates. Use `scbake template registry add` to register a source, then `scbake template pull` to cache templates locally. The resolution chain checks **local overrides → registry cache → embedded defaults**, so you can layer customizations at every level. Registries can override files of built-in templates and language packs, but they cannot add new template or language names.
 
 - **Template Schema & Input Validation**  
   Every template can declare its expected inputs in a `schema.json` embedded alongside its templates. Before a single task executes, scbake validates the manifest metadata and `--set` flags against all selected templates' schemas, catching missing required variables early.
@@ -455,11 +455,13 @@ scbake template registry list
 
 #### `template pull`: Cache Templates Locally
 
-Downloads a template archive from a registry to the local cache (`~/.cache/scbake/templates/`), making it available as an override for `scbake new/apply`.
+Downloads a template archive from a registry to the local cache (`~/.cache/scbake/templates/`), making its files available as an override for `scbake new/apply`.
 
 ```bash
 scbake template pull <name> [--registry <name>]
 ```
+
+Only built-in tooling template and language-pack names can be pulled (see `scbake list templates` and `scbake list langs`). A registry overrides files belonging to those names; it cannot add new template or language names. Pulls only take effect for handlers that read template files: the `git`, `svelte`, and `spring` handlers currently scaffold without overridable templates.
 
 If `--registry` is omitted, all configured registries are tried in order.
 
