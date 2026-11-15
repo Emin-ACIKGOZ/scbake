@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"scbake/internal/templateregistry"
 	"scbake/internal/testutil"
 	"strings"
 	"sync/atomic"
@@ -104,5 +105,97 @@ func TestTemplatePull_AllowsLanguagePackName(t *testing.T) {
 	cachePath := filepath.Join(registryCacheRoot(t), "local", "go")
 	if _, statErr := os.Stat(cachePath); statErr != nil {
 		t.Errorf("pulled language pack missing from cache at %s: %v", cachePath, statErr)
+	}
+}
+
+// TestPull_ReportsCacheHit is a regression test for issue #164: a pull served
+// from a valid cache must say so instead of claiming the template was pulled
+// again, and it must not make a request. It covers both the explicit
+// --registry branch and the all-registries scan branch.
+func TestPull_ReportsCacheHit(t *testing.T) { //nolint:cyclop // assertion-heavy regression test
+	tests := []struct {
+		name        string
+		pullArgs    []string
+		wantFetched string
+		wantCached  string
+	}{
+		{
+			name:        "explicit registry",
+			pullArgs:    []string{"template", "pull", "go", "--registry", "acme"},
+			wantFetched: `Pulled template "go" from registry "acme"` + "\n",
+			wantCached:  `Template "go" from registry "acme" is up to date (cached)` + "\n",
+		},
+		{
+			name:        "registry scan",
+			pullArgs:    []string{"template", "pull", "go"},
+			wantFetched: `Pulled template "go" from registry "acme"` + "\n",
+			wantCached:  `Template "go" from registry "acme" is up to date (cached)` + "\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateXDGDirs(t)
+			resetFlags()
+			t.Cleanup(resetFlags)
+
+			var requests atomic.Int32
+			var served atomic.Value
+			served.Store("old body")
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				content, _ := served.Load().(string)
+				_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": content}))
+			}))
+			defer srv.Close()
+
+			m, err := templateregistry.NewManager()
+			if err != nil {
+				t.Fatalf("NewManager failed: %v", err)
+			}
+			if err := m.Add("acme", srv.URL, "", "", ""); err != nil {
+				t.Fatalf("Add failed: %v", err)
+			}
+			cachedFile := filepath.Join(templateregistry.TemplateCachePath(m.CacheDir(), "acme", "go"), "main.go.tpl")
+
+			out := captureStdout(t, func() {
+				if err := executeCLI(tt.pullArgs...); err != nil {
+					t.Errorf("first pull failed: %v", err)
+				}
+			})
+			if out != tt.wantFetched {
+				t.Errorf("first pull output = %q, want %q", out, tt.wantFetched)
+			}
+			if got := requests.Load(); got != 1 {
+				t.Fatalf("first pull made %d requests, want 1", got)
+			}
+
+			// Change what the server would serve. A cache hit must not fetch it.
+			served.Store("new body")
+
+			out = captureStdout(t, func() {
+				if err := executeCLI(tt.pullArgs...); err != nil {
+					t.Errorf("second pull failed: %v", err)
+				}
+			})
+			if out != tt.wantCached {
+				t.Errorf("second pull output = %q, want %q", out, tt.wantCached)
+			}
+			if strings.Contains(out, "Pulled") {
+				t.Errorf("cache hit must not claim the template was pulled: %q", out)
+			}
+			if got := requests.Load(); got != 1 {
+				t.Errorf("cache hit made %d total requests, want 1", got)
+			}
+
+			//nolint:gosec // test temp directory
+			content, err := os.ReadFile(cachedFile)
+			if err != nil {
+				t.Fatalf("reading cached template failed: %v", err)
+			}
+			if string(content) != "old body" {
+				t.Errorf("cached content = %q, want the original body %q", content, "old body")
+			}
+		})
 	}
 }

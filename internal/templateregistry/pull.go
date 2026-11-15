@@ -34,24 +34,27 @@ const (
 // Pull downloads a template from a registry and caches it locally.
 // Uses the registry's stored token (overridable via SCBAKE_REGISTRY_TOKEN_<NAME> env var).
 func (m *Manager) Pull(registryName, templateName string) error {
-	return m.PullContext(context.Background(), registryName, templateName)
+	_, err := m.PullContext(context.Background(), registryName, templateName)
+	return err
 }
 
-// PullContext is Pull with a caller-supplied cancellation context.
-func (m *Manager) PullContext(ctx context.Context, registryName, templateName string) error {
+// PullContext is Pull with a caller-supplied cancellation context. It reports
+// fetched=true when a download happened and fetched=false when a valid cached
+// copy was reused (in which case no request is made).
+func (m *Manager) PullContext(ctx context.Context, registryName, templateName string) (bool, error) {
 	if err := ValidateName(registryName); err != nil {
-		return fmt.Errorf("invalid registry name: %w", err)
+		return false, fmt.Errorf("invalid registry name: %w", err)
 	}
 	if err := ValidateName(templateName); err != nil {
-		return fmt.Errorf("invalid template name: %w", err)
+		return false, fmt.Errorf("invalid template name: %w", err)
 	}
 
 	registry := m.Get(registryName)
 	if registry == nil {
-		return fmt.Errorf("registry %q not found", registryName)
+		return false, fmt.Errorf("registry %q not found", registryName)
 	}
 	if err := validateSubdirectory(registry.Subdirectory); err != nil {
-		return err
+		return false, err
 	}
 
 	token := registry.Token
@@ -89,6 +92,7 @@ func (m *Manager) PullFromURL(registryName, templateName, downloadURL, token str
 }
 
 // PullFromURLContext is PullFromURL with a caller-supplied cancellation context.
+// The fetched result is discarded to keep PullFromURL's signature stable.
 func (m *Manager) PullFromURLContext(
 	ctx context.Context,
 	registryName, templateName, downloadURL, token string,
@@ -110,7 +114,8 @@ func (m *Manager) PullFromURLContext(
 		templateName: templateName,
 		source:       cacheSourceKey(downloadURL),
 	}
-	return m.pullFromURL(pullCtx)
+	_, err := m.pullFromURL(pullCtx)
+	return err
 }
 
 type pullRequest struct {
@@ -125,13 +130,16 @@ type pullRequest struct {
 	source       string
 }
 
-func (m *Manager) pullFromURL(pr pullRequest) error {
+// pullFromURL downloads and caches the template unless a valid cache entry
+// already exists. It reports fetched=false for a cache hit, which makes no
+// network request, and fetched=true after a download is extracted and recorded.
+func (m *Manager) pullFromURL(pr pullRequest) (bool, error) {
 	if pr.ctx == nil {
 		pr.ctx = context.Background()
 	}
 	manifestPath := TemplateManifestPath(m.cacheDir, pr.registryName, pr.templateName)
 	if err := m.validatePull(pr, manifestPath); err != nil {
-		return err
+		return false, err
 	}
 
 	// A cache hit is only trusted when the directory exists, its contents still
@@ -140,14 +148,17 @@ func (m *Manager) pullFromURL(pr pullRequest) error {
 	// hash mismatch, or a config change) is treated as a miss and re-downloaded.
 	// Manifests written before provenance was recorded re-pull once.
 	if cacheIsValid(pr, manifestPath) {
-		return nil
+		return false, nil
 	}
 
 	// Do not touch the existing cache or manifest yet: a transient download or
 	// extraction failure must leave a previously valid cache intact.
 	// extractToCache stages the download in a temp directory and only replaces
 	// destDir once extraction has fully succeeded.
-	return m.downloadAndCache(pr, manifestPath)
+	if err := m.downloadAndCache(pr, manifestPath); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // validatePull checks the request's cache configuration, names, and

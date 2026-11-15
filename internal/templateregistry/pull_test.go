@@ -14,6 +14,7 @@ import (
 	"scbake/internal/testutil"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -334,6 +335,62 @@ func TestDoDownload_ErrorRedactsControlCharCredentials(t *testing.T) {
 		if strings.Contains(err.Error(), secret) {
 			t.Errorf("error leaks credentials (%q): %v", secret, err)
 		}
+	}
+}
+
+// TestPullContext_ReportsCacheHit verifies that PullContext distinguishes a
+// download from a cache hit: the first call fetches, while the second reuses
+// the valid cache without a request and without replacing the cached body.
+func TestPullContext_ReportsCacheHit(t *testing.T) {
+	var requests atomic.Int32
+	var served atomic.Value
+	served.Store("old body")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		content, _ := served.Load().(string)
+		_, _ = w.Write(testutil.CreateTarGz(map[string]string{"main.go.tpl": content}))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), filepath.Join(dir, "cache"))
+	if err := m.Add("acme", srv.URL, "", "", ""); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	fetched, err := m.PullContext(context.Background(), "acme", "go-api")
+	if err != nil {
+		t.Fatalf("first PullContext failed: %v", err)
+	}
+	if !fetched {
+		t.Error("first PullContext reported fetched=false, want true")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("first PullContext made %d requests, want 1", got)
+	}
+
+	// A cache hit must not fetch this changed body.
+	served.Store("new body")
+
+	fetched, err = m.PullContext(context.Background(), "acme", "go-api")
+	if err != nil {
+		t.Fatalf("second PullContext failed: %v", err)
+	}
+	if fetched {
+		t.Error("second PullContext reported fetched=true, want false for a cache hit")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("cache hit made %d total requests, want 1", got)
+	}
+
+	cachedFile := filepath.Join(TemplateCachePath(m.cacheDir, "acme", "go-api"), "main.go.tpl")
+	//nolint:gosec // test temp directory
+	content, err := os.ReadFile(cachedFile)
+	if err != nil {
+		t.Fatalf("reading cached template failed: %v", err)
+	}
+	if string(content) != "old body" {
+		t.Errorf("cached content = %q, want the original body %q", content, "old body")
 	}
 }
 

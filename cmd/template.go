@@ -124,6 +124,9 @@ Only built-in tooling templates and language packs can be pulled: a registry
 overrides files belonging to a name scbake already knows and cannot add new
 names. Use 'scbake list templates' or 'scbake list langs' to see valid names.
 Use --registry to specify which registry to pull from.
+A pull makes a network request only when the cached copy is missing, invalid,
+or recorded for a different version or source URL; when a valid cached copy
+exists it is reported as up to date and no request is made. There is no --refresh flag; remove the cache to force a fetch.
 Authentication uses the stored token or the SCBAKE_REGISTRY_TOKEN_<NAME> env var.
 Pulled files are used as overrides by handlers that read template files; the
 git, svelte, and spring handlers currently scaffold without overridable
@@ -154,10 +157,11 @@ templates.`,
 		}
 
 		if pullRegistryName != "" {
-			if err := m.PullContext(cmd.Context(), pullRegistryName, templateName); err != nil {
+			fetched, err := m.PullContext(cmd.Context(), pullRegistryName, templateName)
+			if err != nil {
 				return fmt.Errorf("pulling template %q from registry %q: %w", templateName, pullRegistryName, err)
 			}
-			fmt.Printf("Pulled template %q from registry %q\n", templateName, pullRegistryName)
+			printPullResult(templateName, pullRegistryName, fetched)
 		} else {
 			registries := m.List()
 			if len(registries) == 0 {
@@ -165,11 +169,12 @@ templates.`,
 			}
 			var lastErr error
 			for _, r := range registries {
-				if err := m.PullContext(cmd.Context(), r.Name, templateName); err != nil {
+				fetched, err := m.PullContext(cmd.Context(), r.Name, templateName)
+				if err != nil {
 					lastErr = err
 					continue
 				}
-				fmt.Printf("Pulled template %q from registry %q\n", templateName, r.Name)
+				printPullResult(templateName, r.Name, fetched)
 				return nil
 			}
 			return fmt.Errorf("could not pull %q from any registry: %v", templateName, lastErr)
@@ -177,6 +182,16 @@ templates.`,
 
 		return nil
 	},
+}
+
+// printPullResult reports whether the template was downloaded or served from a
+// valid cache entry, which makes no network request.
+func printPullResult(templateName, registryName string, fetched bool) {
+	if fetched {
+		fmt.Printf("Pulled template %q from registry %q\n", templateName, registryName)
+		return
+	}
+	fmt.Printf("Template %q from registry %q is up to date (cached)\n", templateName, registryName)
 }
 
 var pullRegistryName string
