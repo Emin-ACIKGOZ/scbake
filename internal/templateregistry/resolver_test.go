@@ -313,6 +313,117 @@ func TestResolveCachePath_UsesInsertionOrderOverAlphabetical(t *testing.T) {
 	}
 }
 
+// writeTestFile creates path with content, including any parent directories.
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	//nolint:gosec // test temp directory
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	//nolint:gosec // test temp directory
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+}
+
+// TestResolveCachePath_SameNameWrapper is a regression test for #165: an
+// archive whose single top-level directory has the same name as the template is
+// extracted as <registry>/<templateName>/<templateName>/... and must resolve.
+func TestResolveCachePath_SameNameWrapper(t *testing.T) {
+	dir := t.TempDir()
+	tplDir := filepath.Join(dir, "acme", "makefile")
+	wrappedPath := filepath.Join(tplDir, "makefile", "makefile.tpl")
+	writeTestFile(t, wrappedPath, "wrapped content")
+	writeValidManifest(t, tplDir, "makefile")
+
+	got := ResolveCachePath(dir, "makefile", "makefile.tpl")
+	if got != wrappedPath {
+		t.Fatalf("expected same-name wrapper file %q, got %q", wrappedPath, got)
+	}
+}
+
+// TestResolveCachePath_RejectsVersionedWrapper verifies that only a wrapper
+// directory named exactly like the template is unwrapped. A versioned archive
+// wrapper such as repo-1.2.3/ still needs --subdirectory at pull time.
+func TestResolveCachePath_RejectsVersionedWrapper(t *testing.T) {
+	dir := t.TempDir()
+	tplDir := filepath.Join(dir, "acme", "makefile")
+	writeTestFile(t, filepath.Join(tplDir, "repo-1.2.3", "makefile.tpl"), "content")
+	writeValidManifest(t, tplDir, "makefile")
+
+	if got := ResolveCachePath(dir, "makefile", "makefile.tpl"); got != "" {
+		t.Errorf("expected versioned wrapper to be ignored, got %q", got)
+	}
+}
+
+// TestResolveCachePath_IgnoresTamperedWrappedTemplate verifies that the wrapper
+// lookup stays behind the manifest gate: a wrapped tree tampered with after
+// verification must not be rendered.
+func TestResolveCachePath_IgnoresTamperedWrappedTemplate(t *testing.T) {
+	dir := t.TempDir()
+	tplDir := filepath.Join(dir, "acme", "makefile")
+	wrappedPath := filepath.Join(tplDir, "makefile", "makefile.tpl")
+	writeTestFile(t, wrappedPath, "trusted")
+	writeValidManifest(t, tplDir, "makefile")
+
+	if got := ResolveCachePath(dir, "makefile", "makefile.tpl"); got != wrappedPath {
+		t.Fatalf("expected verified wrapped template to resolve to %q, got %q", wrappedPath, got)
+	}
+
+	writeTestFile(t, wrappedPath, "attacker")
+	if got := ResolveCachePath(dir, "makefile", "makefile.tpl"); got != "" {
+		t.Errorf("expected tampered wrapped template to be ignored, got %q", got)
+	}
+}
+
+// TestResolveCachePath_DoesNotSearchSiblingTemplates verifies that the wrapper
+// lookup never widens into a sibling template directory: another verified
+// template's makefile.tpl must not satisfy a makefile request.
+func TestResolveCachePath_DoesNotSearchSiblingTemplates(t *testing.T) {
+	dir := t.TempDir()
+	registryDir := filepath.Join(dir, "acme")
+
+	tplDir := filepath.Join(registryDir, "makefile")
+	writeTestFile(t, filepath.Join(tplDir, "README.md"), "no template here")
+	writeValidManifest(t, tplDir, "makefile")
+
+	otherDir := filepath.Join(registryDir, "other")
+	writeTestFile(t, filepath.Join(otherDir, "makefile.tpl"), "sibling content")
+	writeValidManifest(t, otherDir, "other")
+
+	if got := ResolveCachePath(dir, "makefile", "makefile.tpl"); got != "" {
+		t.Errorf("expected sibling template not to be searched, got %q", got)
+	}
+}
+
+// TestResolveCachePath_RejectsEscapingPaths is a regression test for the
+// pre-existing ../ escape: every candidate, flat or wrapped, must be strictly
+// contained in the verified template directory before it is returned.
+func TestResolveCachePath_RejectsEscapingPaths(t *testing.T) {
+	dir := t.TempDir()
+	tplDir := filepath.Join(dir, "acme", "makefile")
+	writeTestFile(t, filepath.Join(tplDir, "README.md"), "placeholder")
+	writeValidManifest(t, tplDir, "makefile")
+
+	// Planted outside the template directory but inside the registry cache.
+	writeTestFile(t, filepath.Join(dir, "acme", "secret.tpl"), "secret")
+
+	tests := []struct {
+		name    string
+		tplPath string
+	}{
+		{name: "flat escape", tplPath: "../secret.tpl"},
+		{name: "wrapped escape", tplPath: "../../secret.tpl"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ResolveCachePath(dir, "makefile", tt.tplPath); got != "" {
+				t.Errorf("expected %q to be rejected, got %q", tt.tplPath, got)
+			}
+		})
+	}
+}
+
 func TestLookupPath_Found(t *testing.T) {
 	dir := t.TempDir()
 	registryDir := filepath.Join(dir, "my-registry")
