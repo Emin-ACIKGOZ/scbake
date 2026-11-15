@@ -32,6 +32,7 @@ func resetFlags() {
 	allowAncestorSearch = false
 	recoverDiscardFlag = false
 	driftRepairFlag = false
+	pullRegistryName = ""
 }
 
 // executeCLI simulates command invocation by setting args on the root Cobra command.
