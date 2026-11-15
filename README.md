@@ -465,6 +465,12 @@ Only built-in tooling template and language-pack names can be pulled (see `scbak
 
 If `--registry` is omitted, all configured registries are tried in order.
 
+Archives with a single top-level directory named exactly like the template and
+at least one file directly inside it (for example `makefile/makefile.tpl` for
+`makefile`) are unwrapped automatically. Any other shape, including files nested
+under `templates/`, needs `--subdirectory <dir>` on `template registry add` so
+the archive is cached at the expected layout.
+
 ### `list`: View Available Resources
 
 Lists available or applied resources.

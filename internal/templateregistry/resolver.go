@@ -17,9 +17,14 @@ import (
 // missing (for example a cache written before it existed), the fallback is
 // lexical order, matching the previous behavior.
 //
-// It only consults the verified per-template layout
-// <registry>/<templateName>/<cleanPath> and requires templateName to be
-// non-empty. Constraining the lookup to the requested template prevents a
+// It only consults the verified per-template layouts
+// <registry>/<templateName>/<cleanPath> and, for an archive with a single
+// top-level wrapper directory named exactly like the template,
+// <registry>/<templateName>/<templateName>/<cleanPath>. Any other wrapper shape
+// must be selected with --subdirectory when the registry is added. Both
+// candidates must resolve strictly inside the verified template directory
+// before they are returned, so a ../ path can never escape it. The requested
+// template name is always non-empty and constrains the lookup, preventing a
 // request for one template from resolving to a different template's file that
 // happens to share a name.
 //
@@ -80,9 +85,23 @@ func resolveInRegistry(cacheDir, registryDir, templateName, cleanPath string) st
 	if !cacheManifestValid(tplDir) {
 		return ""
 	}
-	nested := filepath.Join(tplDir, cleanPath)
-	if _, err := os.Stat(nested); err == nil {
-		return nested
+
+	// Try the flat layout first, then the same-name wrapper layout produced by
+	// an archive whose single top-level directory matches the template name:
+	// <registry>/<templateName>/<templateName>/<cleanPath>. Every candidate
+	// must stay strictly inside the verified template directory, so neither a
+	// ../ path nor a symlink can escape it.
+	candidates := []string{
+		filepath.Join(tplDir, cleanPath),
+		filepath.Join(tplDir, templateName, cleanPath),
+	}
+	for _, candidate := range candidates {
+		if ensureStrictlyWithin(tplDir, candidate) != nil {
+			continue
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
 	}
 	return ""
 }
