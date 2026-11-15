@@ -40,13 +40,18 @@ With no template change the command is a no-op, so it is safe to run repeatedly.
 			return fmt.Errorf("resolving path: %w", err)
 		}
 
+		resolvedTemplateDir, err := resolveTemplateDir(templateDirFlag)
+		if err != nil {
+			return err
+		}
+
 		rc := core.RunContext{
 			TargetPath:          absPath,
 			ManifestPathArg:     manifestPathArg,
 			DryRun:              dryRun,
 			Force:               force,
 			ConflictStrategy:    updateConflictStrategyFlag,
-			TemplateDir:         templateDirFlag,
+			TemplateDir:         resolvedTemplateDir,
 			RegistryCacheDir:    GetRegistryCacheDir(),
 			Ctx:                 cmd.Context(),
 			AllowAncestorSearch: allowAncestorSearch,

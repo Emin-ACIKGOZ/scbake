@@ -74,7 +74,7 @@ graph LR
   and community documents.
 
 - **Custom Template Overrides (BYOT)**  
-  Override any embedded `.tpl` file with your own version by passing `--template-dir` or setting the `SCBAKE_TEMPLATE_DIR` environment variable. Files in the override directory shadow the compiled-in defaults, enabling team-specific customizations without recompiling.
+  Override any embedded `.tpl` file with your own version by passing `--template-dir` or setting the `SCBAKE_TEMPLATE_DIR` environment variable. Files in the override directory shadow the compiled-in defaults, enabling team-specific customizations without recompiling. The override directory is resolved and must exist before `new`, `apply`, `update`, or `drift --repair` starts, so a stale `SCBAKE_TEMPLATE_DIR` now fails those commands instead of silently falling back to the built-in templates.
 
 - **Private Template Registries**  
   Define named remote registries to host and distribute team templates. Use `scbake template registry add` to register a source, then `scbake template pull` to cache templates locally. The resolution chain checks **local overrides → registry cache → embedded defaults**, so you can layer customizations at every level. Registries can override files of built-in templates and language packs, but they cannot add new template or language names.
