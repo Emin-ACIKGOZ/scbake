@@ -90,6 +90,13 @@ func (t *LicenseTask) Description() string { return "Generate LICENSE file" }
 // Priority implements types.Task.
 func (t *LicenseTask) Priority() int { return t.TaskPrio }
 
+// WritesManagedFile marks this task as safe to replay during update/repair: it
+// reconciles LICENSE, which is recorded in the managed_files ledger.
+func (t *LicenseTask) WritesManagedFile() bool { return true }
+
+// Compile-time guard: update/repair detect managed writers by this method.
+var _ interface{ WritesManagedFile() bool } = (*LicenseTask)(nil)
+
 // Execute performs the license generation task.
 func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	if tc.Manifest.Metadata == nil {
@@ -101,6 +108,25 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 
 	if licenseID == "" || holders == "" {
 		return errors.New("explicit license and copyright_holder are required for the compliance template")
+	}
+
+	// During update/repair, a clean managed LICENSE is already reconciled. Skip
+	// the fetch so an offline update does not fail and the copyright year is not
+	// silently re-stamped. `apply` still renders unconditionally, so changing
+	// license terms is done with `apply --with compliance`.
+	if tc.Update {
+		unchanged, err := tasks.ManagedFileUnchanged(tc, "LICENSE")
+		if err != nil {
+			return err
+		}
+		if unchanged {
+			// Repair a missing or stale pristine base from the current bytes
+			// without fetching the license text again.
+			if _, err := tasks.EnsureManagedFileBase(tc, "LICENSE"); err != nil {
+				return err
+			}
+			return nil
+		}
 	}
 
 	// 1. Fetch license text dynamically from SPDX.org

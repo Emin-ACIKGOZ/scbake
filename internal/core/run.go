@@ -260,12 +260,26 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 	return lang, deduplicateTemplates(with), rel, nil
 }
 
+// managedFileWriter marks a task that reconciles a file tracked in the
+// managed_files ledger. `update` and `drift --repair` replay only these tasks;
+// tasks without the marker are either side-effecting or write files outside the
+// ledger (AppendFileTask, InsertXMLTask) and must not be re-run.
+type managedFileWriter interface {
+	WritesManagedFile() bool
+}
+
+// Compile-time guards: a managed writer that loses its marker would otherwise be
+// silently dropped from update/repair.
+var (
+	_ managedFileWriter = (*tasks.CreateTemplateTask)(nil)
+)
+
 // managedWriteTasks keeps only file-reconciling tasks. `update` must not re-run
 // environment or side-effecting tasks (go mod init, npm install, git hooks).
 func managedWriteTasks(plan []types.Task) []types.Task {
 	out := make([]types.Task, 0, len(plan))
 	for _, t := range plan {
-		if _, ok := t.(*tasks.CreateTemplateTask); ok {
+		if w, ok := t.(managedFileWriter); ok && w.WritesManagedFile() {
 			out = append(out, t)
 		}
 	}
@@ -359,6 +373,7 @@ func buildTaskContext(
 	tc := types.TaskContext{
 		Ctx:              ctx,
 		DryRun:           rc.DryRun,
+		Update:           rc.Update,
 		Manifest:         futureManifest,
 		TargetPath:       rc.TargetPath,
 		Force:            rc.Force,

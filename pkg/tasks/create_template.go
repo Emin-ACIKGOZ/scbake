@@ -91,6 +91,10 @@ func (t *CreateTemplateTask) Priority() int {
 	return t.TaskPrio
 }
 
+// WritesManagedFile marks this task as safe to replay during update/repair: it
+// reconciles a path recorded in the managed_files ledger.
+func (t *CreateTemplateTask) WritesManagedFile() bool { return true }
+
 // HashContent calculates the SHA-256 hash of the given bytes after normalizing
 // text line endings. CRLF and LF therefore hash identically, which keeps the
 // managed_files ledger stable across Git checkouts that rewrite EOL bytes.
@@ -375,6 +379,63 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 		return writeBaseShadow(tc, ledgerKey, content)
 	}
 	return nil
+}
+
+// ManagedFileUnchanged reports whether outputRelPath exists and still matches
+// the hash recorded in the managed_files ledger. It is read-only: it creates no
+// directories and performs no reconciliation. Callers use it to avoid
+// re-fetching remote content during update/repair when the managed output is
+// already current.
+func ManagedFileUnchanged(tc types.TaskContext, outputRelPath string) (bool, error) {
+	if tc.Manifest == nil {
+		return false, nil
+	}
+	existing, err := fileutil.SafeReadFile(tc.TargetPath, outputRelPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	absPath, err := fileutil.SafePath(tc.TargetPath, outputRelPath)
+	if err != nil {
+		return false, err
+	}
+	existingHash := HashContent(existing)
+	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
+	recorded := recordedHash(tc.Manifest, ledgerKey, outputRelPath, existingHash)
+	return recorded != "" && existingHash == recorded, nil
+}
+
+// EnsureManagedFileBase backfills the pristine base shadow for a managed file
+// that still matches its recorded hash, when the base is missing or does not
+// match. It uses the current file bytes, so it does not need the original
+// source. It reports whether a base write was needed.
+func EnsureManagedFileBase(tc types.TaskContext, outputRelPath string) (bool, error) {
+	if tc.Manifest == nil {
+		return false, nil
+	}
+	existing, err := fileutil.SafeReadFile(tc.TargetPath, outputRelPath)
+	if err != nil {
+		return false, err
+	}
+	absPath, err := fileutil.SafePath(tc.TargetPath, outputRelPath)
+	if err != nil {
+		return false, err
+	}
+	existingHash := HashContent(existing)
+	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
+	recorded := recordedHash(tc.Manifest, ledgerKey, outputRelPath, existingHash)
+	if recorded == "" || existingHash != recorded {
+		return false, nil
+	}
+	if base, ok := readBaseShadow(tc, ledgerKey); ok && BaseMatchesRecordedHash(base, recorded) {
+		return false, nil
+	}
+	if err := writeBaseShadow(tc, ledgerKey, existing); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // trackAndWrite registers path with the transaction and writes content to it

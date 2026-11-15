@@ -25,7 +25,9 @@ var updateCmd = &cobra.Command{
 	Long: `Re-applies the language pack and tooling templates recorded in scbake.toml,
 bringing a generated project up to date without clobbering local edits.
 
-With no template change the command is a no-op, so it is safe to run repeatedly.`,
+With no template change the command is a no-op, so it is safe to run repeatedly.
+A managed LICENSE that already matches its recorded hash is not re-rendered; use
+apply --with compliance to change license terms.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		manifestPathArg := "."
