@@ -4,6 +4,21 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.11.5] - 2026-11-15
+
+### Bug Fixes
+
+- **cmd:** Reject template pulls for unknown names
+
+### Build
+
+- Bump Go toolchain to 1.27.4 (#194)
+
+### Continuous Integration
+
+- **deps:** Bump sigstore/cosign-installer from 4.1.2 to 4.1.3 (#192)
+- **deps:** Bump amannn/action-semantic-pull-request from 6.1.1 to 6.1.2 (#193)
+
 ## [0.11.4] - 2026-11-09
 
 ### Bug Fixes
