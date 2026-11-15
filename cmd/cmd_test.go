@@ -30,6 +30,7 @@ func resetFlags() {
 	dryRun = false
 	force = false
 	allowAncestorSearch = false
+	templateDirFlag = ""
 	recoverDiscardFlag = false
 	driftRepairFlag = false
 	pullRegistryName = ""

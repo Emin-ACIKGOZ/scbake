@@ -120,6 +120,39 @@ func removeFailedProject(projectName string, release func() error) error {
 	return nil
 }
 
+// validateNewSelection performs every flag and override-directory check that
+// must fail before `new` mutates the filesystem (SCB-012). It returns the
+// parsed --set values and the resolved template override directory.
+func validateNewSelection() (map[string]string, string, error) {
+	setVars, err := parseSetFlags(newSetFlag)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := core.ValidateSetKeys(newWithFlag, newLangFlag, setVars); err != nil {
+		return nil, "", err
+	}
+	if newLangFlag == "" && len(newWithFlag) == 0 {
+		return nil, "", core.ErrNoSelection
+	}
+	// Check the language toolchain before the directory exists, so a missing
+	// binary (e.g. go) does not leave a directory to be cleaned up. A dry run
+	// writes nothing, so it is left to core to report the missing tool as a
+	// warning while the plan is still printed.
+	if !dryRun {
+		if err := core.CheckLangPrerequisites(newLangFlag); err != nil {
+			return nil, "", err
+		}
+	}
+	// Resolve the override directory before bootstrapping and chdir-ing into the
+	// project, so a relative path is anchored at the invocation cwd and a stale
+	// path fails instead of silently falling back to built-in templates.
+	resolved, err := resolveTemplateDir(templateDirFlag)
+	if err != nil {
+		return nil, "", err
+	}
+	return setVars, resolved, nil
+}
+
 // runNew coordinates the project directory setup and delegates template application to the core engine.
 func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 	// Reject traversal or absolute project names before touching the filesystem
@@ -128,30 +161,9 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 		return fmt.Errorf("invalid project name: %w", err)
 	}
 
-	// Validate every flag before mutating the filesystem (SCB-012): a malformed
-	// --set pair, an unknown --set key, or a missing --lang/--with must fail
-	// before the project directory or its manifest is created. Runtime failures
-	// after bootstrap are cleaned up best-effort under the root lock, which is
-	// released before the directory is staged and deleted. This mirrors the
-	// ordering already used by 'apply' (see cmd/apply.go).
-	setVars, err := parseSetFlags(newSetFlag)
+	setVars, resolvedTemplateDir, err := validateNewSelection()
 	if err != nil {
 		return err
-	}
-	if err := core.ValidateSetKeys(newWithFlag, newLangFlag, setVars); err != nil {
-		return err
-	}
-	if newLangFlag == "" && len(newWithFlag) == 0 {
-		return core.ErrNoSelection
-	}
-	// Check the language toolchain before the directory exists, so a missing
-	// binary (e.g. go) does not leave a directory to be cleaned up. A dry run
-	// writes nothing, so it is left to core to report the missing tool as a
-	// warning while the plan is still printed.
-	if !dryRun {
-		if err := core.CheckLangPrerequisites(newLangFlag); err != nil {
-			return err
-		}
 	}
 
 	reporter := ui.NewReporter(newCmdTotalSteps, dryRun)
@@ -171,7 +183,7 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 		DryRun:              dryRun,
 		Force:               force,
 		ConflictStrategy:    newConflictStrategyFlag,
-		TemplateDir:         templateDirFlag,
+		TemplateDir:         resolvedTemplateDir,
 		RegistryCacheDir:    GetRegistryCacheDir(),
 		ManifestPathArg:     ".",
 		License:             newLicenseFlag,

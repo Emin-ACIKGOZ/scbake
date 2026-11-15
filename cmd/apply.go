@@ -55,6 +55,11 @@ var applyCmd = &cobra.Command{
 			return fmt.Errorf("resolving path: %w", err)
 		}
 
+		resolvedTemplateDir, err := resolveTemplateDir(templateDirFlag)
+		if err != nil {
+			return err
+		}
+
 		rc := core.RunContext{
 			LangFlag:            langFlag,
 			WithFlag:            withFlag,
@@ -63,7 +68,7 @@ var applyCmd = &cobra.Command{
 			DryRun:              dryRun,          // dryRun is the global flag.
 			Force:               force,           // force is the global flag.
 			ConflictStrategy:    conflictStrategyFlag,
-			TemplateDir:         templateDirFlag,
+			TemplateDir:         resolvedTemplateDir,
 			RegistryCacheDir:    GetRegistryCacheDir(),
 			License:             licenseFlag,
 			CopyrightHolder:     copyrightHolderFlag,

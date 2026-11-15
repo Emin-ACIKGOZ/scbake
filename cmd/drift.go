@@ -244,13 +244,18 @@ func printFindings(findings []drift.Finding) {
 // repairDrift reuses 'update' so repair and update share one reconciliation and
 // transaction implementation. Local edits are preserved per --conflict-strategy.
 func repairDrift(ctx context.Context, absPath, manifestPathArg string) error {
+	resolvedTemplateDir, err := resolveTemplateDir(templateDirFlag)
+	if err != nil {
+		return err
+	}
+
 	rc := core.RunContext{
 		TargetPath:          absPath,
 		ManifestPathArg:     manifestPathArg,
 		DryRun:              dryRun,
 		Force:               force,
 		ConflictStrategy:    driftStrategyFlag,
-		TemplateDir:         templateDirFlag,
+		TemplateDir:         resolvedTemplateDir,
 		RegistryCacheDir:    GetRegistryCacheDir(),
 		Ctx:                 ctx,
 		AllowAncestorSearch: allowAncestorSearch,
