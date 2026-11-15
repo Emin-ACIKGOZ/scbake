@@ -33,6 +33,11 @@ type TaskContext struct {
 	// DryRun indicates if we are in dry-run mode.
 	DryRun bool
 
+	// Update indicates a manifest-driven reconciliation (`update` or
+	// `drift --repair`) rather than a flag-driven apply. Tasks that fetch
+	// external content may skip work when their managed output is current.
+	Update bool
+
 	// Force indicates if we should overwrite existing files.
 	Force bool
 

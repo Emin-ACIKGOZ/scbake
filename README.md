@@ -205,8 +205,14 @@ scbake apply --with maven_linter
 
 Re-applies the managed template file writes recorded in `scbake.toml`, bringing a
 generated project up to date **without clobbering local edits**. It does not
-replay side-effecting commands or custom tasks such as license generation, file
-appends, or XML insertions.
+replay side-effecting commands or tasks whose writes are not tracked in the
+`managed_files` ledger, such as file appends or XML insertions. Recorded managed
+writers, including the compliance LICENSE generator, are replayed. A LICENSE
+that already matches its recorded hash is left untouched, so a clean update
+needs no network and does not re-stamp the copyright year. When LICENSE is
+missing or modified, the text is fetched from SPDX; if that fetch fails,
+`update` fails closed and leaves the managed files untouched. To change license
+terms, run `apply --with compliance` (or delete LICENSE before `update`).
 
 ```bash
 scbake update [--template-dir <dir>] [--conflict-strategy <strategy>] [<path>]
@@ -345,8 +351,13 @@ scbake drift [--repair] [--require-base] [--conflict-strategy <strategy>] [<path
 - **Repair** (`--repair`) reuses the same reconciliation as `update`, so local
   edits are preserved according to `--conflict-strategy` (`merge` by default).
   Because `merge` preserves local edits, it does not clear drift; use
-  `--conflict-strategy overwrite` to force generated content back. On a clean
-  tree that also re-records a missing base; `merge` does not backfill.
+  `--conflict-strategy overwrite` to force generated content back. Under
+  `overwrite`, a clean tree also re-records a missing base for non-LICENSE
+  managed files; a clean LICENSE is backfilled on any strategy. Repairing a
+  missing or modified
+  compliance LICENSE fetches the text from SPDX, so that case needs network
+  access; a clean LICENSE is backfilled from its recorded bytes without a fetch.
+  If a needed fetch fails, repair stops and leaves the files untouched.
 
 Exit behavior:
 

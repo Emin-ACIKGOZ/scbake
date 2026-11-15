@@ -395,8 +395,13 @@ flags. Two properties make it safe:
   under `.scbake-base/<path>`. When both the template and the working file
   changed, `update` runs a conservative line-oriented three-way merge
   (`internal/merge`) against that base. Non-overlapping edits merge; overlaps
-  fall back to an artifact. Only `CreateTemplateTask` writes are replayed, so
-  environment commands never re-run.
+  fall back to an artifact. Only tasks that declare themselves managed file
+  writers (`CreateTemplateTask`, `LicenseTask`) are replayed, so environment
+  commands and untracked writers such as `AppendFileTask` and `InsertXMLTask`
+  never re-run. Replaying `LicenseTask` fetches the license text from SPDX only
+  when LICENSE is missing or modified; a clean LICENSE is skipped and its base
+  is backfilled from the recorded bytes. A needed fetch that fails is a closed
+  failure, leaving managed files untouched.
 
 The base lives at the project root rather than under the ignored `.scbake/`
 directory so a normal commit carries it to a clone. The root `.gitignore` must
