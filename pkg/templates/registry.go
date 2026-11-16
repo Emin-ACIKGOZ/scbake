@@ -23,6 +23,12 @@ import (
 )
 
 // Handler is the interface all tooling template handlers must implement.
+//
+// Handlers that resolve registry-cached templates while building the plan
+// should additionally implement types.RegistryAwareHandler so core can pass the
+// configured registry allowlist. Handlers that only create
+// tasks.CreateTemplateTask need not: those resolve at execution time, when the
+// allowlist is already on the task context.
 type Handler interface {
 	// GetTasks takes a targetPath to be context-aware, and directories for overrides/cache
 	GetTasks(targetPath string, templateDir string, registryCacheDir string) ([]types.Task, error)

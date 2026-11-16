@@ -21,6 +21,86 @@ func issue138SeedEntry(t *testing.T, cacheDir, registry, templateName, file, con
 	return filepath.Join(tplDir, file)
 }
 
+// issue138WriteOrder records the registry precedence order used by the resolver.
+func issue138WriteOrder(t *testing.T, cacheDir string, names ...string) {
+	t.Helper()
+
+	body := `{"registries":["` + strings.Join(names, `","`) + `"]}`
+	writeTestFile(t, filepath.Join(cacheDir, registryOrderFileName), body)
+}
+
+// TestIssue138_ResolverIgnoresUnconfiguredRegistry proves membership is
+// config-derived: a fully valid cache entry for an unconfigured registry is
+// never returned.
+func TestIssue138_ResolverIgnoresUnconfiguredRegistry(t *testing.T) {
+	cacheDir := t.TempDir()
+	issue138SeedEntry(t, cacheDir, "team", "go-api", "main.go.tpl", "from team")
+
+	got, registry := ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", []string{"other"})
+	if got != "" || registry != "" {
+		t.Errorf("unconfigured registry was consulted: got (%q, %q), want empty", got, registry)
+	}
+}
+
+// TestIssue138_ResolverEmptyAllowlistFailsClosed pins that nil and empty
+// allowlists disable the registry tier instead of scanning every cache dir.
+func TestIssue138_ResolverEmptyAllowlistFailsClosed(t *testing.T) {
+	cacheDir := t.TempDir()
+	issue138SeedEntry(t, cacheDir, "team", "go-api", "main.go.tpl", "from team")
+	issue138WriteOrder(t, cacheDir, "team")
+
+	for name, allow := range map[string][]string{
+		"nil":   nil,
+		"empty": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, registry := ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", allow)
+			if got != "" || registry != "" {
+				t.Errorf("empty allowlist scanned the cache: got (%q, %q), want empty", got, registry)
+			}
+		})
+	}
+}
+
+// TestIssue138_ResolverOrderFilePrecedence resolves among multiple configured
+// registries using the recorded order, and reports the supplying registry.
+func TestIssue138_ResolverOrderFilePrecedence(t *testing.T) {
+	cacheDir := t.TempDir()
+	alpha := issue138SeedEntry(t, cacheDir, "alpha", "go-api", "main.go.tpl", "from alpha")
+	zeta := issue138SeedEntry(t, cacheDir, "zeta", "go-api", "main.go.tpl", "from zeta")
+
+	// Lexical order would pick alpha; the order file must pick zeta.
+	issue138WriteOrder(t, cacheDir, "zeta", "alpha")
+
+	got, registry := ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", []string{"alpha", "zeta"})
+	if got != zeta || registry != "zeta" {
+		t.Errorf("order-file precedence: got (%q, %q), want (%q, %q)", got, registry, zeta, "zeta")
+	}
+
+	// Without an order file, precedence falls back to lexical order.
+	if err := os.Remove(filepath.Join(cacheDir, registryOrderFileName)); err != nil {
+		t.Fatalf("removing order file: %v", err)
+	}
+	got, registry = ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", []string{"zeta", "alpha"})
+	if got != alpha || registry != "alpha" {
+		t.Errorf("lexical fallback precedence: got (%q, %q), want (%q, %q)", got, registry, alpha, "alpha")
+	}
+}
+
+// TestIssue138_ResolverNameIsTheSupplyingRegistry verifies the returned name
+// matches the registry whose file was selected, not merely the first configured.
+func TestIssue138_ResolverNameIsTheSupplyingRegistry(t *testing.T) {
+	cacheDir := t.TempDir()
+	issue138SeedEntry(t, cacheDir, "alpha", "go-api", "only.tpl", "only alpha has this file")
+	issue138SeedEntry(t, cacheDir, "beta", "go-api", "main.go.tpl", "from beta")
+
+	got, registry := ResolveCacheEntry(cacheDir, "go-api", "only.tpl", []string{"beta", "alpha"})
+	want := filepath.Join(cacheDir, "alpha", "go-api", "only.tpl")
+	if got != want || registry != "alpha" {
+		t.Errorf("got (%q, %q), want (%q, %q)", got, registry, want, "alpha")
+	}
+}
+
 // issue138CacheFixture creates a cache root containing two registries plus the
 // order file and returns (configPath, cacheDir, manager).
 func issue138CacheFixture(t *testing.T) (string, string, *Manager) {

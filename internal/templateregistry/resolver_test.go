@@ -21,14 +21,14 @@ func writeValidManifest(t *testing.T, tplDir, name string) {
 
 func TestResolveCachePath_NotFound(t *testing.T) {
 	dir := t.TempDir()
-	result := ResolveCachePath(dir, "", "some/file.tpl")
+	result, _ := ResolveCacheEntry(dir, "", "some/file.tpl", nil)
 	if result != "" {
 		t.Errorf("expected empty for empty cache, got %q", result)
 	}
 }
 
 func TestResolveCachePath_EmptyCacheDir(t *testing.T) {
-	result := ResolveCachePath("", "", "some/file.tpl")
+	result, _ := ResolveCacheEntry("", "", "some/file.tpl", nil)
 	if result != "" {
 		t.Errorf("expected empty for empty cache dir, got %q", result)
 	}
@@ -49,7 +49,7 @@ func TestResolveCachePath_FindsFile(t *testing.T) {
 	}
 	writeValidManifest(t, tplDir, "go-api")
 
-	result := ResolveCachePath(dir, "go-api", "templates/main.go.tpl")
+	result, _ := ResolveCacheEntry(dir, "go-api", "templates/main.go.tpl", []string{"acme"})
 	if result == "" {
 		t.Fatal("expected non-empty result for existing file")
 	}
@@ -85,7 +85,7 @@ func TestResolveCachePath_SearchesAllRegistries(t *testing.T) {
 	}
 	writeValidManifest(t, tplDir, "go-api")
 
-	result := ResolveCachePath(dir, "go-api", "shared.tpl")
+	result, _ := ResolveCacheEntry(dir, "go-api", "shared.tpl", []string{"registry-a", "registry-b"})
 	if result == "" {
 		t.Fatal("expected to find file in registry-b")
 	}
@@ -110,7 +110,7 @@ func TestResolveCachePath_NestedTemplateDir(t *testing.T) {
 	writeValidManifest(t, tplDir, "editorconfig")
 
 	// The requested template name constrains the nested lookup to "editorconfig".
-	result := ResolveCachePath(dir, "editorconfig", "main.go.tpl")
+	result, _ := ResolveCacheEntry(dir, "editorconfig", "main.go.tpl", []string{"acme"})
 	if result == "" {
 		t.Fatal("expected non-empty result for file in nested template dir")
 	}
@@ -148,7 +148,7 @@ func TestResolveCachePath_ConstrainsToRequestedTemplate(t *testing.T) {
 	writeValidManifest(t, aDir, "a")
 	writeValidManifest(t, bDir, "b")
 
-	result := ResolveCachePath(dir, "a", "main.go.tpl")
+	result, _ := ResolveCacheEntry(dir, "a", "main.go.tpl", []string{"acme"})
 	if result != aPath {
 		t.Fatalf("expected template a's file %q, got %q", aPath, result)
 	}
@@ -159,7 +159,7 @@ func TestResolveCachePath_ConstrainsToRequestedTemplate(t *testing.T) {
 	// Requesting b must return b's file too. The old sibling scan returned the
 	// first match in directory order ("a"), so this direction catches the bug
 	// regardless of which directory sorts first.
-	result = ResolveCachePath(dir, "b", "main.go.tpl")
+	result, _ = ResolveCacheEntry(dir, "b", "main.go.tpl", []string{"acme"})
 	if result != bPath {
 		t.Fatalf("expected template b's file %q, got %q", bPath, result)
 	}
@@ -185,7 +185,7 @@ func TestResolveCachePath_IgnoresTamperedTemplate(t *testing.T) {
 	}
 	writeValidManifest(t, tplDir, "go-api")
 
-	if got := ResolveCachePath(dir, "go-api", "main.go.tpl"); got != tplPath {
+	if got, _ := ResolveCacheEntry(dir, "go-api", "main.go.tpl", []string{"acme"}); got != tplPath {
 		t.Fatalf("expected verified template to resolve to %q, got %q", tplPath, got)
 	}
 
@@ -194,7 +194,7 @@ func TestResolveCachePath_IgnoresTamperedTemplate(t *testing.T) {
 	if err := os.WriteFile(tplPath, []byte("attacker"), 0644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
-	if got := ResolveCachePath(dir, "go-api", "main.go.tpl"); got != "" {
+	if got, _ := ResolveCacheEntry(dir, "go-api", "main.go.tpl", []string{"acme"}); got != "" {
 		t.Errorf("expected tampered template to be ignored, got %q", got)
 	}
 }
@@ -213,7 +213,7 @@ func TestResolveCachePath_IgnoresUnmanifestedTemplate(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	if got := ResolveCachePath(dir, "go-api", "main.go.tpl"); got != "" {
+	if got, _ := ResolveCacheEntry(dir, "go-api", "main.go.tpl", []string{"acme"}); got != "" {
 		t.Errorf("expected template without a manifest to be ignored, got %q", got)
 	}
 }
@@ -247,7 +247,7 @@ func TestResolveCachePath_PrefersVerifiedTemplateOverLegacyFlat(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	got := ResolveCachePath(dir, "go-api", "main.go.tpl")
+	got, _ := ResolveCacheEntry(dir, "go-api", "main.go.tpl", []string{"acme"})
 	if got != nestedPath {
 		t.Fatalf("expected verified per-template file %q, got %q", nestedPath, got)
 	}
@@ -272,7 +272,7 @@ func TestResolveCachePath_IgnoresFlatLegacyFile(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	if got := ResolveCachePath(dir, "go-api", "main.go.tpl"); got != "" {
+	if got, _ := ResolveCacheEntry(dir, "go-api", "main.go.tpl", []string{"acme"}); got != "" {
 		t.Errorf("expected flat legacy file to be ignored, got %q", got)
 	}
 }
@@ -306,7 +306,7 @@ func TestResolveCachePath_UsesInsertionOrderOverAlphabetical(t *testing.T) {
 		writeValidManifest(t, tplDir, "go-api")
 	}
 
-	got := ResolveCachePath(cacheDir, "go-api", "main.go.tpl")
+	got, _ := ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", []string{"zeta", "alpha"})
 	want := filepath.Join(cacheDir, "zeta", "go-api", "main.go.tpl")
 	if got != want {
 		t.Fatalf("expected the first-added registry to win: got %q, want %q", got, want)
@@ -336,7 +336,7 @@ func TestResolveCachePath_SameNameWrapper(t *testing.T) {
 	writeTestFile(t, wrappedPath, "wrapped content")
 	writeValidManifest(t, tplDir, "makefile")
 
-	got := ResolveCachePath(dir, "makefile", "makefile.tpl")
+	got, _ := ResolveCacheEntry(dir, "makefile", "makefile.tpl", []string{"acme"})
 	if got != wrappedPath {
 		t.Fatalf("expected same-name wrapper file %q, got %q", wrappedPath, got)
 	}
@@ -351,7 +351,7 @@ func TestResolveCachePath_RejectsVersionedWrapper(t *testing.T) {
 	writeTestFile(t, filepath.Join(tplDir, "repo-1.2.3", "makefile.tpl"), "content")
 	writeValidManifest(t, tplDir, "makefile")
 
-	if got := ResolveCachePath(dir, "makefile", "makefile.tpl"); got != "" {
+	if got, _ := ResolveCacheEntry(dir, "makefile", "makefile.tpl", []string{"acme"}); got != "" {
 		t.Errorf("expected versioned wrapper to be ignored, got %q", got)
 	}
 }
@@ -366,12 +366,12 @@ func TestResolveCachePath_IgnoresTamperedWrappedTemplate(t *testing.T) {
 	writeTestFile(t, wrappedPath, "trusted")
 	writeValidManifest(t, tplDir, "makefile")
 
-	if got := ResolveCachePath(dir, "makefile", "makefile.tpl"); got != wrappedPath {
+	if got, _ := ResolveCacheEntry(dir, "makefile", "makefile.tpl", []string{"acme"}); got != wrappedPath {
 		t.Fatalf("expected verified wrapped template to resolve to %q, got %q", wrappedPath, got)
 	}
 
 	writeTestFile(t, wrappedPath, "attacker")
-	if got := ResolveCachePath(dir, "makefile", "makefile.tpl"); got != "" {
+	if got, _ := ResolveCacheEntry(dir, "makefile", "makefile.tpl", []string{"acme"}); got != "" {
 		t.Errorf("expected tampered wrapped template to be ignored, got %q", got)
 	}
 }
@@ -391,7 +391,7 @@ func TestResolveCachePath_DoesNotSearchSiblingTemplates(t *testing.T) {
 	writeTestFile(t, filepath.Join(otherDir, "makefile.tpl"), "sibling content")
 	writeValidManifest(t, otherDir, "other")
 
-	if got := ResolveCachePath(dir, "makefile", "makefile.tpl"); got != "" {
+	if got, _ := ResolveCacheEntry(dir, "makefile", "makefile.tpl", []string{"acme"}); got != "" {
 		t.Errorf("expected sibling template not to be searched, got %q", got)
 	}
 }
@@ -417,7 +417,7 @@ func TestResolveCachePath_RejectsEscapingPaths(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ResolveCachePath(dir, "makefile", tt.tplPath); got != "" {
+			if got, _ := ResolveCacheEntry(dir, "makefile", tt.tplPath, []string{"acme"}); got != "" {
 				t.Errorf("expected %q to be rejected, got %q", tt.tplPath, got)
 			}
 		})

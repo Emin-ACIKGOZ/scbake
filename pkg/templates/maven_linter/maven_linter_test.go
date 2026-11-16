@@ -243,7 +243,7 @@ func TestHandler_GetTasks_UsesPerTemplateRegistryCache(t *testing.T) {
 	}
 
 	handler := &Handler{}
-	taskList, err := handler.GetTasks(".", "", cacheDir)
+	taskList, err := handler.GetTasksWithRegistries(".", "", cacheDir, []string{"acme"})
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}

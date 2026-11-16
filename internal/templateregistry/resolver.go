@@ -5,9 +5,19 @@ import (
 	"path/filepath"
 )
 
-// ResolveCachePath checks the registry cache for a template file belonging to
+// ResolveCacheEntry checks the registry cache for a template file belonging to
 // the requested template. It searches cached registries in precedence order,
-// returning the first match, or the empty string if the file is not found.
+// limited to registries that are configured (registries). It returns the
+// verified path and the name of the registry that supplies it, or
+// ("", "") when no configured registry supplies the file.
+//
+// Membership is config-derived: a cached directory is only eligible when its
+// name appears in registries. An unconfigured cache directory is inert even
+// when it verifies against its manifest; it is never read, so deleting or
+// hand-editing registries.json disables it rather than letting stale content
+// shadow an embedded template. Nil and empty registries disable the registry
+// tier (fail closed); there is deliberately no "scan every directory" default.
+// Names that are not safe single path segments are ignored.
 //
 // Precedence is explicit and deterministic: registries are visited in the order
 // they were added to the config, as recorded in the cache's order file. This is
@@ -38,34 +48,49 @@ import (
 // always written the per-template layout, and an unverified <registry>/<cleanPath>
 // file could otherwise be planted locally and rendered, defeating the manifest
 // check.
-func ResolveCachePath(cacheDir, templateName, tplPath string) string {
+func ResolveCacheEntry(cacheDir, templateName, tplPath string, registries []string) (cachePath, registryName string) {
 	if cacheDir == "" || templateName == "" {
-		return ""
+		return "", ""
 	}
 	if ValidateName(templateName) != nil {
-		return ""
+		return "", ""
+	}
+
+	allowed := make(map[string]struct{}, len(registries))
+	for _, name := range registries {
+		if ValidateName(name) != nil {
+			continue
+		}
+		allowed[name] = struct{}{}
+	}
+	if len(allowed) == 0 {
+		return "", ""
 	}
 
 	entries, err := os.ReadDir(cacheDir)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
-	registryDirs := make([]string, 0, len(entries))
+	registryDirs := make([]string, 0, len(allowed))
 	for _, entry := range entries {
-		if entry.IsDir() {
-			registryDirs = append(registryDirs, entry.Name())
+		if !entry.IsDir() {
+			continue
 		}
+		if _, ok := allowed[entry.Name()]; !ok {
+			continue
+		}
+		registryDirs = append(registryDirs, entry.Name())
 	}
 
 	cleanPath := filepath.Clean(tplPath)
 	for _, registryDir := range orderRegistries(cacheDir, registryDirs) {
 		if found := resolveInRegistry(cacheDir, registryDir, templateName, cleanPath); found != "" {
-			return found
+			return found, registryDir
 		}
 	}
 
-	return ""
+	return "", ""
 }
 
 // resolveInRegistry returns the verified path of cleanPath within the requested

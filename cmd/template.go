@@ -6,14 +6,13 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
 	"scbake/internal/templateregistry"
 	"scbake/pkg/lang"
 	"scbake/pkg/templates"
 
 	"github.com/spf13/cobra"
 )
-
-var registryCacheDir string
 
 // templateCmd represents the 'scbake template' command tree.
 var templateCmd = &cobra.Command{
@@ -208,20 +207,28 @@ func init() {
 	templateCmd.AddCommand(registryCmd)
 	templateCmd.AddCommand(pullCmd)
 
-	m, err := templateregistry.NewManager()
-	if err == nil {
-		registryCacheDir = m.CacheDir()
-	}
 	rootCmd.AddCommand(templateCmd)
 }
 
-// GetRegistryCacheDir returns the path to the local template cache.
-func GetRegistryCacheDir() string {
-	if registryCacheDir == "" {
-		m, err := templateregistry.NewManager()
-		if err == nil {
-			registryCacheDir = m.CacheDir()
-		}
+// registryPolicy returns the local template cache directory and the configured
+// registry names in insertion order. The config is re-read on each call so a
+// registry added or removed in the same process is observed immediately, and so
+// the policy follows the running process's XDG directories.
+//
+// A config read error (malformed or unreadable registries.json) is warned to
+// stderr and yields an empty policy: the registry tier is disabled and
+// templates fall back to --template-dir or the embedded defaults. A missing
+// config file is not an error; it simply means no registries are configured.
+func registryPolicy() (cacheDir string, registries []string) {
+	m, err := templateregistry.NewManager()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  registry configuration unavailable: %v; registry template overrides disabled\n", err)
+		return "", nil
 	}
-	return registryCacheDir
+	list := m.List()
+	names := make([]string, 0, len(list))
+	for _, r := range list {
+		names = append(names, r.Name)
+	}
+	return m.CacheDir(), names
 }

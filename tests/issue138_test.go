@@ -114,3 +114,80 @@ func TestIssue138_RemovedRegistryDoesNotShadowBuiltin(t *testing.T) {
 	issue138MustRun(t, "new", "issue138-a", "--with", "editorconfig")
 	issue138AssertBuiltin(t, filepath.Join(work, "issue138-a"))
 }
+
+// TestIssue138_RemovedRegistryShadowWhileAnotherConfigured covers the case that
+// kills an "empty registry list disables the cache" shortcut: another registry
+// stays configured, but the removed one's cache must not be reachable.
+func TestIssue138_RemovedRegistryShadowWhileAnotherConfigured(t *testing.T) {
+	work := issue138Setup(t)
+	srv := issue138RegistryServer(t)
+
+	issue138MustRun(t, "template", "registry", "add", "team", srv.URL)
+	// A second registry that stays configured; its URL is never contacted.
+	issue138MustRun(t, "template", "registry", "add", "other", "http://127.0.0.1:1")
+	issue138MustRun(t, "template", "pull", "editorconfig", "--registry", "team")
+
+	teamCache := issue138RegistryCacheDir(t, "team")
+	otherCache := issue138RegistryCacheDir(t, "other")
+	issue138MustRun(t, "template", "registry", "remove", "team")
+	issue138AssertMissing(t, teamCache)
+	if _, err := os.Stat(otherCache); !os.IsNotExist(err) {
+		t.Errorf("removing team unexpectedly touched another registry's cache %s: %v", otherCache, err)
+	}
+
+	list := issue138MustRun(t, "template", "registry", "list")
+	if !strings.Contains(list, "other") {
+		t.Fatalf("expected registry 'other' to remain configured, list:\n%s", list)
+	}
+
+	issue138MustRun(t, "new", "issue138-b", "--with", "editorconfig")
+	issue138AssertBuiltin(t, filepath.Join(work, "issue138-b"))
+}
+
+// TestIssue138_CacheWithoutConfigDoesNotShadowBuiltin is the structural case:
+// after a pull, delete registries.json entirely (no `remove` command ran). The
+// cache remains on disk but must be inert.
+func TestIssue138_CacheWithoutConfigDoesNotShadowBuiltin(t *testing.T) {
+	work := issue138Setup(t)
+	srv := issue138RegistryServer(t)
+
+	issue138MustRun(t, "template", "registry", "add", "team", srv.URL)
+	issue138MustRun(t, "template", "pull", "editorconfig", "--registry", "team")
+
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatalf("cannot determine user config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "scbake", "registries.json")
+	if err := os.Remove(configPath); err != nil {
+		t.Fatalf("deleting %s: %v", configPath, err)
+	}
+
+	teamCache := issue138RegistryCacheDir(t, "team")
+	if _, err := os.Stat(teamCache); err != nil {
+		t.Fatalf("expected inert cache to remain at %s: %v", teamCache, err)
+	}
+
+	issue138MustRun(t, "new", "issue138-c", "--with", "editorconfig")
+	issue138AssertBuiltin(t, filepath.Join(work, "issue138-c"))
+}
+
+// TestIssue138_UpdateAfterRemoveUsesBuiltin pins the same invariant on the
+// update path, which resolves templates at execution time.
+func TestIssue138_UpdateAfterRemoveUsesBuiltin(t *testing.T) {
+	work := issue138Setup(t)
+	projectPath := filepath.Join(work, "issue138-d")
+
+	// Scaffold with the built-in before any registry exists.
+	issue138MustRun(t, "new", "issue138-d", "--with", "editorconfig")
+	issue138AssertBuiltin(t, projectPath)
+
+	srv := issue138RegistryServer(t)
+	issue138MustRun(t, "template", "registry", "add", "team", srv.URL)
+	issue138MustRun(t, "template", "pull", "editorconfig", "--registry", "team")
+	issue138MustRun(t, "template", "registry", "remove", "team")
+
+	t.Chdir(projectPath)
+	issue138MustRun(t, "update")
+	issue138AssertBuiltin(t, projectPath)
+}

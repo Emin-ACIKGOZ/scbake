@@ -60,6 +60,7 @@ var applyCmd = &cobra.Command{
 			return err
 		}
 
+		cacheDir, registryNames := registryPolicy()
 		rc := core.RunContext{
 			LangFlag:            langFlag,
 			WithFlag:            withFlag,
@@ -69,7 +70,8 @@ var applyCmd = &cobra.Command{
 			Force:               force,           // force is the global flag.
 			ConflictStrategy:    conflictStrategyFlag,
 			TemplateDir:         resolvedTemplateDir,
-			RegistryCacheDir:    GetRegistryCacheDir(),
+			RegistryCacheDir:    cacheDir,
+			RegistryNames:       registryNames,
 			License:             licenseFlag,
 			CopyrightHolder:     copyrightHolderFlag,
 			SetVars:             setVars,

@@ -50,6 +50,11 @@ type TaskContext struct {
 	// RegistryCacheDir is the path to the local cache of pulled registry templates.
 	RegistryCacheDir string
 
+	// RegistryNames is the set of configured registry names. Registry cache
+	// resolution is limited to these names; an empty set disables the registry
+	// tier (fail closed).
+	RegistryNames []string
+
 	// Tx is the active filesystem transaction manager.
 	// If nil, tasks perform operations without safety tracking (legacy/testing mode).
 	Tx *transaction.Manager
@@ -70,4 +75,13 @@ type Task interface {
 // Plan is a sorted list of tasks to be executed.
 type Plan struct {
 	Tasks []Task
+}
+
+// RegistryAwareHandler is optionally implemented by language and tooling
+// handlers that resolve registry-cached templates at plan time. Core calls it
+// with the configured registry allowlist. Handlers that only build
+// CreateTemplateTask need not implement it because resolution happens at
+// execution time, where the allowlist is already available.
+type RegistryAwareHandler interface {
+	GetTasksWithRegistries(targetPath, templateDir, registryCacheDir string, registries []string) ([]Task, error)
 }
