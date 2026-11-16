@@ -37,7 +37,8 @@ language = "svelte"
 	}
 }
 
-// contributingFirstLine returns the first line of a generated CONTRIBUTING.md.
+// contributingFirstLine returns the first line of a generated CONTRIBUTING.md
+// with any CRLF terminator normalized away, so assertions are platform-neutral.
 func contributingFirstLine(t *testing.T, path string) string {
 	t.Helper()
 
@@ -46,7 +47,8 @@ func contributingFirstLine(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
 	}
-	return strings.SplitN(string(content), "\n", 2)[0]
+	line := strings.SplitN(string(content), "\n", 2)[0]
+	return strings.TrimRight(line, "\r\n")
 }
 
 // TestApplyAndUpdateCommunityContributingNamesOwningProject is the CLI-level
