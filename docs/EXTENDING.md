@@ -46,7 +46,7 @@ var templates embed.FS
 
 type Handler struct{}
 
-func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string, _ map[string]string) ([]types.Task, error) {
 	seq, _ := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
 	var plan []types.Task
 
@@ -83,7 +83,7 @@ func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 ```
 
 That's it. Your handler is a single Go struct that implements two methods:
-- `GetTasks(targetPath string, templateDir string, registryCacheDir string) ([]types.Task, error)` - Returns the tasks to execute
+- `GetTasks(targetPath string, templateDir string, registryCacheDir string, vars map[string]string) ([]types.Task, error)` - Returns the tasks to execute. `vars` carries only the explicit `--set` values (see [Consuming variables](#consuming-variables)).
 
 ### Step 4: Register Your Handler
 
@@ -317,7 +317,7 @@ var templates embed.FS
 
 type Handler struct{}
 
-func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string, _ map[string]string) ([]types.Task, error) {
 	seq, err := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
@@ -475,6 +475,32 @@ schema validation failed with 1 error(s):
   - variable "oncall_alias": required variable "oncall_alias" is missing
 ```
 
+### Consuming variables
+
+Declaring a variable in `schema.json` validates and records it; it does not by
+itself change generated output. A variable only affects output when the handler
+that owns it reads it:
+
+- **Language handlers** receive the explicit `--set` values as the `vars`
+  argument of `GetTasks`. `vars` never contains schema defaults, may be `nil`,
+  and a missing or empty value means "no override". A handler must stay a no-op
+  when `vars` is empty, because `update` and ordinary `new`/`apply` runs pass no
+  values.
+- **Template handlers** read inputs from `.Metadata` while rendering, where both
+  explicit values and schema defaults are available.
+
+Values are consumed only when passed on the current invocation: a value already
+recorded in `scbake.toml` is not re-applied by a later `apply` unless `--set` is
+given again. This keeps schema defaults (which are persisted in `[metadata]`)
+from silently overriding toolchain or project state.
+
+The Go language pack consumes `module_path` (new modules only; an existing
+module with a different path is an error, never a rewrite) and `go_version`
+(new modules and explicitly updated ones). The `ci_github` template consumes
+`runner_os` at render time. `build_tool` in the `makefile` template is the
+documented record-only example: it is validated and stored but intentionally has
+no consumer.
+
 ### Schema Reference
 
 | Field        | Values                     | Description                          |
@@ -531,7 +557,7 @@ import (
 
 func TestHandler_GetTasks(t *testing.T) {
 	h := &Handler{}
-	tasks, err := h.GetTasks("/tmp/test", "", "")
+	tasks, err := h.GetTasks("/tmp/test", "", "", nil)
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -630,7 +656,7 @@ If your handler requires a binary (like `cargo` or `npm`), check for it:
 ```go
 import "scbake/internal/preflight"
 
-func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string, _ map[string]string) ([]types.Task, error) {
 	if err := preflight.CheckBinaries("cargo"); err != nil {
 		return nil, fmt.Errorf("cargo not found: %w", err)
 	}

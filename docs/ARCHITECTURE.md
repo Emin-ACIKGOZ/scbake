@@ -34,13 +34,23 @@ On failure: Rollback (delete verified created paths deepest-first; restore backu
 All language packs and templates implement this interface:
 
 ```go
-// pkg/lang/registry.go or pkg/templates/registry.go
+// pkg/lang/registry.go
+type Handler interface {
+    GetTasks(targetPath string, templateDir string, registryCacheDir string, vars map[string]string) ([]types.Task, error)
+}
+
+// pkg/templates/registry.go
 type Handler interface {
     GetTasks(targetPath string, templateDir string, registryCacheDir string) ([]types.Task, error)
 }
 ```
 
-The three parameters support the **template resolution chain**:
+Language handlers take one extra parameter, `vars map[string]string`, which
+carries only the explicit `--set` values for the current invocation. Template
+handlers keep the three-path form; they read inputs from `.Metadata` while
+rendering.
+
+The three path parameters support the **template resolution chain**:
 1. `targetPath` — project root directory
 2. `templateDir` — local override directory (`--template-dir` or `$SCBAKE_TEMPLATE_DIR`)
 3. `registryCacheDir` — pulled template cache (`~/.cache/scbake/templates/`)
