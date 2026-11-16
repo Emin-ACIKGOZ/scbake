@@ -12,6 +12,7 @@ import (
 	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
+	"strings"
 )
 
 //go:embed main.go.tpl gitignore.tpl schema.json
@@ -78,7 +79,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string, vars map[strin
 
 	if os.IsNotExist(checkErr) {
 		// --- Path 1: go.mod does NOT exist (Initialization) ---
-		moduleName, err := util.SanitizeModuleName(targetPath)
+		moduleName, err := moduleNameFor(targetPath, vars)
 		if err != nil {
 			return nil, fmt.Errorf("could not determine module name: %w", err)
 		}
@@ -90,14 +91,20 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string, vars map[strin
 		}
 		plan = append(plan, &tasks.ExecCommandTask{
 			Cmd:              "go",
-			Args:             []string{goModSubcommand, "init", moduleName}, // Use sanitized name
+			Args:             []string{goModSubcommand, "init", moduleName},
 			Desc:             "Run go mod init " + moduleName,
 			TaskPrio:         int(p),
 			RunInTarget:      true,
 			PredictedCreated: []string{goModFile},
 		})
 
-		// Task 4: Run 'go mod tidy'
+		// Task 4 (optional): Run 'go mod edit -go=<version>'
+		plan, err = appendGoDirectiveTask(plan, langSeq, vars)
+		if err != nil {
+			return nil, err
+		}
+
+		// Task 5: Run 'go mod tidy'
 		p, err = langSeq.Next()
 		if err != nil {
 			return nil, err
@@ -112,8 +119,22 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string, vars map[strin
 		})
 	} else if checkErr == nil {
 		// --- Path 2: go.mod *does* exist (Maintenance) ---
-		// We only run 'go mod tidy' to update dependencies if files were modified.
-		p, err := langSeq.Next()
+		// scbake never rewrites an existing module path; a differing explicit
+		// value is an error so it is never recorded without being honoured.
+		if requested := vars["module_path"]; requested != "" {
+			if err := ensureModulePathUnchanged(targetPath, requested); err != nil {
+				return nil, err
+			}
+		}
+
+		// Task 3 (optional): Run 'go mod edit -go=<version>'
+		plan, err = appendGoDirectiveTask(plan, langSeq, vars)
+		if err != nil {
+			return nil, err
+		}
+
+		// Task 4: Run 'go mod tidy' to update dependencies if files were modified.
+		p, err = langSeq.Next()
 		if err != nil {
 			return nil, err
 		}
@@ -131,4 +152,83 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string, vars map[strin
 	}
 
 	return plan, nil
+}
+
+// moduleNameFor returns the explicit module_path when set, otherwise the
+// sanitized directory name. Go remains authoritative for module-path grammar;
+// only flag-like and whitespace values are rejected here so the error is clear
+// and raised at plan time instead of after `go mod init` runs.
+func moduleNameFor(targetPath string, vars map[string]string) (string, error) {
+	explicit := vars["module_path"]
+	if explicit == "" {
+		return util.SanitizeModuleName(targetPath)
+	}
+
+	if strings.HasPrefix(explicit, "-") {
+		return "", fmt.Errorf("invalid module_path %q: leading dash", explicit)
+	}
+	if strings.TrimSpace(explicit) != explicit || strings.ContainsAny(explicit, " \t\r\n") {
+		return "", fmt.Errorf("invalid module_path %q: whitespace is not allowed", explicit)
+	}
+
+	return explicit, nil
+}
+
+// appendGoDirectiveTask appends `go mod edit -go=<v>` when go_version is
+// explicitly set. go.mod is declared so a transaction restores an existing
+// module on rollback. No task is added when the value is absent or empty.
+func appendGoDirectiveTask(plan []types.Task, seq *types.PrioritySequence, vars map[string]string) ([]types.Task, error) {
+	version := vars["go_version"]
+	if version == "" {
+		return plan, nil
+	}
+
+	p, err := seq.Next()
+	if err != nil {
+		return nil, err
+	}
+	plan = append(plan, &tasks.ExecCommandTask{
+		Cmd:              "go",
+		Args:             []string{goModSubcommand, "edit", "-go=" + version},
+		Desc:             "Run go mod edit -go=" + version,
+		TaskPrio:         int(p),
+		RunInTarget:      true,
+		PredictedCreated: []string{goModFile},
+	})
+
+	return plan, nil
+}
+
+// ensureModulePathUnchanged errors when an explicit module_path differs from the
+// module directive already in go.mod. scbake never rewrites an existing module.
+func ensureModulePathUnchanged(targetPath, requested string) error {
+	current, err := moduleDirective(targetPath)
+	if err != nil {
+		return err
+	}
+	if current == requested {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"go.mod already declares module %q; scbake will not rewrite an existing module path (requested %q). To change it, run: go mod edit -module=%s",
+		current, requested, requested,
+	)
+}
+
+// moduleDirective returns the path declared by the module directive.
+func moduleDirective(targetPath string) (string, error) {
+	data, err := fileutil.SafeReadFile(targetPath, goModFile)
+	if err != nil {
+		return "", fmt.Errorf("could not read %s: %w", goModFile, err)
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "module" {
+			return fields[1], nil
+		}
+	}
+
+	return "", fmt.Errorf("%s has no module directive", goModFile)
 }
