@@ -8,11 +8,15 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"scbake/pkg/templates/compliance/internal/spdx/version"
 	"strings"
 	"testing"
 )
 
-const embeddedArchiveSHA256 = "27946c40bd9d43cb8ff3b33ac17334c3765b75c442611f04c78a836e85d1236e"
+const (
+	embeddedArchiveSHA256  = "27946c40bd9d43cb8ff3b33ac17334c3765b75c442611f04c78a836e85d1236e"
+	embeddedArchiveVersion = "3.29.0"
+)
 
 func TestTextMIT(t *testing.T) {
 	text, err := Text("MIT")
@@ -79,12 +83,24 @@ func TestVersion(t *testing.T) {
 	if Version == "" {
 		t.Fatal("Version must not be empty")
 	}
+	if Version != version.Version {
+		t.Errorf("spdx.Version = %q, want version.Version %q", Version, version.Version)
+	}
+	if want := "v" + version.Version; version.Tag != want {
+		t.Errorf("version.Tag = %q, want %q", version.Tag, want)
+	}
 }
 
-// TestEmbeddedArchiveIntegrity hashes the committed licenses.zip bytes. It
-// never regenerates the archive, so the assertion is independent of the local
+// TestEmbeddedArchiveIntegrity hashes the committed licenses.zip bytes and
+// checks that the version pin still describes that archive. It never
+// regenerates the archive, so the hash assertion is independent of the local
 // Go toolchain's deflate output.
 func TestEmbeddedArchiveIntegrity(t *testing.T) {
+	if version.Version != embeddedArchiveVersion {
+		t.Fatalf("spdx version pin = %q, but embedded licenses.zip was generated for %q; regenerate the archive and update embeddedArchiveVersion together",
+			version.Version, embeddedArchiveVersion)
+	}
+
 	sum := sha256.Sum256(licenseArchive)
 	if got := hex.EncodeToString(sum[:]); got != embeddedArchiveSHA256 {
 		t.Fatalf("embedded licenses.zip sha256 = %s, want %s; update the archive, index, and pinned hash together",
