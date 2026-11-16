@@ -7,9 +7,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -139,24 +138,17 @@ func TestRunLeavesOutputsUntouchedOnCaseInsensitiveCollision(t *testing.T) {
 	}
 }
 
-// Golden hashes for the fixture built by TestRunProducesDeterministicOutput.
-// They cover sorted archive/index order and the pinned ZIP timestamp; regenerate
-// them only when the fixture or generator format changes intentionally.
-const (
-	fixtureArchiveSHA256 = "730c6b89e5746e51a2df14ab1b0f1020b73411b79ff12eff5277e8ada1f547c2"
-	fixtureIndexSHA256   = "43ff5c5cd96f025d2f0ee63d816aa6b8daa3381e203414f502ac42c1eb73e607"
-)
-
-func assertGoldenHash(t *testing.T, name, path, want string) {
-	t.Helper()
-
-	sum := sha256.Sum256(readFile(t, path))
-	if got := hex.EncodeToString(sum[:]); got != want {
-		t.Errorf("%s sha256 = %s, want %s", name, got, want)
-	}
+// archiveEntry is the version-independent view of a ZIP entry. Comparing these
+// avoids compressed bytes, whose deflate output can differ across Go toolchains.
+type archiveEntry struct {
+	Name     string
+	Method   uint16
+	Modified string
+	Mode     os.FileMode
+	Content  string
 }
 
-func assertArchiveOrderAndTimestamp(t *testing.T, path string) {
+func readArchiveEntries(t *testing.T, path string) []archiveEntry {
 	t.Helper()
 
 	zr, err := zip.OpenReader(path)
@@ -165,32 +157,79 @@ func assertArchiveOrderAndTimestamp(t *testing.T, path string) {
 	}
 	defer func() { _ = zr.Close() }()
 
-	var names []string
+	entries := make([]archiveEntry, 0, len(zr.File))
 	for _, file := range zr.File {
-		names = append(names, file.Name)
-		if got := file.Modified.UTC().Format(time.RFC3339); got != "1980-01-01T00:00:00Z" {
-			t.Errorf("archive entry %s timestamp = %s, want pinned 1980-01-01T00:00:00Z", file.Name, got)
+		reader, err := file.Open()
+		if err != nil {
+			t.Fatalf("open archive entry %s: %v", file.Name, err)
 		}
+		content, readErr := io.ReadAll(reader)
+		closeErr := reader.Close()
+		if readErr != nil {
+			t.Fatalf("read archive entry %s: %v", file.Name, readErr)
+		}
+		if closeErr != nil {
+			t.Fatalf("close archive entry %s: %v", file.Name, closeErr)
+		}
+		entries = append(entries, archiveEntry{
+			Name:     file.Name,
+			Method:   file.Method,
+			Modified: file.Modified.UTC().Format(time.RFC3339),
+			Mode:     file.Mode(),
+			Content:  string(content),
+		})
 	}
-	if got, want := strings.Join(names, ","), "licenses/Apache-2.0.txt,licenses/MIT.txt"; got != want {
-		t.Errorf("archive entry order = %s, want %s", got, want)
-	}
+	return entries
 }
 
-func assertIndexSorted(t *testing.T, path string) {
+func assertArchiveEntries(t *testing.T, entries []archiveEntry) {
 	t.Helper()
 
-	index := string(readFile(t, path))
-	apache := strings.Index(index, `"apache-2.0"`)
-	mit := strings.Index(index, `"mit"`)
-	if apache < 0 || mit < 0 || apache > mit {
-		t.Errorf("index entries are not in sorted order (apache-2.0 at %d, mit at %d):\n%s", apache, mit, index)
+	want := []struct {
+		name    string
+		content string
+	}{
+		{"licenses/Apache-2.0.txt", "Apache License\n"},
+		{"licenses/MIT.txt", "MIT License\n"},
+	}
+	if len(entries) != len(want) {
+		t.Fatalf("archive has %d entries, want %d: %+v", len(entries), len(want), entries)
+	}
+	for i, expected := range want {
+		entry := entries[i]
+		if entry.Name != expected.name || entry.Content != expected.content {
+			t.Errorf("archive entry %d = %q with %q, want %q with %q",
+				i, entry.Name, entry.Content, expected.name, expected.content)
+		}
+		if entry.Modified != "1980-01-01T00:00:00Z" {
+			t.Errorf("archive entry %s timestamp = %s, want pinned 1980-01-01T00:00:00Z",
+				entry.Name, entry.Modified)
+		}
+		if entry.Method != zip.Deflate {
+			t.Errorf("archive entry %s method = %d, want %d", entry.Name, entry.Method, zip.Deflate)
+		}
 	}
 }
 
-// TestRunProducesDeterministicOutput guards sorted output, the pinned archive
-// timestamp, and byte stability: the same local source must produce identical
-// bytes, and the fixture must match its golden hashes and entry order.
+func assertIndexExact(t *testing.T, index []byte) {
+	t.Helper()
+
+	want := `const Version = "test-1.0"
+
+// canonicalIDs maps lowercase SPDX identifiers to their canonical casing.
+var canonicalIDs = map[string]string{
+	"apache-2.0": "Apache-2.0",
+	"mit":        "MIT",
+}
+`
+	if !strings.Contains(string(index), want) {
+		t.Errorf("generated index does not match the expected sorted keys:\n%s", index)
+	}
+}
+
+// TestRunProducesDeterministicOutput guards version-independent output: the
+// fixture is listed in reverse order, so entry order proves the sort; entry
+// contents/metadata and the index text must match across runs.
 func TestRunProducesDeterministicOutput(t *testing.T) {
 	source := writeLicenseSource(t, map[string]string{
 		"Apache-2.0": "Apache License\n",
@@ -209,25 +248,17 @@ func TestRunProducesDeterministicOutput(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"licenses.zip", "index.go"} {
-		first := readFile(t, filepath.Join(dirs[0], name))
-		second := readFile(t, filepath.Join(dirs[1], name))
-		if !bytes.Equal(first, second) {
-			t.Errorf("%s differs between identical runs", name)
-		}
+	firstArchive := readArchiveEntries(t, filepath.Join(dirs[0], "licenses.zip"))
+	secondArchive := readArchiveEntries(t, filepath.Join(dirs[1], "licenses.zip"))
+	if !slices.Equal(firstArchive, secondArchive) {
+		t.Errorf("archive entries differ between identical runs:\nfirst: %+v\nsecond: %+v", firstArchive, secondArchive)
 	}
+	assertArchiveEntries(t, firstArchive)
 
-	for _, tc := range []struct {
-		name string
-		path string
-		want string
-	}{
-		{"licenses.zip", filepath.Join(dirs[0], "licenses.zip"), fixtureArchiveSHA256},
-		{"index.go", filepath.Join(dirs[0], "index.go"), fixtureIndexSHA256},
-	} {
-		assertGoldenHash(t, tc.name, tc.path, tc.want)
+	firstIndex := readFile(t, filepath.Join(dirs[0], "index.go"))
+	secondIndex := readFile(t, filepath.Join(dirs[1], "index.go"))
+	if !bytes.Equal(firstIndex, secondIndex) {
+		t.Errorf("index.go differs between identical runs")
 	}
-
-	assertArchiveOrderAndTimestamp(t, filepath.Join(dirs[0], "licenses.zip"))
-	assertIndexSorted(t, filepath.Join(dirs[0], "index.go"))
+	assertIndexExact(t, firstIndex)
 }
