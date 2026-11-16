@@ -159,15 +159,34 @@ plan = append(plan, &tasks.CreateTemplateTask{
 
 Your template file (`main.rs.tpl`) can use Go's `text/template` syntax:
 
-```go
-// In your template:
+```gotemplate
 // main.rs.tpl
 fn main() {
-    println!("Hello from {{.ProjectName}}");
+    println!("Hello from {{ .Project.Name }}");
 }
 ```
 
-The template receives the current `scbake.toml` manifest as context, so you can reference any fields.
+The template receives a render-data wrapper around the current `scbake.toml`.
+Every manifest field is available directly (`.Projects`, `.Metadata`,
+`.SbakeVersion`, ...), plus an additive project-scoped field:
+
+- `.Project` — the manifest project whose `path` owns the directory the task is
+  writing into. Prefer `.Project.Name` over `(index .Projects 0).Name`: the
+  latter always names the first project in the manifest, which is wrong in a
+  monorepo.
+
+`.Project` is nil when there is no owning manifest project: a root-level
+tooling template, a target directory not listed under `[[projects]]`, or
+direct/library execution where no transaction root anchors the target. Guard
+it and choose the fallback deliberately. To keep the historical
+first-project behavior:
+
+```gotemplate
+# Contributing to {{ if .Project }}{{ .Project.Name }}{{ else if .Projects }}{{ (index .Projects 0).Name }}{{ else }}this project{{ end }}
+```
+
+Use `.Projects` only for legacy compatibility or when you intentionally need
+the full manifest list.
 
 ### 2. **ExecCommandTask** - Run shell commands
 
@@ -347,7 +366,7 @@ mkdir -p pkg/lang/rust/templates
 `pkg/lang/rust/templates/Cargo.toml.tpl`:
 ```toml
 [package]
-name = "{{ .Projects | first | .Name }}"
+name = "{{ .Project.Name }}"
 version = "0.1.0"
 edition = "2021"
 
@@ -357,9 +376,14 @@ edition = "2021"
 `pkg/lang/rust/templates/main.rs.tpl`:
 ```rust
 fn main() {
-    println!("Hello from {{ .Projects | first | .Name }}!");
+    println!("Hello from {{ .Project.Name }}!");
 }
 ```
+
+`.Project` is set when the task writes into a directory that is a manifest
+project. For templates that may also run at the repository root or outside a
+listed project, guard it with the fallback shown in
+[CreateTemplateTask](#1-createtemplatetask---create-files-from-templates).
 
 **Register it**:
 

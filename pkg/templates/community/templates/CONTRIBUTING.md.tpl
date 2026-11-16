@@ -1,4 +1,4 @@
-# Contributing to {{ if .Projects }}{{ (index .Projects 0).Name }}{{ else }}this project{{ end }}
+# Contributing to {{ if .Project }}{{ .Project.Name }}{{ else if .Projects }}{{ (index .Projects 0).Name }}{{ else }}this project{{ end }}
 
 Thank you for your interest in contributing! We want to make it as easy as possible to contribute to this project.
 
