@@ -41,10 +41,14 @@ const legacyRootTemplate = "root-templates"
 
 // RunContext holds the flags and arguments for a single execution run.
 type RunContext struct {
-	LangFlag         string
-	WithFlag         []string
-	TargetPath       string // Absolute path for execution stability.
-	ManifestPathArg  string // Relative path for manifest portability.
+	LangFlag   string
+	WithFlag   []string
+	TargetPath string // Absolute path for execution stability.
+	// ManifestPathArg is the raw CLI path argument. It is used for naming and
+	// commit text only, never as a canonical manifest path: runUpdate
+	// repurposes it to the normalised update-selection path. Manifest paths are
+	// computed from TargetPath.
+	ManifestPathArg  string
 	DryRun           bool
 	Force            bool
 	ConflictStrategy string
@@ -124,6 +128,17 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 		return err
 	}
 
+	// Compute the canonical root-relative path of the target once, from the
+	// authoritative absolute TargetPath. Both the project and template entries
+	// use this value, so every accepted spelling and working directory records
+	// the same path. Deriving it from ManifestPathArg would double-prefix an
+	// update launched from a subdirectory, because runUpdate repurposes that
+	// field to the already-normalised selection path.
+	projectPath, err := repoRelativeProjectPath(rootPath, rc.TargetPath)
+	if err != nil {
+		return fmt.Errorf("could not determine project path: %w", err)
+	}
+
 	// 2. Initialize Transaction Engine
 	if rc.DryRun {
 		// A dry run opens no transaction, but it must not plan against a tree
@@ -142,7 +157,7 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 
 	// 3. Execution Plan Construction
 	rc.WithFlag = deduplicateTemplates(rc.WithFlag)
-	plan, _, changes, err := buildPlan(rc, rootPath)
+	plan, _, changes, err := buildPlan(rc, projectPath)
 	if err != nil {
 		return err
 	}
@@ -685,22 +700,25 @@ func validateTestCommand(cmd string) error {
 	return nil
 }
 
-// repoRelativeProjectPath converts a user-supplied project path into a clean,
-// slash-separated path relative to the manifest root. Relative inputs are
-// cleaned in place; absolute inputs are made relative to rootPath so the
-// manifest stays portable and the path validator can require a repo-relative
-// value.
+// repoRelativeProjectPath converts a path into a clean, slash-separated path
+// relative to the manifest root. The argument is resolved against the process
+// working directory first, so every accepted spelling of the same target yields
+// one value and the manifest stays portable. A target outside rootPath is
+// rejected: stored paths are root-relative and must never escape the root.
 func repoRelativeProjectPath(rootPath, pathArg string) (string, error) {
 	if pathArg == "" {
 		return "", errors.New("project path must not be empty")
 	}
-	rel := pathArg
-	if filepath.IsAbs(pathArg) {
-		r, err := filepath.Rel(rootPath, pathArg)
-		if err != nil {
-			return "", fmt.Errorf("cannot make path %q relative to %q: %w", pathArg, rootPath, err)
-		}
-		rel = r
+	absPath, err := filepath.Abs(pathArg)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve path %q: %w", pathArg, err)
+	}
+	rel, err := filepath.Rel(rootPath, absPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot make path %q relative to %q: %w", pathArg, rootPath, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("target %q is outside the manifest root %q", pathArg, rootPath)
 	}
 	return filepath.ToSlash(filepath.Clean(rel)), nil
 }
@@ -793,8 +811,9 @@ func deduplicateTemplates(requested []string) []string {
 	return result
 }
 
-// buildPlan constructs the list of tasks based on CLI flags.
-func buildPlan(rc RunContext, rootPath string) (*types.Plan, string, *manifestChanges, error) {
+// buildPlan constructs the list of tasks based on CLI flags. projectPath is the
+// canonical root-relative path of the target; every manifest entry records it.
+func buildPlan(rc RunContext, projectPath string) (*types.Plan, string, *manifestChanges, error) {
 	plan := &types.Plan{Tasks: []types.Task{}}
 	changes := &manifestChanges{}
 	commitMessage := "scbake: Apply templates"
@@ -802,7 +821,7 @@ func buildPlan(rc RunContext, rootPath string) (*types.Plan, string, *manifestCh
 
 	if rc.LangFlag != "" {
 		didSomething = true
-		msg, err := handleLangFlag(rc, rootPath, plan, changes)
+		msg, err := handleLangFlag(rc, projectPath, plan, changes)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -811,7 +830,7 @@ func buildPlan(rc RunContext, rootPath string) (*types.Plan, string, *manifestCh
 
 	if len(rc.WithFlag) > 0 {
 		didSomething = true
-		if err := handleWithFlag(rc, plan, changes); err != nil {
+		if err := handleWithFlag(rc, projectPath, plan, changes); err != nil {
 			return nil, "", nil, err
 		}
 		// Update commit message based on what was done
@@ -888,8 +907,9 @@ func getLangTasks(h langTaskProvider, rc RunContext) ([]types.Task, error) {
 	return h.GetTasks(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir, rc.SetVars)
 }
 
-// handleLangFlag processes the --lang flag, adding language tasks and project info.
-func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *manifestChanges) (string, error) {
+// handleLangFlag processes the --lang flag, adding language tasks and project
+// info. projectPath is the canonical root-relative path of the target.
+func handleLangFlag(rc RunContext, projectPath string, plan *types.Plan, changes *manifestChanges) (string, error) {
 	// `update` only writes managed files, so language toolchains (go, npm,
 	// java) need not be installed. A dry run only warns, so the plan still prints.
 	if !rc.Update {
@@ -932,13 +952,6 @@ func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *m
 		return "", fmt.Errorf("could not determine project name: %w", err)
 	}
 
-	// Store a repo-relative path (the manifest is documented as portable) and
-	// validate it before it can reach any template.
-	projectPath, err := repoRelativeProjectPath(rootPath, rc.ManifestPathArg)
-	if err != nil {
-		return "", fmt.Errorf("could not determine project path: %w", err)
-	}
-
 	project := types.Project{
 		Name:     projectName,
 		Path:     projectPath,
@@ -952,8 +965,9 @@ func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *m
 	return fmt.Sprintf("scbake: Apply '%s' to %s", rc.LangFlag, rc.ManifestPathArg), nil
 }
 
-// handleWithFlag processes the --with flag, adding template tasks.
-func handleWithFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) error {
+// handleWithFlag processes the --with flag, adding template tasks. projectPath
+// is the canonical root-relative path of the target.
+func handleWithFlag(rc RunContext, projectPath string, plan *types.Plan, changes *manifestChanges) error {
 	for _, tmplName := range rc.WithFlag {
 		handler, err := templates.GetHandler(tmplName)
 		if err != nil {
@@ -978,7 +992,7 @@ func handleWithFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) e
 		// placeholder ({name: "root-templates"}) could not.
 		changes.Templates = append(changes.Templates, types.Template{
 			Name: tmplName,
-			Path: rc.ManifestPathArg,
+			Path: projectPath,
 		})
 	}
 

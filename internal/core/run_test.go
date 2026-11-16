@@ -478,36 +478,60 @@ func TestBuildTaskContextAcceptsBenignProjects(t *testing.T) {
 	cancel()
 }
 
-// TestRepoRelativeProjectPath verifies that absolute targets are normalized to
-// repo-relative paths so the manifest stays portable and the validator can
-// require a repo-relative value.
+// TestRepoRelativeProjectPath verifies that every spelling is resolved against
+// the process working directory and converted to one clean path relative to the
+// manifest root, so the manifest stays portable and the validator can require a
+// repo-relative value. A target outside the root is rejected.
 func TestRepoRelativeProjectPath(t *testing.T) {
 	// Build the root as a platform-absolute path so the absolute-path branch is
 	// exercised on Windows too (a POSIX "/repo" is not absolute there).
 	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(root, "services", "api"), 0o750); err != nil {
+		t.Fatalf("creating root fixture: %v", err)
+	}
+	t.Chdir(root)
+
 	tests := []struct {
-		root, arg, want string
+		arg, want string
 	}{
-		{root, filepath.Join(root, "backend"), "backend"},
-		{root, filepath.Join(root, "services", "api"), "services/api"},
-		{root, root, "."},
-		{root, "backend", "backend"},
-		{root, filepath.Join(".", "services", "api"), "services/api"},
-		{root, ".", "."},
-		{root, filepath.Join(root, "..", "other", "x"), "../other/x"},
+		{filepath.Join(root, "backend"), "backend"},
+		{filepath.Join(root, "services", "api"), "services/api"},
+		{root, "."},
+		{"backend", "backend"},
+		{filepath.Join(".", "services", "api"), "services/api"},
+		{".", "."},
+		{"services/../backend", "backend"},
+		{"backend/", "backend"},
 	}
 	for _, tt := range tests {
-		got, err := repoRelativeProjectPath(tt.root, tt.arg)
+		got, err := repoRelativeProjectPath(root, tt.arg)
 		if err != nil {
-			t.Errorf("repoRelativeProjectPath(%q, %q) error: %v", tt.root, tt.arg, err)
+			t.Errorf("repoRelativeProjectPath(%q, %q) error: %v", root, tt.arg, err)
 			continue
 		}
 		if got != tt.want {
-			t.Errorf("repoRelativeProjectPath(%q, %q) = %q, want %q", tt.root, tt.arg, got, tt.want)
+			t.Errorf("repoRelativeProjectPath(%q, %q) = %q, want %q", root, tt.arg, got, tt.want)
 		}
 	}
-	if _, err := repoRelativeProjectPath(root, ""); err == nil {
-		t.Error("repoRelativeProjectPath with empty arg = nil error, want error")
+
+	// Relative arguments are cwd-relative, so the same spelling means different
+	// directories from different working directories.
+	t.Run("cwd-relative", func(t *testing.T) {
+		t.Chdir(filepath.Join(root, "services"))
+		if got, err := repoRelativeProjectPath(root, "../backend"); err != nil || got != "backend" {
+			t.Errorf("repoRelativeProjectPath from services with ../backend = %q, %v; want backend, nil", got, err)
+		}
+	})
+
+	errorArgs := []string{
+		"",
+		"../other/x",
+		filepath.Join(root, "..", "other", "x"),
+	}
+	for _, arg := range errorArgs {
+		if got, err := repoRelativeProjectPath(root, arg); err == nil {
+			t.Errorf("repoRelativeProjectPath(%q, %q) = %q, nil; want an error", root, arg, got)
+		}
 	}
 }
 
