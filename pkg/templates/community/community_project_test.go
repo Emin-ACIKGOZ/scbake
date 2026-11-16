@@ -34,7 +34,8 @@ func contributingTask(t *testing.T) types.Task {
 }
 
 // contributingHeading renders CONTRIBUTING.md into tc.TargetPath and returns
-// its first line. The first line carries the project name the template chose.
+// its first line with any CRLF terminator normalized away, so assertions are
+// platform-neutral. The first line carries the project name the template chose.
 func contributingHeading(t *testing.T, task types.Task, tc types.TaskContext) string {
 	t.Helper()
 
@@ -45,8 +46,8 @@ func contributingHeading(t *testing.T, task types.Task, tc types.TaskContext) st
 	if err != nil {
 		t.Fatalf("reading CONTRIBUTING.md: %v", err)
 	}
-	lines := strings.SplitN(string(content), "\n", 2)
-	return lines[0]
+	line := strings.SplitN(string(content), "\n", 2)[0]
+	return strings.TrimRight(line, "\r\n")
 }
 
 // monorepoManifest is the two-project fixture. "api" is first on purpose, so a
