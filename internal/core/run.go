@@ -40,6 +40,10 @@ var ErrNoSelection = errors.New("no language or templates specified")
 // than failing with an unknown-template error.
 const legacyRootTemplate = "root-templates"
 
+// gitTemplateName is the tooling template that creates a repository and its
+// initial commit.
+const gitTemplateName = "git"
+
 // RunContext holds the flags and arguments for a single execution run.
 type RunContext struct {
 	LangFlag   string
@@ -139,6 +143,14 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 	projectPath, err := repoRelativeProjectPath(rootPath, rc.TargetPath)
 	if err != nil {
 		return fmt.Errorf("could not determine project path: %w", err)
+	}
+
+	// Git identity is an execution prerequisite, not a task. Check it before
+	// the transaction creates any state so a missing identity cannot leave a
+	// half-written project or a stray .git behind. Nested work trees are
+	// skipped instead: the git template must not initialize a repository there.
+	if err := preflightGit(rc); err != nil {
+		return err
 	}
 
 	// 2. Initialize Transaction Engine
@@ -952,6 +964,42 @@ func CheckLangPrerequisites(langFlag string) error {
 	return nil
 }
 
+// CheckGitPrerequisites validates the prerequisites for actually creating a
+// repository in targetPath. It is used by `new` before the project directory
+// exists and by the apply pipeline before any write. A target that the git
+// template will skip (existing repository or nested work tree) needs no
+// identity.
+func CheckGitPrerequisites(targetPath string) error {
+	if preflight.GitSkipReason(targetPath) != "" {
+		return nil
+	}
+	return preflight.CheckGitIdentity(targetPath)
+}
+
+// preflightGit enforces the git template's execution prerequisites at plan
+// time, before the transaction writes anything. A dry run fails on the same
+// prerequisite: reporting success for a run that cannot commit would be a
+// false preview (see #144).
+func preflightGit(rc RunContext) error {
+	if rc.Update || !containsTemplate(rc.WithFlag, gitTemplateName) {
+		return nil
+	}
+	if preflight.GitSkipReason(rc.TargetPath) != "" {
+		return nil
+	}
+	return preflight.CheckGitIdentity(rc.TargetPath)
+}
+
+// containsTemplate reports whether name appears in the template selection.
+func containsTemplate(names []string, name string) bool {
+	for _, candidate := range names {
+		if candidate == name {
+			return true
+		}
+	}
+	return false
+}
+
 // projectNameSource returns the value a generated manifest's project name is
 // derived from. For `new`, the manifest path stays "." while the directory
 // being created supplies the name; a real run has changed into it, and a dry
@@ -1066,6 +1114,22 @@ func handleLangFlag(rc RunContext, rootPath, projectPath string, plan *types.Pla
 // is the canonical root-relative path of the target.
 func handleWithFlag(rc RunContext, projectPath string, plan *types.Plan, changes *manifestChanges) error {
 	for _, tmplName := range rc.WithFlag {
+		if tmplName == gitTemplateName {
+			if reason := preflight.GitSkipReason(rc.TargetPath); reason != "" {
+				fmt.Fprintf(os.Stderr, "ℹ️  Skipping template '%s': %s (no repository will be initialized)\n", tmplName, reason)
+				// Keep master's manifest behavior: record the requested template
+				// even when it planned no tasks, using the canonical project
+				// path so update selection matches like every other entry.
+				// `update` filters side-effecting tasks, so this entry stays
+				// inert.
+				changes.Templates = append(changes.Templates, types.Template{
+					Name: tmplName,
+					Path: projectPath,
+				})
+				continue
+			}
+		}
+
 		handler, err := templates.GetHandler(tmplName)
 		if err != nil {
 			return err

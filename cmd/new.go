@@ -150,6 +150,16 @@ func validateNewSelection() (map[string]string, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	// The git template is planned after the directory exists, but checking here
+	// means a missing identity fails before `new` writes anything at all,
+	// including in a dry run: a preview that exits 0 for a run that cannot
+	// commit is a false success. An existing work tree needs no identity because
+	// the template will be skipped.
+	if containsGitTemplate(newWithFlag) {
+		if err := core.CheckGitPrerequisites("."); err != nil {
+			return nil, "", err
+		}
+	}
 	return setVars, resolved, nil
 }
 
@@ -259,6 +269,16 @@ func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporte
 }
 
 const maxKeyValueParts = 2
+
+// containsGitTemplate reports whether the selection includes the git template.
+func containsGitTemplate(names []string) bool {
+	for _, name := range names {
+		if name == "git" {
+			return true
+		}
+	}
+	return false
+}
 
 // parseSetFlags converts --set key=value entries into a map.
 func parseSetFlags(flags []string) (map[string]string, error) {

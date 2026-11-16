@@ -98,6 +98,12 @@ cd my-docs
 git log  # Already has initial commit!
 ```
 
+Run this outside an existing Git work tree. The `git` template needs a
+configured author and committer identity; if either is missing, `new` fails
+before creating the project directory (a `--dry-run` fails the same way). When
+the target already contains `.git` or is inside a work tree, the template is
+skipped with a notice and no nested repository is created.
+
 ## Available Languages
 
 | Language | Use case | Requires |
@@ -112,7 +118,7 @@ git log  # Already has initial commit!
 
 | Template | What it does |
 |----------|--|
-| **git** | Initialize repo, first commit |
+| **git** | Initialize repo, first commit (skipped inside an existing work tree; requires Git identity) |
 | **editorconfig** | Standard editor formatting |
 | **ci_github** | GitHub Actions workflows |
 | **makefile** | Universal build scripts |

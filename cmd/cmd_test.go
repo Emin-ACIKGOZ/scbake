@@ -66,6 +66,7 @@ func createMockGitScript(t *testing.T, dir string, failCommit bool) {
 		// Use findstr to catch the 'commit' subcommand regardless of flag positions.
 		content = fmt.Sprintf(`@echo off
 echo %%* | findstr "init" >nul && ( mkdir %s\info & type nul > %s\info\exclude & exit /b 0 )
+echo %%* | findstr "var" >nul && ( echo scbake-test test@scbake.dev 0 +0000 & exit /b 0 )
 echo %%* | findstr "commit" >nul && ( if "%s"=="true" exit /b 1 )
 exit /b 0`, fileutil.GitDir, fileutil.GitDir, failStr)
 	} else {
@@ -74,6 +75,7 @@ exit /b 0`, fileutil.GitDir, fileutil.GitDir, failStr)
 		content = fmt.Sprintf(`#!/bin/sh
 case "$*" in
   *init*) mkdir -p %s/info; : > %s/info/exclude; exit 0 ;;
+  *var*) echo "scbake-test test@scbake.dev 0 +0000"; exit 0 ;;
   *commit*) [ "%s" = "true" ] && exit 1 ;;
 esac
 exit 0`, fileutil.GitDir, fileutil.GitDir, failStr)
