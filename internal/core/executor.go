@@ -70,7 +70,12 @@ func runTask(plan *types.Plan, index int, task types.Task, tc types.TaskContext,
 	reporter.TaskStart(desc, index+1, len(plan.Tasks))
 
 	var err error
-	if !tc.DryRun {
+	if tc.DryRun {
+		// A dry run reports what the real run would decide, without
+		// performing any of it. Validate is the read-only half of a task,
+		// so this path can never write.
+		err = task.Validate(tc)
+	} else {
 		err = task.Execute(tc)
 	}
 

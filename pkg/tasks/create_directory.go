@@ -34,6 +34,12 @@ func (t *CreateDirTask) Execute(tc types.TaskContext) error {
 		return err
 	}
 
+	// The executor calls Validate instead of Execute in a dry run; this guard
+	// protects direct and library callers from creating the directory.
+	if tc.DryRun {
+		return nil
+	}
+
 	// Safety Tracking: If a transaction manager is present, register this path.
 	// If the directory doesn't exist, it will be marked for cleanup on rollback.
 	// If it does exist, this is a no-op (idempotent).

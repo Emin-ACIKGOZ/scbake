@@ -331,6 +331,13 @@ func checkFilePreconditions(tc types.TaskContext, output, target string) (string
 		return "", err
 	}
 
+	// A dry run still resolves and validates the path, but must not register
+	// implicit parents or create anything. The executor never calls Execute in
+	// a dry run; this guard protects direct and library callers.
+	if tc.DryRun {
+		return absPath, nil
+	}
+
 	// Register implicit parents for rollback (see trackMissingAncestors).
 	if err := trackMissingAncestors(tc, absPath); err != nil {
 		return "", err
