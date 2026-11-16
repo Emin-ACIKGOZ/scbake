@@ -28,8 +28,12 @@ type SchemaProvider interface {
 
 // Handler is the interface all language handlers must implement.
 type Handler interface {
-	// GetTasks takes a targetPath to be context-aware, and optional directories for overrides/cache
-	GetTasks(targetPath string, templateDir string, registryCacheDir string) ([]types.Task, error)
+	// GetTasks takes a targetPath to be context-aware, and optional directories
+	// for overrides/cache. vars carries only the explicit --set values for this
+	// invocation: it never contains schema defaults, may be nil, and a missing or
+	// empty key means "no override". Handlers must not reset state when vars is
+	// empty.
+	GetTasks(targetPath string, templateDir string, registryCacheDir string, vars map[string]string) ([]types.Task, error)
 }
 
 var (

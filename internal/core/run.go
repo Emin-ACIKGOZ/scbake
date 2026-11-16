@@ -865,7 +865,9 @@ func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *m
 		return "", err
 	}
 
-	langTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir)
+	// vars is deliberately rc.SetVars (explicit --set only). Schema defaults are
+	// applied later in buildTaskContext and must never drive command construction.
+	langTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir, rc.SetVars)
 	if err != nil {
 		return "", fmt.Errorf("failed to get tasks for lang '%s': %w", rc.LangFlag, err)
 	}

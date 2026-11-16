@@ -26,7 +26,7 @@ func TestGetTasks_NewProject(t *testing.T) {
 
 func getPlanOrFail(t *testing.T, h *Handler, path string) []types.Task {
 	t.Helper()
-	plan, err := h.GetTasks(path, "", "")
+	plan, err := h.GetTasks(path, "", "", nil)
 	if err != nil {
 		t.Fatalf("Failed to get tasks: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestGetTasks_RejectsLeadingDashName(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			plan, err := handler.GetTasks(target, "", "")
+			plan, err := handler.GetTasks(target, "", "", nil)
 			if err == nil {
 				t.Fatalf("expected an error for flag-like name %q, got plan %v", name, plan)
 			}
@@ -121,7 +121,7 @@ func assertNoGoModInit(t *testing.T, plan []types.Task) {
 // TestGetTasks_PrioritySafety ensures tasks stay within the Language Setup band.
 func TestGetTasks_PrioritySafety(t *testing.T) {
 	handler := &Handler{}
-	plan, err := handler.GetTasks(t.TempDir(), "", "")
+	plan, err := handler.GetTasks(t.TempDir(), "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

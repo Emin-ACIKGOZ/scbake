@@ -34,8 +34,10 @@ func (h *Handler) SchemaFS() embed.FS { return templates }
 // SchemaPath implements lang.SchemaProvider.
 func (h *Handler) SchemaPath() string { return "schema.json" }
 
-// GetTasks uses the sanitize utility to sanitize the module name and returns the execution plan.
-func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task, error) {
+// GetTasks returns the execution plan for a Go project. vars carries only the
+// explicit --set values for this invocation; schema defaults are never included
+// and an empty value means "no override".
+func (h *Handler) GetTasks(targetPath string, _ string, _ string, vars map[string]string) ([]types.Task, error) {
 	var plan []types.Task
 
 	// Use a single sequence for all language setup tasks (100-999)
