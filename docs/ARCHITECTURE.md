@@ -398,10 +398,10 @@ flags. Two properties make it safe:
   fall back to an artifact. Only tasks that declare themselves managed file
   writers (`CreateTemplateTask`, `LicenseTask`) are replayed, so environment
   commands and untracked writers such as `AppendFileTask` and `InsertXMLTask`
-  never re-run. Replaying `LicenseTask` fetches the license text from SPDX only
-  when LICENSE is missing or modified; a clean LICENSE is skipped and its base
-  is backfilled from the recorded bytes. A needed fetch that fails is a closed
-  failure, leaving managed files untouched.
+  never re-run. Replaying `LicenseTask` loads the license text from the embedded
+  SPDX snapshot only when LICENSE is missing or modified; a clean LICENSE is
+  skipped and its base is backfilled from the recorded bytes. An unknown license
+  ID is a closed failure, leaving managed files untouched.
 
 The base lives at the project root rather than under the ignored `.scbake/`
 directory so a normal commit carries it to a clone. The root `.gitignore` must

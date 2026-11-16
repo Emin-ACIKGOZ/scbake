@@ -85,8 +85,9 @@ graph LR
 - **Explicit & Non-Interactive**  
   No hidden prompts. Output is deterministic for fixed inputs and a fixed clock,
   except where a task fetches external content: `npm create vite@latest`,
-  `go mod tidy`, `start.spring.io`, and the `compliance` license text (SPDX,
-  plus the current year) inherit upstream-version, network, and clock behavior.
+  `go mod tidy`, and `start.spring.io` inherit upstream-version and network
+  behavior. The `compliance` license text is rendered from the embedded SPDX
+  snapshot, so only its copyright year follows the local clock.
 
 
 
@@ -169,7 +170,7 @@ scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spd
 | :------------------- | :----------------------------------------------- | :-------------------------- |
 | `--lang`             | Primary language pack (`go`, `svelte`, `spring`) | `--lang go`                 |
 | `--with`             | Comma-separated tooling templates                | `--with makefile,ci_github` |
-| `--license`          | SPDX License ID (required for `compliance`)      | `--license MIT`             |
+| `--license`          | SPDX License ID (required for `compliance`; embedded, works offline) | `--license MIT`             |
 | `--copyright-holder` | Copyright holder name (required for `compliance`) | `--copyright-holder "Acme Corp"` |
 | `--template-dir`     | Directory with custom template overrides         | `--template-dir ./my-tpls`  |
 | `--set`              | Set template variable (`key=value`, can be repeated) | `--set service_id=srv-abc` |
@@ -210,9 +211,10 @@ replay side-effecting commands or tasks whose writes are not tracked in the
 writers, including the compliance LICENSE generator, are replayed. A LICENSE
 that already matches its recorded hash is left untouched, so a clean update
 needs no network and does not re-stamp the copyright year. When LICENSE is
-missing or modified, the text is fetched from SPDX; if that fetch fails,
-`update` fails closed and leaves the managed files untouched. To change license
-terms, run `apply --with compliance` (or delete LICENSE before `update`).
+missing or modified, the text is rendered from the embedded SPDX snapshot; no
+network access is needed. An unknown license ID is the fail-closed case, and
+`update` then leaves the managed files untouched. To change license terms, run
+`apply --with compliance` (or delete LICENSE before `update`).
 
 ```bash
 scbake update [--template-dir <dir>] [--conflict-strategy <strategy>] [<path>]
@@ -354,10 +356,10 @@ scbake drift [--repair] [--require-base] [--conflict-strategy <strategy>] [<path
   `--conflict-strategy overwrite` to force generated content back. Under
   `overwrite`, a clean tree also re-records a missing base for non-LICENSE
   managed files; a clean LICENSE is backfilled on any strategy. Repairing a
-  missing or modified
-  compliance LICENSE fetches the text from SPDX, so that case needs network
-  access; a clean LICENSE is backfilled from its recorded bytes without a fetch.
-  If a needed fetch fails, repair stops and leaves the files untouched.
+  missing or modified compliance LICENSE renders the text from the embedded SPDX
+  snapshot, so that case needs no network access; a clean LICENSE is backfilled
+  from its recorded bytes without re-rendering. An unknown license ID is the
+  fail-closed case: repair stops and leaves the files untouched.
 
 Exit behavior:
 
@@ -523,13 +525,18 @@ Discovery is bounded by the nearest Git root: a manifest at or below that root w
 | `community`     | Universal Config (1000) | Scaffolds `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, and `GOVERNANCE.md` |
 | `editorconfig`  | Universal Config (1000) | Standard file formatting across the project                       |
 | `ci_github`     | CI (1100)               | Conditional CI setup based on detected languages          |
-| `compliance`    | Linter (1200)           | Adds `SECURITY.md`, `dependabot.yml`, `CODEOWNERS`, and dynamic `LICENSE` |
+| `compliance`    | Linter (1200)           | Adds `SECURITY.md`, `dependabot.yml`, `CODEOWNERS`, and a `LICENSE` built from embedded SPDX data |
 | `go_linter`     | Linter (1200)           | Standard `golangci-lint` configuration                     |
 | `maven_linter`  | Linter (1200)           | Checkstyle config + automatic pom.xml plugin integration                       |
 | `svelte_linter` | Linter (1200)           | ESLint 9 integration for Svelte projects          |
 | `makefile`      | Build System (1400)     | Universal build/lint scripts for all projects  |
 | `devcontainer`  | Dev Env (1500)          | Containerized DX with auto-detected toolchains |
 | `git`  | Version Control (2000)          | Initializes repo, stages all files, and creates initial commit |
+
+The `compliance` template resolves `--license` from an SPDX License List
+snapshot embedded in the binary, so license generation works offline. See
+[`pkg/templates/compliance/internal/spdx/README.md`](pkg/templates/compliance/internal/spdx/README.md)
+for the pinned version and maintainer refresh instructions.
 
 ## Extending `scbake`
 

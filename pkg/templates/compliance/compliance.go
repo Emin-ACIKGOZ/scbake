@@ -11,11 +11,10 @@ import (
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
+	"scbake/pkg/templates/compliance/internal/spdx"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/mitchellh/go-spdx"
 )
 
 //go:embed templates/*.tpl schema.json
@@ -111,9 +110,10 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	}
 
 	// During update/repair, a clean managed LICENSE is already reconciled. Skip
-	// the fetch so an offline update does not fail and the copyright year is not
-	// silently re-stamped. `apply` still renders unconditionally, so changing
-	// license terms is done with `apply --with compliance`.
+	// loading the text from the embedded snapshot so update does not re-validate
+	// the recorded license ID and the copyright year is not silently re-stamped.
+	// `apply` still renders unconditionally, so changing license terms is done
+	// with `apply --with compliance`.
 	if tc.Update {
 		unchanged, err := tasks.ManagedFileUnchanged(tc, "LICENSE")
 		if err != nil {
@@ -121,7 +121,7 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 		}
 		if unchanged {
 			// Repair a missing or stale pristine base from the current bytes
-			// without fetching the license text again.
+			// without loading the license text again.
 			if _, err := tasks.EnsureManagedFileBase(tc, "LICENSE"); err != nil {
 				return err
 			}
@@ -129,13 +129,12 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 		}
 	}
 
-	// 1. Fetch license text dynamically from SPDX.org
-	lic, err := spdx.License(licenseID)
+	// 1. Look up the license text in the embedded SPDX snapshot.
+	text, err := spdx.Text(licenseID)
 	if err != nil {
-		return fmt.Errorf("failed to fetch license '%s': %w", licenseID, err)
+		return fmt.Errorf("failed to load license %q: %w", licenseID, err)
 	}
 
-	text := lic.Text
 	year := strconv.Itoa(time.Now().Year())
 
 	// 2. Replace common SPDX placeholders.
