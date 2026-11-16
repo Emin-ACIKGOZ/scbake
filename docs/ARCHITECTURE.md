@@ -357,26 +357,44 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir)
 
 ### 4. Optimistic Locking (Fallback)
 
-scbake still detects concurrent manifest modifications via file modification
-time, as a fallback for non-scbake writers and older scbake versions:
+scbake still detects concurrent manifest modifications via the file state
+recorded at load time, as a fallback for non-scbake writers and older scbake
+versions:
 
 ```go
 // internal/manifest/io.go
-func Load(startPath string) (*types.Manifest, string, error) {
-    // Record modification time when file is loaded
-    manifestModTimes[manifestPath] = info.ModTime()
+type manifestFingerprint struct {
+    modTime time.Time
+    absent  bool // true when no manifest existed at Load
 }
 
-func Save(m *types.Manifest, rootPath string) error {
-    // Before saving, check if file was modified by another process
-    originalModTime := manifestModTimes[manifestPath]
-    currentModTime := os.Stat(manifestPath).ModTime()
-    
-    if !currentModTime.Equal(originalModTime) {
+var manifestStates = make(map[string]manifestFingerprint)
+
+func Load(...) {
+    // Existing manifest: record its mtime.
+    manifestStates[manifestPath] = manifestFingerprint{modTime: info.ModTime()}
+    // Absent manifest: record the absence so a later creation is a conflict.
+    manifestStates[manifestPath] = manifestFingerprint{absent: true}
+}
+
+func Save(...) {
+    // Before saving, reject a file that changed since Load.
+    state := manifestStates[manifestPath]
+    current, err := os.Stat(manifestPath)
+    if err == nil && (state.absent || !current.ModTime().Equal(state.modTime)) {
         return errors.New("manifest conflict: file was modified by another process")
     }
+
+    // ...write and sync the temp file, capture its mtime before rename, then:
+    // rename(tempPath, manifestPath)
+    manifestStates[manifestPath] = manifestFingerprint{modTime: tempModTime}
 }
 ```
+
+The absent-at-load sentinel catches an external create between `Load` and
+`Save`. After a successful rename, the fingerprint is refreshed from the mtime
+captured on the fully written temp file, so a second in-process `Save` does not
+falsely conflict and a concurrent writer's final-path mtime is never adopted.
 
 **Why**: This check runs after task execution and catches TOCTOU
 (Time-Of-Check-Time-Of-Use) changes from external editors or writers. It is no

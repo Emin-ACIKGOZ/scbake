@@ -20,11 +20,19 @@ import (
 // does not specify one (either absent or present but empty).
 const DefaultSbakeVersion = "v0.3.0"
 
+// manifestFingerprint records the manifest state observed at Load or after a
+// successful Save. absent marks a manifest that did not exist at Load, so a
+// file appearing at that path later is still treated as a concurrent write.
+type manifestFingerprint struct {
+	modTime time.Time
+	absent  bool
+}
+
 var (
-	// manifestModTimes tracks the modification time when a manifest was last loaded
-	// to detect concurrent modifications (optimistic locking)
-	manifestModTimes = make(map[string]time.Time)
-	modTimesLock     sync.Mutex
+	// manifestStates tracks the manifest state observed at Load or after a
+	// successful Save to detect concurrent modifications (optimistic locking).
+	manifestStates = make(map[string]manifestFingerprint)
+	modTimesLock   sync.Mutex
 )
 
 // DiscoveryOptions controls how a project root is discovered.
@@ -142,7 +150,13 @@ func LoadWithOptions(startPath string, opts DiscoveryOptions) (*types.Manifest, 
 	manifestPath, _ := fileutil.SafePath(rootPath, fileutil.ManifestFileName)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// File doesn't exist, return a new one
+			// File doesn't exist, return a new one. Record the absence so a
+			// manifest created by another process before Save is a conflict.
+			if manifestPath != "" {
+				modTimesLock.Lock()
+				manifestStates[manifestPath] = manifestFingerprint{absent: true}
+				modTimesLock.Unlock()
+			}
 			m := &types.Manifest{
 				SbakeVersion: DefaultSbakeVersion,
 				Projects:     []types.Project{},
@@ -169,30 +183,37 @@ func LoadWithOptions(startPath string, opts DiscoveryOptions) (*types.Manifest, 
 	// Record the modification time for conflict detection during Save()
 	if info, statErr := os.Stat(manifestPath); statErr == nil {
 		modTimesLock.Lock()
-		manifestModTimes[manifestPath] = info.ModTime()
+		manifestStates[manifestPath] = manifestFingerprint{modTime: info.ModTime()}
 		modTimesLock.Unlock()
 	}
 
 	return &m, rootPath, nil
 }
 
-// writeAndCloseManifestFile encodes manifest to file, syncs, and closes.
-func writeAndCloseManifestFile(f *os.File, m *types.Manifest) error {
+// writeAndCloseManifestFile encodes manifest to file, syncs, records the
+// written file's mtime, and closes.
+func writeAndCloseManifestFile(f *os.File, m *types.Manifest) (time.Time, error) {
 	encoder := toml.NewEncoder(f)
 	if err := encoder.Encode(m); err != nil {
-		return fmt.Errorf("failed to encode manifest: %w", err)
+		return time.Time{}, fmt.Errorf("failed to encode manifest: %w", err)
 	}
 
 	// Force write to disk
 	if err := f.Sync(); err != nil {
-		return fmt.Errorf("failed to sync manifest to disk: %w", err)
+		return time.Time{}, fmt.Errorf("failed to sync manifest to disk: %w", err)
+	}
+
+	// Capture the mtime while the handle is open; rename preserves it.
+	info, err := f.Stat()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to stat temp manifest: %w", err)
 	}
 
 	// Close explicitly to release file handle before Rename (critical on Windows)
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("failed to close temp manifest: %w", err)
+		return time.Time{}, fmt.Errorf("failed to close temp manifest: %w", err)
 	}
-	return nil
+	return info.ModTime(), nil
 }
 
 // checkManifestConflict detects if the manifest file has been modified by another process.
@@ -209,10 +230,15 @@ func checkManifestConflict(manifestPath string) error {
 	}
 
 	modTimesLock.Lock()
-	originalModTime, exists := manifestModTimes[manifestPath]
+	state, exists := manifestStates[manifestPath]
 	modTimesLock.Unlock()
 
-	if exists && !info.ModTime().Equal(originalModTime) {
+	if !exists {
+		return nil
+	}
+	// A manifest that was absent at Load but now exists, or a present manifest
+	// whose mtime changed, was written by another process.
+	if state.absent || !info.ModTime().Equal(state.modTime) {
 		return errors.New("manifest conflict: file was modified by another process (concurrent scbake invocation detected)")
 	}
 	return nil
@@ -263,7 +289,8 @@ func Save(m *types.Manifest, rootPath string) (err error) {
 		}
 	}()
 
-	if err := writeAndCloseManifestFile(f, m); err != nil {
+	savedModTime, err := writeAndCloseManifestFile(f, m)
+	if err != nil {
 		return err
 	}
 
@@ -272,6 +299,12 @@ func Save(m *types.Manifest, rootPath string) (err error) {
 	if renameErr := os.Rename(tempPath, finalPath); renameErr != nil {
 		return fmt.Errorf("failed to replace manifest file: %w", renameErr)
 	}
+
+	// Refresh the recorded state so a later in-process Save compares against
+	// the file this Save just wrote instead of the pre-rename version.
+	modTimesLock.Lock()
+	manifestStates[finalPath] = manifestFingerprint{modTime: savedModTime}
+	modTimesLock.Unlock()
 
 	return nil
 }
