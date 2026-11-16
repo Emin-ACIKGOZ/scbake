@@ -5,6 +5,7 @@ package integration
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -578,4 +579,170 @@ func TestUpdateDirectionFromSubdirectoryApply(t *testing.T) {
 		}
 		requireNoScbakeNewFiles(t, work)
 	})
+}
+
+// legacyAbsoluteManifestFixture applies a normal subproject and then rewrites
+// every recorded path to the equivalent absolute path, reproducing a manifest
+// written by an older build.
+func legacyAbsoluteManifestFixture(t *testing.T) (repo, manifestPath, absTarget string) {
+	t.Helper()
+	_, repo = manifestPathRepo(t, false)
+	absTarget = filepath.Join(repo, "svc")
+	out, err := runManifestCLI(t, repo, "apply", "--lang", "go", "--with", "editorconfig", "svc")
+	if err != nil {
+		t.Fatalf("apply failed: %v\n%s", err, out)
+	}
+	manifestPath = filepath.Join(repo, "scbake.toml")
+	data := mustReadFile(t, manifestPath)
+	if !strings.Contains(data, `path = "svc"`) {
+		t.Fatalf("fixture manifest does not record the canonical path:\n%s", data)
+	}
+	data = strings.ReplaceAll(data, `path = "svc"`, fmt.Sprintf("path = %q", absTarget))
+	if !strings.Contains(data, absTarget) {
+		t.Fatalf("fixture failed to absolutise paths:\n%s", data)
+	}
+	mustWriteFile(t, manifestPath, data)
+	return repo, manifestPath, absTarget
+}
+
+func requireRepairedManifest(t *testing.T, manifestPath, wantPath, legacyAbsolute string) {
+	t.Helper()
+	raw := mustReadFile(t, manifestPath)
+	m := decodeManifest(t, filepath.Dir(manifestPath))
+	requireSingleProject(t, m, wantPath, "svc", "go")
+	requireTemplatesAt(t, m, wantPath, "editorconfig")
+	requireNoAbsolutePaths(t, m)
+	if strings.Contains(raw, legacyAbsolute) {
+		t.Errorf("manifest still records the absolute legacy path %q:\n%s", legacyAbsolute, raw)
+	}
+}
+
+// TestLegacyAbsoluteManifestRepaired proves that absolute legacy entries are
+// rebased in memory on load and persisted by the next mutating run, including
+// project-only manifests that the validator would otherwise reject.
+func TestLegacyAbsoluteManifestRepaired(t *testing.T) {
+	t.Run("update svc", func(t *testing.T) {
+		repo, manifestPath, legacyAbsolute := legacyAbsoluteManifestFixture(t)
+		out, err := runManifestCLI(t, repo, "update", "svc")
+		if err != nil {
+			t.Fatalf("update over an absolute legacy manifest failed: %v\n%s", err, out)
+		}
+		requireRepairedManifest(t, manifestPath, "svc", legacyAbsolute)
+	})
+
+	t.Run("drift --repair svc", func(t *testing.T) {
+		repo, manifestPath, legacyAbsolute := legacyAbsoluteManifestFixture(t)
+		out, err := runManifestCLI(t, repo, "drift", "--repair", "svc")
+		if err != nil {
+			t.Fatalf("drift --repair over an absolute legacy manifest failed: %v\n%s", err, out)
+		}
+		requireRepairedManifest(t, manifestPath, "svc", legacyAbsolute)
+	})
+
+	t.Run("project-only absolute is accepted by apply", func(t *testing.T) {
+		_, repo := manifestPathRepo(t, false)
+		absTarget := filepath.Join(repo, "svc")
+		manifestPath := filepath.Join(repo, "scbake.toml")
+		mustWriteFile(t, manifestPath, fmt.Sprintf(`scbake_version = "v0.3.0"
+
+[[projects]]
+  name = "svc"
+  path = %q
+  language = "go"
+`, absTarget))
+
+		out, err := runManifestCLI(t, repo, "apply", "--with", "editorconfig", "svc")
+		if err != nil {
+			t.Fatalf("apply over a project-only absolute legacy manifest failed: %v\n%s", err, out)
+		}
+		m := decodeManifest(t, repo)
+		requireSingleProject(t, m, "svc", "svc", "go")
+		requireTemplatesAt(t, m, "svc", "editorconfig")
+		if raw := mustReadFile(t, manifestPath); strings.Contains(raw, `path = "/`) {
+			t.Errorf("manifest still records an absolute path:\n%s", raw)
+		}
+	})
+}
+
+// TestLegacyRelativeManifestStaysInert pins the E8 counterexample: a relative
+// legacy entry is ambiguous, so cleaning it would make an inert entry match a
+// different directory. It must stay byte-identical and must not cause a write.
+func TestLegacyRelativeManifestStaysInert(t *testing.T) {
+	_, repo := manifestPathRepo(t, false)
+	manifestPath := filepath.Join(repo, "scbake.toml")
+	const legacy = `scbake_version = "v0.3.0"
+
+[[templates]]
+  name = "editorconfig"
+  path = "./nested"
+
+[managed_files]
+  "svc/nested/.editorconfig" = "0000000000000000000000000000000000000000000000000000000000000000"
+`
+	mustWriteFile(t, manifestPath, legacy)
+	mustWriteFile(t, filepath.Join(repo, "svc", "nested", ".editorconfig"), "user content\n")
+	before := snapshotManifest(t, manifestPath)
+
+	out, err := runManifestCLI(t, repo, "update", "nested")
+	if err == nil {
+		t.Fatalf("update accepted the ambiguous relative legacy entry:\n%s", out)
+	}
+	if !strings.Contains(out, "records no templates") {
+		t.Errorf("unexpected error for the inert legacy entry:\n%s", out)
+	}
+	requireManifestUnchanged(t, manifestPath, before)
+	if _, err := os.Stat(filepath.Join(repo, "nested", ".editorconfig")); !os.IsNotExist(err) {
+		t.Errorf("update wrote a wrong-directory file repo/nested/.editorconfig (stat err: %v)", err)
+	}
+	if got := mustReadFile(t, manifestPath); got != legacy {
+		t.Errorf("inert legacy manifest was rewritten:\n%s", got)
+	}
+	requireNoScbakeNewFiles(t, repo)
+}
+
+// TestReadOnlyCommandsDoNotRewriteManifest proves load-time rebasing is in
+// memory only: list, drift, and dry runs leave bytes, inode, and mtime alone.
+// The update dry-run is allowed to fail selection on a legacy absolute manifest
+// (on master it does); the no-write property is what this test pins.
+func TestReadOnlyCommandsDoNotRewriteManifest(t *testing.T) {
+	repo, manifestPath, _ := legacyAbsoluteManifestFixture(t)
+	before := snapshotManifest(t, manifestPath)
+
+	commands := []struct {
+		name        string
+		args        []string
+		mustSucceed bool
+	}{
+		{"list projects", []string{"list", "projects"}, true},
+		{"drift", []string{"drift"}, true},
+		{"update --dry-run svc", []string{"update", "--dry-run", "svc"}, false},
+		{"apply --dry-run svc", []string{"apply", "--dry-run", "--with", "editorconfig", "svc"}, false},
+	}
+	for _, cmd := range commands {
+		out, err := runManifestCLI(t, repo, cmd.args...)
+		if err != nil && cmd.mustSucceed {
+			t.Fatalf("%s failed: %v\n%s", cmd.name, err, out)
+		}
+		if err != nil {
+			t.Logf("%s did not select a legacy absolute entry (expected before repair): %v\n%s", cmd.name, err, out)
+		}
+		requireManifestUnchanged(t, manifestPath, before)
+	}
+	requireNoScbakeNewFiles(t, repo)
+
+	// A canonical manifest must support the same dry run.
+	_, canonicalRepo := manifestPathRepo(t, false)
+	if out, err := runManifestCLI(t, canonicalRepo, "apply", "--lang", "go", "--with", "editorconfig", "svc"); err != nil {
+		t.Fatalf("canonical fixture apply failed: %v\n%s", err, out)
+	}
+	canonicalManifest := filepath.Join(canonicalRepo, "scbake.toml")
+	canonicalBefore := snapshotManifest(t, canonicalManifest)
+	if out, err := runManifestCLI(t, canonicalRepo, "update", "--dry-run", "svc"); err != nil {
+		t.Fatalf("update --dry-run on a canonical manifest failed: %v\n%s", err, out)
+	}
+	requireManifestUnchanged(t, canonicalManifest, canonicalBefore)
+	if out, err := runManifestCLI(t, canonicalRepo, "apply", "--dry-run", "--with", "editorconfig", "svc"); err != nil {
+		t.Fatalf("apply --dry-run on a canonical manifest failed: %v\n%s", err, out)
+	}
+	requireManifestUnchanged(t, canonicalManifest, canonicalBefore)
 }

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
+	"strings"
 	"sync"
 	"time"
 
@@ -180,6 +181,8 @@ func LoadWithOptions(startPath string, opts DiscoveryOptions) (*types.Manifest, 
 		m.SbakeVersion = DefaultSbakeVersion
 	}
 
+	normalizeRecordedPaths(&m, rootPath)
+
 	// Record the modification time for conflict detection during Save()
 	if info, statErr := os.Stat(manifestPath); statErr == nil {
 		modTimesLock.Lock()
@@ -188,6 +191,37 @@ func LoadWithOptions(startPath string, opts DiscoveryOptions) (*types.Manifest, 
 	}
 
 	return &m, rootPath, nil
+}
+
+// normalizeRecordedPaths rebases absolute project and template paths that
+// resolve inside rootPath into slash-separated root-relative paths. It is
+// deliberately narrow: relative paths are never rewritten, because the working
+// directory that authored them is unrecoverable and cleaning them can make an
+// inert legacy entry match a different directory. The change is in memory only;
+// a later explicit Save persists it. Read-only commands do not Save.
+func normalizeRecordedPaths(m *types.Manifest, rootPath string) {
+	if m == nil || rootPath == "" {
+		return
+	}
+	canon := func(p string) string {
+		if p == "" || !filepath.IsAbs(p) {
+			return p
+		}
+		rel, err := filepath.Rel(rootPath, p)
+		if err != nil {
+			return p
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return p
+		}
+		return filepath.ToSlash(filepath.Clean(rel))
+	}
+	for i := range m.Projects {
+		m.Projects[i].Path = canon(m.Projects[i].Path)
+	}
+	for i := range m.Templates {
+		m.Templates[i].Path = canon(m.Templates[i].Path)
+	}
 }
 
 // writeAndCloseManifestFile encodes manifest to file, syncs, records the
