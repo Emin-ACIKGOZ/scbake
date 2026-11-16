@@ -4,13 +4,18 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fixtureLicense struct {
@@ -34,8 +39,17 @@ func writeLicenseSource(t *testing.T, texts map[string]string) string {
 		t.Fatalf("create fixture details dir: %v", err)
 	}
 
-	list := fixtureList{Version: "test-1.0"}
+	ids := make([]string, 0, len(texts))
 	for id := range texts {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	// Write the fixture list in reverse order so the generator's sort is
+	// observable in the output.
+	slices.Reverse(ids)
+
+	list := fixtureList{Version: "test-1.0"}
+	for _, id := range ids {
 		list.Licenses = append(list.Licenses, fixtureLicense{ID: id})
 	}
 	listBytes, err := json.Marshal(list)
@@ -46,8 +60,8 @@ func writeLicenseSource(t *testing.T, texts map[string]string) string {
 		t.Fatalf("write fixture license list: %v", err)
 	}
 
-	for id, text := range texts {
-		detailBytes, err := json.Marshal(map[string]string{"licenseText": text})
+	for _, id := range ids {
+		detailBytes, err := json.Marshal(map[string]string{"licenseText": texts[id]})
 		if err != nil {
 			t.Fatalf("marshal fixture license %q: %v", id, err)
 		}
@@ -125,8 +139,58 @@ func TestRunLeavesOutputsUntouchedOnCaseInsensitiveCollision(t *testing.T) {
 	}
 }
 
-// TestRunProducesDeterministicOutput guards the pinned archive header and
-// sorted index ordering: the same local source must produce identical bytes.
+// Golden hashes for the fixture built by TestRunProducesDeterministicOutput.
+// They cover sorted archive/index order and the pinned ZIP timestamp; regenerate
+// them only when the fixture or generator format changes intentionally.
+const (
+	fixtureArchiveSHA256 = "730c6b89e5746e51a2df14ab1b0f1020b73411b79ff12eff5277e8ada1f547c2"
+	fixtureIndexSHA256   = "43ff5c5cd96f025d2f0ee63d816aa6b8daa3381e203414f502ac42c1eb73e607"
+)
+
+func assertGoldenHash(t *testing.T, name, path, want string) {
+	t.Helper()
+
+	sum := sha256.Sum256(readFile(t, path))
+	if got := hex.EncodeToString(sum[:]); got != want {
+		t.Errorf("%s sha256 = %s, want %s", name, got, want)
+	}
+}
+
+func assertArchiveOrderAndTimestamp(t *testing.T, path string) {
+	t.Helper()
+
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatalf("open generated archive: %v", err)
+	}
+	defer func() { _ = zr.Close() }()
+
+	var names []string
+	for _, file := range zr.File {
+		names = append(names, file.Name)
+		if got := file.Modified.UTC().Format(time.RFC3339); got != "1980-01-01T00:00:00Z" {
+			t.Errorf("archive entry %s timestamp = %s, want pinned 1980-01-01T00:00:00Z", file.Name, got)
+		}
+	}
+	if got, want := strings.Join(names, ","), "licenses/Apache-2.0.txt,licenses/MIT.txt"; got != want {
+		t.Errorf("archive entry order = %s, want %s", got, want)
+	}
+}
+
+func assertIndexSorted(t *testing.T, path string) {
+	t.Helper()
+
+	index := string(readFile(t, path))
+	apache := strings.Index(index, `"apache-2.0"`)
+	mit := strings.Index(index, `"mit"`)
+	if apache < 0 || mit < 0 || apache > mit {
+		t.Errorf("index entries are not in sorted order (apache-2.0 at %d, mit at %d):\n%s", apache, mit, index)
+	}
+}
+
+// TestRunProducesDeterministicOutput guards sorted output, the pinned archive
+// timestamp, and byte stability: the same local source must produce identical
+// bytes, and the fixture must match its golden hashes and entry order.
 func TestRunProducesDeterministicOutput(t *testing.T) {
 	source := writeLicenseSource(t, map[string]string{
 		"Apache-2.0": "Apache License\n",
@@ -152,4 +216,18 @@ func TestRunProducesDeterministicOutput(t *testing.T) {
 			t.Errorf("%s differs between identical runs", name)
 		}
 	}
+
+	for _, tc := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{"licenses.zip", filepath.Join(dirs[0], "licenses.zip"), fixtureArchiveSHA256},
+		{"index.go", filepath.Join(dirs[0], "index.go"), fixtureIndexSHA256},
+	} {
+		assertGoldenHash(t, tc.name, tc.path, tc.want)
+	}
+
+	assertArchiveOrderAndTimestamp(t, filepath.Join(dirs[0], "licenses.zip"))
+	assertIndexSorted(t, filepath.Join(dirs[0], "index.go"))
 }
