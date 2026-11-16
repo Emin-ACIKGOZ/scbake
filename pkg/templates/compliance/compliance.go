@@ -110,10 +110,10 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	}
 
 	// During update/repair, a clean managed LICENSE is already reconciled. Skip
-	// loading the text from the embedded snapshot so an offline update does not
-	// fail and the copyright year is not silently re-stamped. `apply` still
-	// renders unconditionally, so changing license terms is done with
-	// `apply --with compliance`.
+	// loading the text from the embedded snapshot so update does not re-validate
+	// the recorded license ID and the copyright year is not silently re-stamped.
+	// `apply` still renders unconditionally, so changing license terms is done
+	// with `apply --with compliance`.
 	if tc.Update {
 		unchanged, err := tasks.ManagedFileUnchanged(tc, "LICENSE")
 		if err != nil {
