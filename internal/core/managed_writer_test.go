@@ -4,14 +4,8 @@
 package core
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
-	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"scbake/internal/drift"
 	"scbake/internal/manifest"
@@ -22,8 +16,6 @@ import (
 	"scbake/pkg/templates/compliance"
 	"strings"
 	"testing"
-
-	"github.com/mitchellh/go-spdx"
 )
 
 // fakeManagedWriterTask declares itself a managed writer and writes through the
@@ -42,51 +34,6 @@ func (t *fakeManagedWriterTask) WritesManagedFile() bool {
 
 func (t *fakeManagedWriterTask) Execute(tc types.TaskContext) error {
 	return tasks.WriteManagedFile(tc, t.outputPath, []byte(t.content), fileutil.FilePerms)
-}
-
-// spdxRoundTripFunc adapts a function to http.RoundTripper.
-type spdxRoundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f spdxRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
-
-// stubSPDX replaces the package-level SPDX client for one test. Tests that use
-// it must not run in parallel because the client is global.
-func stubSPDX(t *testing.T, respond func(licenseID string) (string, error)) {
-	t.Helper()
-
-	old := spdx.DefaultClient
-	t.Cleanup(func() { spdx.DefaultClient = old })
-
-	spdx.DefaultClient = &spdx.Client{HTTP: &http.Client{
-		Transport: spdxRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-			licenseID := strings.TrimSuffix(path.Base(req.URL.Path), ".json")
-			text, err := respond(licenseID)
-			if err != nil {
-				return nil, err
-			}
-			body, err := json.Marshal(map[string]string{
-				"licenseId":   licenseID,
-				"licenseText": text,
-			})
-			if err != nil {
-				return nil, err
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(bytes.NewReader(body)),
-				Request:    req,
-			}, nil
-		}),
-	}}
-}
-
-// textForLicense is the fake SPDX payload. It deliberately contains no
-// placeholders so the assertion does not depend on the current year.
-func textForLicense(id string) string {
-	return "LICENSE TEXT FOR " + id + "\n"
 }
 
 // writeLicenseFixture records a handcrafted compliance manifest whose LICENSE
@@ -108,6 +55,23 @@ func writeLicenseFixture(t *testing.T, root, licenseID, content string) {
 	}
 	if err := manifest.Save(m, root); err != nil {
 		t.Fatalf("write fixture manifest: %v", err)
+	}
+}
+
+// assertRenderedLicense checks observable properties of a rendered license:
+// it names the expected license, substitutes the metadata holder, and leaves no
+// unsubstituted year or holder placeholders.
+func assertRenderedLicense(t *testing.T, text, title, holder string) {
+	t.Helper()
+
+	if !strings.Contains(text, title) {
+		t.Errorf("LICENSE is missing %q:\n%s", title, text)
+	}
+	if !strings.Contains(text, holder) {
+		t.Errorf("LICENSE is missing the copyright holder %q:\n%s", holder, text)
+	}
+	if strings.Contains(text, "<year>") || strings.Contains(text, "<copyright holders>") {
+		t.Errorf("LICENSE still contains SPDX placeholders:\n%s", text)
 	}
 }
 
@@ -159,10 +123,8 @@ func TestManagedWriteTasks_MarkerKeepsManagedWriters(t *testing.T) {
 // the repair path (drift --repair delegates to RunUpdate). The file must be
 // restored and the next drift scan must be clean.
 func TestRunUpdateRepairsDeletedLicense(t *testing.T) {
-	stubSPDX(t, func(id string) (string, error) { return textForLicense(id), nil })
-
 	root := t.TempDir()
-	const content = "LICENSE TEXT FOR MIT\n"
+	const content = "stale MIT license text\n"
 	writeLicenseFixture(t, root, "MIT", content)
 
 	licensePath := filepath.Join(root, "LICENSE")
@@ -182,9 +144,7 @@ func TestRunUpdateRepairsDeletedLicense(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LICENSE was not restored: %v", err)
 	}
-	if string(restored) != content {
-		t.Errorf("LICENSE = %q, want %q", restored, content)
-	}
+	assertRenderedLicense(t, string(restored), "MIT License", "Test Holder")
 
 	m, loadedRoot, err := manifest.Load(root)
 	if err != nil {
@@ -199,37 +159,33 @@ func TestRunUpdateRepairsDeletedLicense(t *testing.T) {
 	}
 }
 
-// TestRunUpdateFailsClosedWithoutSPDX proves update/repair fail closed when a
-// missing LICENSE cannot be fetched: the file stays absent and rollback leaves
-// no transaction residue.
-func TestRunUpdateFailsClosedWithoutSPDX(t *testing.T) {
-	stubSPDX(t, func(string) (string, error) {
-		return "", errors.New("spdx unreachable")
-	})
-
+// TestRunUpdateFailsClosedOnUnknownLicense proves update/repair fail closed
+// when a missing LICENSE cannot be rendered from the embedded snapshot: the
+// file stays absent and rollback leaves no transaction residue.
+func TestRunUpdateFailsClosedOnUnknownLicense(t *testing.T) {
 	root := t.TempDir()
-	const content = "LICENSE TEXT FOR MIT\n"
-	writeLicenseFixture(t, root, "MIT", content)
+	const content = "stale license text\n"
+	writeLicenseFixture(t, root, "NOT-A-REAL-LICENSE", content)
 
 	licensePath := filepath.Join(root, "LICENSE")
 	if err := os.WriteFile(licensePath, []byte(content), fileutil.PrivateFilePerms); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(licensePath); err != nil {
-		t.Fatalf("delete LICENSE so repair must fetch: %v", err)
+		t.Fatalf("delete LICENSE so repair must render it: %v", err)
 	}
 
 	reporter := ui.NewPlainReporter(5, false)
 	err := RunUpdate(licenseRunContext(root), reporter)
 	if err == nil {
-		t.Fatal("RunUpdate succeeded without SPDX access; want fail-closed error")
+		t.Fatal("RunUpdate succeeded with an unknown license ID; want fail-closed error")
 	}
-	if !strings.Contains(err.Error(), "spdx unreachable") {
-		t.Errorf("RunUpdate error = %v, want it to surface the SPDX failure", err)
+	if !strings.Contains(err.Error(), "unknown SPDX license ID") {
+		t.Errorf("RunUpdate error = %v, want it to name the unknown SPDX license ID", err)
 	}
 
 	if _, statErr := os.Stat(licensePath); !os.IsNotExist(statErr) {
-		t.Errorf("failed update wrote LICENSE despite the fetch failure (stat err: %v)", statErr)
+		t.Errorf("failed update wrote LICENSE despite the unknown license ID (stat err: %v)", statErr)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, fileutil.InternalDir)); !os.IsNotExist(statErr) {
 		t.Errorf("failed update left transaction residue at %s (stat err: %v)",
@@ -237,14 +193,10 @@ func TestRunUpdateFailsClosedWithoutSPDX(t *testing.T) {
 	}
 }
 
-// TestRunUpdateSkipsCleanLicenseWithoutSPDX proves a clean managed LICENSE is
-// already reconciled: update succeeds offline, leaves the bytes unchanged, and
-// does not re-stamp the copyright year.
-func TestRunUpdateSkipsCleanLicenseWithoutSPDX(t *testing.T) {
-	stubSPDX(t, func(string) (string, error) {
-		return "", errors.New("spdx must not be contacted for a clean LICENSE")
-	})
-
+// TestRunUpdateSkipsCleanLicense proves a clean managed LICENSE is already
+// reconciled: update leaves the bytes unchanged and does not re-stamp the
+// copyright year.
+func TestRunUpdateSkipsCleanLicense(t *testing.T) {
 	root := t.TempDir()
 	const content = "Copyright (c) 2024 Test Holder\n"
 	writeLicenseFixture(t, root, "MIT", content)
@@ -256,7 +208,7 @@ func TestRunUpdateSkipsCleanLicenseWithoutSPDX(t *testing.T) {
 
 	reporter := ui.NewPlainReporter(5, false)
 	if err := RunUpdate(licenseRunContext(root), reporter); err != nil {
-		t.Fatalf("clean update contacted SPDX or failed: %v", err)
+		t.Fatalf("clean update failed: %v", err)
 	}
 
 	after, err := os.ReadFile(licensePath) //nolint:gosec // test-controlled fixture path
@@ -272,16 +224,12 @@ func TestRunUpdateSkipsCleanLicenseWithoutSPDX(t *testing.T) {
 	}
 }
 
-// TestRunUpdateRepairsMissingBaseWithoutSPDX proves a clean LICENSE whose
-// pristine base is missing is backfilled from the current bytes, without an
-// SPDX fetch, so drift --require-base can be repaired offline.
-func TestRunUpdateRepairsMissingBaseWithoutSPDX(t *testing.T) {
-	stubSPDX(t, func(string) (string, error) {
-		return "", errors.New("spdx must not be contacted to backfill a base")
-	})
-
+// TestRunUpdateRepairsMissingBase proves a clean LICENSE whose pristine base is
+// missing is backfilled from the current bytes, so drift --require-base can be
+// repaired without re-rendering the license.
+func TestRunUpdateRepairsMissingBase(t *testing.T) {
 	root := t.TempDir()
-	const content = "LICENSE TEXT FOR MIT\n"
+	const content = "stale MIT license text\n"
 	writeLicenseFixture(t, root, "MIT", content)
 
 	licensePath := filepath.Join(root, "LICENSE")
@@ -304,15 +252,11 @@ func TestRunUpdateRepairsMissingBaseWithoutSPDX(t *testing.T) {
 	}
 }
 
-// TestRunUpdateRepairsInvalidBaseWithoutSPDX proves a clean LICENSE whose base
-// bytes no longer match the ledger is repaired from the current bytes offline.
-func TestRunUpdateRepairsInvalidBaseWithoutSPDX(t *testing.T) {
-	stubSPDX(t, func(string) (string, error) {
-		return "", errors.New("spdx must not be contacted to repair a base")
-	})
-
+// TestRunUpdateRepairsInvalidBase proves a clean LICENSE whose base bytes no
+// longer match the ledger is repaired from the current bytes.
+func TestRunUpdateRepairsInvalidBase(t *testing.T) {
 	root := t.TempDir()
-	const content = "LICENSE TEXT FOR MIT\n"
+	const content = "stale MIT license text\n"
 	writeLicenseFixture(t, root, "MIT", content)
 
 	licensePath := filepath.Join(root, "LICENSE")
@@ -346,12 +290,8 @@ func TestRunUpdateRepairsInvalidBaseWithoutSPDX(t *testing.T) {
 // only license metadata changed. apply --with compliance is the documented path
 // for changing terms.
 func TestRunUpdateLeavesCleanLicenseWithChangedMetadata(t *testing.T) {
-	stubSPDX(t, func(string) (string, error) {
-		return "", errors.New("spdx must not be contacted for a clean LICENSE")
-	})
-
 	root := t.TempDir()
-	const content = "LICENSE TEXT FOR MIT\n"
+	const content = "stale MIT license text\n"
 	m := &types.Manifest{
 		SbakeVersion: manifest.DefaultSbakeVersion,
 		Templates:    []types.Template{{Name: "compliance", Path: "."}},
@@ -386,10 +326,8 @@ func TestRunUpdateLeavesCleanLicenseWithChangedMetadata(t *testing.T) {
 // compliance template is replayed when reconciliation is needed: a missing
 // LICENSE is restored with the current metadata's license text.
 func TestRunUpdateRestoresMissingLicenseAfterMetadataChange(t *testing.T) {
-	stubSPDX(t, func(id string) (string, error) { return textForLicense(id), nil })
-
 	root := t.TempDir()
-	const oldContent = "LICENSE TEXT FOR MIT\n"
+	const oldContent = "stale MIT license text\n"
 
 	// The ledger still records the MIT render while the metadata now asks for
 	// Apache-2.0, exactly as after a user edits license in scbake.toml.
@@ -425,7 +363,9 @@ func TestRunUpdateRestoresMissingLicenseAfterMetadataChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read rewritten LICENSE: %v", err)
 	}
-	if want := textForLicense("Apache-2.0"); string(got) != want {
-		t.Errorf("LICENSE = %q, want %q", got, want)
+	text := string(got)
+	assertRenderedLicense(t, text, "Apache License", "Test Holder")
+	if strings.Contains(text, "stale MIT license text") {
+		t.Errorf("rewritten LICENSE still contains the stale fixture text:\n%s", text)
 	}
 }
