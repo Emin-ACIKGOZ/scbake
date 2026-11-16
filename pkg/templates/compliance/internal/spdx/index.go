@@ -5,8 +5,10 @@
 
 package spdx
 
+import "scbake/pkg/templates/compliance/internal/spdx/version"
+
 // Version is the SPDX License List version embedded in this package.
-const Version = "3.29.0"
+const Version = version.Version
 
 // canonicalIDs maps lowercase SPDX identifiers to their canonical casing.
 var canonicalIDs = map[string]string{
