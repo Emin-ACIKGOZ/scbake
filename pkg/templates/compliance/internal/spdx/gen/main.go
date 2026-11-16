@@ -69,17 +69,32 @@ type result struct {
 	err  error
 }
 
+// config holds the generator inputs. main builds it from flags; tests call run
+// directly with local fixtures.
+type config struct {
+	sourceDir string
+	tag       string
+	outPath   string
+	indexPath string
+}
+
 func main() {
 	flag.Parse()
 
-	if err := run(context.Background()); err != nil {
+	cfg := config{
+		sourceDir: *sourceDir,
+		tag:       *tag,
+		outPath:   *outPath,
+		indexPath: *indexPath,
+	}
+	if err := run(context.Background(), cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "gen: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
-	l, err := newLoader(*sourceDir, *tag)
+func run(ctx context.Context, cfg config) error {
+	l, err := newLoader(cfg.sourceDir, cfg.tag)
 	if err != nil {
 		return err
 	}
@@ -107,14 +122,37 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("load license texts: %w", err)
 	}
 
-	if err := writeArchive(*outPath, ids, texts, list.Version); err != nil {
-		return fmt.Errorf("write archive: %w", err)
-	}
-	if err := writeIndex(*indexPath, list.Version, ids); err != nil {
-		return fmt.Errorf("write index: %w", err)
+	if err := writeOutputs(cfg, list.Version, ids, texts); err != nil {
+		return err
 	}
 
 	fmt.Printf("embedded %d SPDX licenses from %s\n", len(ids), list.Version)
+
+	return nil
+}
+
+// writeOutputs builds and validates both outputs before writing either, so a
+// generation error (for example a case-insensitive ID collision in the index)
+// cannot leave a half-updated pair.
+func writeOutputs(cfg config, version string, ids []string, texts map[string]string) error {
+	archive, err := buildArchive(ids, texts)
+	if err != nil {
+		return fmt.Errorf("build archive: %w", err)
+	}
+	index, err := renderIndex(version, ids)
+	if err != nil {
+		return fmt.Errorf("render index: %w", err)
+	}
+
+	if err := writeFileAtomic(cfg.outPath, archive); err != nil {
+		return fmt.Errorf("write archive: %w", err)
+	}
+	if err := writeFileAtomic(cfg.indexPath, index); err != nil {
+		return fmt.Errorf("write index: %w", err)
+	}
+
+	fmt.Printf("wrote %s (%d bytes) for SPDX %s\n", cfg.outPath, len(archive), version)
+	fmt.Printf("wrote %s for SPDX %s\n", cfg.indexPath, version)
 
 	return nil
 }
@@ -274,12 +312,12 @@ func (l *loader) read(ctx context.Context, path string) ([]byte, error) {
 	return data, nil
 }
 
-func writeArchive(path string, ids []string, texts map[string]string, version string) error {
+func buildArchive(ids []string, texts map[string]string) ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	modified, err := time.Parse(time.RFC3339, archiveTimestamp)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	for _, id := range ids {
@@ -292,26 +330,21 @@ func writeArchive(path string, ids []string, texts map[string]string, version st
 
 		writer, err := zw.CreateHeader(header)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := io.WriteString(writer, texts[id]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	if err := zw.Close(); err != nil {
-		return err
-	}
-	if err := writeFileAtomic(path, buf.Bytes()); err != nil {
-		return err
+		return nil, err
 	}
 
-	fmt.Printf("wrote %s (%d bytes) for SPDX %s\n", path, buf.Len(), version)
-
-	return nil
+	return buf.Bytes(), nil
 }
 
-func writeIndex(path, version string, ids []string) error {
+func renderIndex(version string, ids []string) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteString("// Copyright 2025 Emin Salih Açıkgöz\n")
 	buf.WriteString("// SPDX-License-Identifier: Apache-2.0\n\n")
@@ -325,7 +358,7 @@ func writeIndex(path, version string, ids []string) error {
 	for _, id := range ids {
 		lower := strings.ToLower(id)
 		if previous, ok := seen[lower]; ok {
-			return fmt.Errorf("license IDs %q and %q collide case-insensitively", previous, id)
+			return nil, fmt.Errorf("license IDs %q and %q collide case-insensitively", previous, id)
 		}
 		seen[lower] = id
 		fmt.Fprintf(&buf, "\t%q: %q,\n", lower, id)
@@ -334,10 +367,10 @@ func writeIndex(path, version string, ids []string) error {
 
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return writeFileAtomic(path, formatted)
+	return formatted, nil
 }
 
 func writeFileAtomic(path string, data []byte) error {
