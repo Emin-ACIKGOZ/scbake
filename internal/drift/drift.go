@@ -5,6 +5,12 @@
 // ledger recorded in scbake.toml and the working tree, so a user or CI job can
 // answer "is my generated infrastructure still what scbake produced?" without
 // running a write command.
+//
+// A managed key may carry an accepted_files baseline: the hash of bytes the
+// user explicitly accepted with `scbake accept`. Drift compares the working tree
+// against that accepted hash, while the committed base under .scbake-base is
+// still validated against the pristine managed_files hash. The scan remains
+// read-only and lock-free either way.
 package drift
 
 import (
@@ -44,8 +50,16 @@ type Finding struct {
 	// Kind is Modified, Missing, BaseMissing, or BaseInvalid.
 	Kind Kind
 	// Recorded is the EOL-insensitive SHA-256 scbake recorded when it last
-	// wrote the file.
+	// wrote the file. It is always the pristine template hash from
+	// managed_files, even when Accepted is true.
 	Recorded string
+	// Baseline is the hash the working tree was compared against. It equals
+	// Recorded unless the key has an accepted_files entry, in which case it is
+	// the accepted working-tree baseline.
+	Baseline string
+	// Accepted reports that Baseline came from accepted_files rather than the
+	// pristine managed_files ledger.
+	Accepted bool
 	// Actual is the normalized SHA-256 of the file on disk; empty when Kind is
 	// Missing or BaseMissing. For BaseInvalid it is the normalized hash of the
 	// committed base.
@@ -61,13 +75,14 @@ type Finding struct {
 // a lock, or touches the network, so it is safe to run in CI and cannot corrupt
 // a project.
 //
-// A working file is clean when its on-disk normalized SHA-256 equals the
-// recorded hash, Modified when the normalized hashes differ, and Missing when
-// the path does not exist. The hash is EOL-insensitive for NUL-free content, so
-// an EOL-only change is not drift. Legacy entries written before managed_files
-// keys were scoped per project are resolved against the manifest's project paths
-// using the same content-matching rule as the write path, so detection never
-// reports false drift for a file scbake still manages.
+// A working file is clean when its on-disk normalized SHA-256 equals its
+// working baseline: the accepted_files hash when one is recorded for the key,
+// otherwise the managed_files hash. It is Modified when the hashes differ, and
+// Missing when the path does not exist. The hash is EOL-insensitive for NUL-free
+// content, so an EOL-only change is not drift. Legacy entries written before
+// managed_files keys were scoped per project are resolved against the manifest's
+// project paths using the same content-matching rule as the write path, so
+// detection never reports false drift for a file scbake still manages.
 //
 // For every current key the committed base under .scbake-base is also compared
 // with the recorded hash: absent is BaseMissing, and a hash mismatch is
@@ -103,7 +118,13 @@ func Detect(m *types.Manifest, root string) ([]Finding, error) {
 func collectFindings(m *types.Manifest, root string) ([]Finding, error) {
 	findings := make([]Finding, 0, len(m.ManagedFiles))
 	for key, recorded := range m.ManagedFiles {
-		finding, drifted, legacyResolved, err := inspect(m, root, key, recorded)
+		baseline := recorded
+		accepted := false
+		if h := m.AcceptedFiles[key]; h != "" {
+			baseline = h
+			accepted = true
+		}
+		finding, drifted, legacyResolved, err := inspect(m, root, key, recorded, baseline, accepted)
 		if err != nil {
 			return nil, err
 		}
@@ -129,16 +150,23 @@ func collectFindings(m *types.Manifest, root string) ([]Finding, error) {
 // project path, so it has no committed base key to validate. A non-nil error
 // means detection could not be completed and must fail closed rather than report
 // a false clean.
-func inspect(m *types.Manifest, root, key, recorded string) (finding Finding, drifted, legacyResolved bool, err error) {
+func inspect(m *types.Manifest, root, key, recorded, baseline string, accepted bool) (finding Finding, drifted, legacyResolved bool, err error) {
 	data, readErr := fileutil.SafeReadFile(root, filepath.FromSlash(key))
 	switch {
 	case readErr == nil:
-		if actual := tasks.HashContent(data); actual != recorded {
-			return Finding{Path: key, Kind: Modified, Recorded: recorded, Actual: actual}, true, false, nil
+		if actual := tasks.HashContent(data); actual != baseline {
+			return Finding{
+				Path:     key,
+				Kind:     Modified,
+				Recorded: recorded,
+				Baseline: baseline,
+				Accepted: accepted,
+				Actual:   actual,
+			}, true, false, nil
 		}
 		return Finding{}, false, false, nil
 	case errors.Is(readErr, fs.ErrNotExist):
-		return inspectLegacy(m, root, key, recorded)
+		return inspectLegacy(m, root, key, recorded, baseline, accepted)
 	default:
 		return Finding{}, false, false, fmt.Errorf("inspecting managed file %q: %w", key, readErr)
 	}
@@ -155,7 +183,7 @@ func inspect(m *types.Manifest, root, key, recorded string) (finding Finding, dr
 // A match through a project path reports legacyResolved: the key is a pre-scope
 // flat key, and no version wrote a base at the corresponding root-relative base
 // path, so base validation must be skipped to avoid a permanent false finding.
-func inspectLegacy(m *types.Manifest, root, key, recorded string) (finding Finding, drifted, legacyResolved bool, err error) {
+func inspectLegacy(m *types.Manifest, root, key, recorded, baseline string, accepted bool) (finding Finding, drifted, legacyResolved bool, err error) {
 	keyPath := filepath.FromSlash(key)
 	var matched bool
 	for _, p := range m.Projects {
@@ -168,15 +196,28 @@ func inspectLegacy(m *types.Manifest, root, key, recorded string) (finding Findi
 			continue
 		}
 		h := tasks.HashContent(data)
-		if h != recorded {
-			return Finding{Path: key, Kind: Modified, Recorded: recorded, Actual: h}, true, true, nil
+		if h != baseline {
+			return Finding{
+				Path:     key,
+				Kind:     Modified,
+				Recorded: recorded,
+				Baseline: baseline,
+				Accepted: accepted,
+				Actual:   h,
+			}, true, true, nil
 		}
 		matched = true
 	}
 	if matched {
 		return Finding{}, false, true, nil
 	}
-	return Finding{Path: key, Kind: Missing, Recorded: recorded}, true, false, nil
+	return Finding{
+		Path:     key,
+		Kind:     Missing,
+		Recorded: recorded,
+		Baseline: baseline,
+		Accepted: accepted,
+	}, true, false, nil
 }
 
 // inspectBase validates the committed base shadow for a current ledger key.

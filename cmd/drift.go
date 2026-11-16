@@ -233,10 +233,19 @@ func printFindings(findings []drift.Finding) {
 			fmt.Printf("  %-12s %s (expected base %s, recorded %s, base %s)\n",
 				f.Kind, f.Path, f.BasePath, shortHash(f.Recorded), shortHash(f.Actual))
 		case drift.Missing:
-			fmt.Printf("  %-12s %s (recorded %s)\n", f.Kind, f.Path, shortHash(f.Recorded))
+			if f.Accepted {
+				fmt.Printf("  %-12s %s (accepted %s)\n", f.Kind, f.Path, shortHash(f.Baseline))
+			} else {
+				fmt.Printf("  %-12s %s (recorded %s)\n", f.Kind, f.Path, shortHash(f.Recorded))
+			}
 		default:
-			fmt.Printf("  %-12s %s (recorded %s, on disk %s)\n",
-				f.Kind, f.Path, shortHash(f.Recorded), shortHash(f.Actual))
+			if f.Accepted {
+				fmt.Printf("  %-12s %s (accepted %s, on disk %s)\n",
+					f.Kind, f.Path, shortHash(f.Baseline), shortHash(f.Actual))
+			} else {
+				fmt.Printf("  %-12s %s (recorded %s, on disk %s)\n",
+					f.Kind, f.Path, shortHash(f.Recorded), shortHash(f.Actual))
+			}
 		}
 	}
 }
