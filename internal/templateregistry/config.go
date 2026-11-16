@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -311,7 +312,10 @@ func (m *Manager) save() error {
 	// Best effort: record the registry insertion order next to the cache so the
 	// resolver can apply an explicit, deterministic precedence. If this cannot
 	// be written, resolution falls back to a sorted order rather than failing
-	// the config change.
+	// the config change. The order file only ranks configured registries; it
+	// cannot make an unconfigured cache directory eligible. It is retained for
+	// mixed-version compatibility with binaries that predate config-derived
+	// membership.
 	_ = m.writeRegistryOrder()
 	return nil
 }
@@ -474,8 +478,50 @@ func (m *Manager) Remove(name string) error {
 		return fmt.Errorf("registry %q not found", name)
 	}
 
+	// Evict the cached templates before saving the config change. If eviction
+	// fails the registry stays configured and the command is all-or-nothing in
+	// the common case; a concurrent older binary also never observes a removed
+	// registry whose cache is still live.
+	if err := m.evictRegistryCache(name); err != nil {
+		return err
+	}
+
 	m.config.Registries = append(m.config.Registries[:idx], m.config.Registries[idx+1:]...)
 	return m.save()
+}
+
+// evictRegistryCache removes <cacheDir>/<name>, including the registry's
+// templates, their integrity manifests, and any in-flight staging directories.
+// It is a no-op when no cache is configured, nothing is cached, or the name is
+// invalid (an invalid name can never be resolved, so its residue is inert).
+// Only the named registry is removed; other registries and the cache root are
+// left intact. A symlink at <cacheDir>/<name> is removed as a link; its target
+// is never followed or deleted.
+func (m *Manager) evictRegistryCache(name string) error {
+	if m.cacheDir == "" || ValidateName(name) != nil {
+		return nil
+	}
+
+	target := filepath.Join(m.cacheDir, name)
+	info, err := os.Lstat(target)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(target); err != nil {
+			return fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+		}
+		return nil
+	}
+
+	if err := removeAllContained(m.cacheDir, target); err != nil {
+		return fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+	}
+	return nil
 }
 
 // List returns a copy of all registries in the order they were added. That
