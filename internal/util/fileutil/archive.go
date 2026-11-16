@@ -46,6 +46,17 @@ func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) error {
 //
 //nolint:cyclop // Switch over tar entry types; each case is a flat check.
 func extractTarEntry(tr *tar.Reader, header *tar.Header, destDir string, maxBytes int64) error {
+	// A PAX global header carries no filesystem entry, so handle it before any
+	// name validation: writers that emit an empty or non-local name for this
+	// metadata-only header cannot make extraction fail.
+	if header.Typeflag == tar.TypeXGlobalHeader {
+		return nil
+	}
+
+	if !filepath.IsLocal(header.Name) {
+		return fmt.Errorf("path traversal rejected for %s: non-local archive entry name", header.Name)
+	}
+
 	// Sanitize and verify target path containment inside destDir (Zip Slip protection)
 	safePath, err := SafePath(destDir, header.Name)
 	if err != nil {
@@ -78,9 +89,6 @@ func extractTarEntry(tr *tar.Reader, header *tar.Header, destDir string, maxByte
 			"unsupported tar entry %q (type %q): symbolic and hard links are not extracted",
 			header.Name, header.Typeflag,
 		)
-	case tar.TypeXGlobalHeader:
-		// PAX global metadata carries no filesystem entry. git archive emits one,
-		// so ignoring it keeps git-archive tarballs extractable.
 	default:
 		return fmt.Errorf(
 			"unsupported tar entry %q (type %q): only regular files and directories are extracted",
