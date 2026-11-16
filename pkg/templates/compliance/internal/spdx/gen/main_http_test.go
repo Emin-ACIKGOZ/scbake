@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"scbake/pkg/templates/compliance/internal/spdx/version"
 	"strings"
 	"testing"
 )
@@ -84,14 +85,14 @@ func seedOutputPair(t *testing.T) (archivePath, indexPath string, archiveSentine
 }
 
 func TestNewLoaderAcceptsValidTag(t *testing.T) {
-	l, err := newLoader("", defaultTag)
+	l, err := newLoader("", version.Tag)
 	if err != nil {
-		t.Fatalf("newLoader(%q) failed: %v", defaultTag, err)
+		t.Fatalf("newLoader(%q) failed: %v", version.Tag, err)
 	}
 	if l.sourceDir != "" {
 		t.Errorf("loader sourceDir = %q, want empty", l.sourceDir)
 	}
-	wantBaseURL := licenseRepoURL + defaultTag + "/"
+	wantBaseURL := licenseRepoURL + version.Tag + "/"
 	if l.baseURL != wantBaseURL {
 		t.Errorf("loader baseURL = %q, want %q", l.baseURL, wantBaseURL)
 	}
@@ -365,7 +366,10 @@ func TestRunLeavesOutputsUntouchedOnSourceErrors(t *testing.T) {
 			name: "empty licenseId",
 			source: func(t *testing.T) string {
 				t.Helper()
-				return writeRawLicenseList(t, `{"licenseListVersion":"test-1.0","licenses":[{"licenseId":""}]}`)
+				return writeRawLicenseList(t, fmt.Sprintf(
+					`{"licenseListVersion":%q,"licenses":[{"licenseId":""}]}`,
+					version.Version,
+				))
 			},
 			want: []string{"contains an empty licenseId"},
 		},
