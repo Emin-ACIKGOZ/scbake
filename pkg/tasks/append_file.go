@@ -20,15 +20,46 @@ type AppendFileTask struct {
 	TaskPrio int
 }
 
-// Execute performs the task of appending content to the file.
-func (t *AppendFileTask) Execute(tc types.TaskContext) error {
+// resolveAppendTarget rejects unsafe paths and resolves the target inside the
+// target directory. It performs no filesystem access beyond path resolution.
+func (t *AppendFileTask) resolveAppendTarget(tc types.TaskContext) (string, error) {
 	// Security: reject absolute or escaping paths before any filesystem access,
 	// independent of dry-run or transaction state.
 	if !filepath.IsLocal(t.FilePath) {
-		return fmt.Errorf("invalid file path %q: must be a relative path inside the target directory", t.FilePath)
+		return "", fmt.Errorf("invalid file path %q: must be a relative path inside the target directory", t.FilePath)
 	}
+	return resolveTaskPath(tc.TargetPath, t.FilePath, "file")
+}
 
-	absPath, err := resolveTaskPath(tc.TargetPath, t.FilePath, "file")
+// readAppendTarget reads the append target. A missing file is not an error: the
+// apply path creates it, so the preview treats it as appendable.
+func (t *AppendFileTask) readAppendTarget(tc types.TaskContext) ([]byte, bool, error) {
+	existing, err := fileutil.SafeReadFile(tc.TargetPath, t.FilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("failed to read file %s: %w", t.FilePath, err)
+	}
+	return existing, true, nil
+}
+
+// Validate checks the path and reads the append target without tracking or
+// writing. A missing target and a target that already carries the block are
+// both successful outcomes, matching Execute's create/no-op decisions.
+func (t *AppendFileTask) Validate(tc types.TaskContext) error {
+	if _, err := t.resolveAppendTarget(tc); err != nil {
+		return err
+	}
+	if _, _, err := t.readAppendTarget(tc); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Execute performs the task of appending content to the file.
+func (t *AppendFileTask) Execute(tc types.TaskContext) error {
+	absPath, err := t.resolveAppendTarget(tc)
 	if err != nil {
 		return err
 	}
@@ -38,12 +69,12 @@ func (t *AppendFileTask) Execute(tc types.TaskContext) error {
 	}
 
 	// Check if file exists
-	existingContent, err := fileutil.SafeReadFile(tc.TargetPath, t.FilePath)
+	existingContent, exists, err := t.readAppendTarget(tc)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return t.createMissingFile(tc, absPath)
-		}
-		return fmt.Errorf("failed to read file %s: %w", t.FilePath, err)
+		return err
+	}
+	if !exists {
+		return t.createMissingFile(tc, absPath)
 	}
 
 	// Idempotency check: Don't append if content is already present as its own

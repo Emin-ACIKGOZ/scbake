@@ -105,6 +105,13 @@ func (t *ExecCommandTask) Priority() int {
 	return t.TaskPrio
 }
 
+// Validate is a documented no-op: an external command's outcome, and whether
+// its binary even exists, cannot be previewed without running it. Executing
+// commands in a dry run would violate the no-side-effects contract, so command
+// failures remain a real-run-only signal (see issue #151 for environment
+// preflight).
+func (t *ExecCommandTask) Validate(tc types.TaskContext) error { return nil }
+
 // Execute performs the command execution task.
 func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 	if tc.DryRun {

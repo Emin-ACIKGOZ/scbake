@@ -17,6 +17,13 @@ type CreateDirTask struct {
 	TaskPrio int
 }
 
+// Validate resolves and contains the directory path without tracking or
+// creating it.
+func (t *CreateDirTask) Validate(tc types.TaskContext) error {
+	_, err := resolveTaskPath(tc.TargetPath, t.Path, "directory")
+	return err
+}
+
 // Execute performs the task of creating the directory.
 func (t *CreateDirTask) Execute(tc types.TaskContext) error {
 	// Resolve the path against the target directory and verify it stays inside

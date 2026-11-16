@@ -154,7 +154,7 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 	}
 
 	// 4. Build Task Context & Validate Schemas
-	tc, cancelCtx, err := buildTaskContext(rc, m, changes, tx)
+	tc, cancelCtx, err := buildTaskContext(rc, m, changes, tx, rootPath)
 	if err != nil {
 		return err
 	}
@@ -335,6 +335,7 @@ func buildTaskContext(
 	m *types.Manifest,
 	changes *manifestChanges,
 	tx *transaction.Manager,
+	rootPath string,
 ) (types.TaskContext, func(), error) {
 	// Deep copy manifest to ensure modifications don't affect original until finalization
 	futureManifest := m.DeepCopy()
@@ -380,6 +381,7 @@ func buildTaskContext(
 		Update:           rc.Update,
 		Manifest:         futureManifest,
 		TargetPath:       rc.TargetPath,
+		Root:             rootPath,
 		Force:            rc.Force,
 		ConflictStrategy: rc.ConflictStrategy,
 		TemplateDir:      rc.TemplateDir,

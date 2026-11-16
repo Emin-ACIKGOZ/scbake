@@ -25,8 +25,9 @@ type MockTask struct {
 	ShouldFail   bool   // If set, returns error
 }
 
-func (m *MockTask) Description() string { return m.Name }
-func (m *MockTask) Priority() int       { return m.Prio }
+func (m *MockTask) Description() string              { return m.Name }
+func (m *MockTask) Priority() int                    { return m.Prio }
+func (m *MockTask) Validate(types.TaskContext) error { return nil }
 
 func (m *MockTask) Execute(tc types.TaskContext) error {
 	if m.PathToCreate != "" {
@@ -422,7 +423,7 @@ func TestBuildTaskContextRejectsUnsafeProjects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run("existing/"+tt.name, func(t *testing.T) {
 			m := &types.Manifest{Projects: []types.Project{tt.project}}
-			_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, m, &manifestChanges{}, nil)
+			_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, m, &manifestChanges{}, nil, "")
 			if cancel != nil {
 				cancel()
 			}
@@ -433,7 +434,7 @@ func TestBuildTaskContextRejectsUnsafeProjects(t *testing.T) {
 
 		t.Run("added/"+tt.name, func(t *testing.T) {
 			changes := &manifestChanges{Projects: []types.Project{tt.project}}
-			_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, &types.Manifest{}, changes, nil)
+			_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, &types.Manifest{}, changes, nil, "")
 			if cancel != nil {
 				cancel()
 			}
@@ -450,7 +451,7 @@ func TestBuildTaskContextRejectsUnsafeTestCommand(t *testing.T) {
 	m := &types.Manifest{
 		Metadata: map[string]string{"test_command": "go test ./...\nrm -rf /"},
 	}
-	_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, m, &manifestChanges{}, nil)
+	_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, m, &manifestChanges{}, nil, "")
 	if cancel != nil {
 		cancel()
 	}
@@ -470,7 +471,7 @@ func TestBuildTaskContextAcceptsBenignProjects(t *testing.T) {
 		},
 		Metadata: map[string]string{"test_command": "go test ./..."},
 	}
-	_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, m, &manifestChanges{}, nil)
+	_, cancel, err := buildTaskContext(RunContext{TargetPath: t.TempDir()}, m, &manifestChanges{}, nil, "")
 	if err != nil {
 		t.Fatalf("benign manifest rejected: %v", err)
 	}
@@ -518,7 +519,7 @@ func TestBuildTaskContextInheritsCancellation(t *testing.T) {
 	cancelParent()
 
 	rc := RunContext{TargetPath: t.TempDir(), Ctx: ctx}
-	tc, cancel, err := buildTaskContext(rc, &types.Manifest{}, &manifestChanges{}, nil)
+	tc, cancel, err := buildTaskContext(rc, &types.Manifest{}, &manifestChanges{}, nil, "")
 	if err != nil {
 		t.Fatalf("buildTaskContext failed: %v", err)
 	}
@@ -537,8 +538,9 @@ type manifestSnapshotTask struct {
 	want         string
 }
 
-func (s *manifestSnapshotTask) Description() string { return "snapshot manifest" }
-func (s *manifestSnapshotTask) Priority() int       { return int(types.PrioVersionControl) }
+func (s *manifestSnapshotTask) Description() string              { return "snapshot manifest" }
+func (s *manifestSnapshotTask) Priority() int                    { return int(types.PrioVersionControl) }
+func (s *manifestSnapshotTask) Validate(types.TaskContext) error { return nil }
 func (s *manifestSnapshotTask) Execute(types.TaskContext) error {
 	data, err := os.ReadFile(s.manifestPath)
 	if err != nil {
@@ -613,8 +615,9 @@ type cancelAfterTask struct {
 	cancel context.CancelFunc
 }
 
-func (c *cancelAfterTask) Description() string { return "cancel after task" }
-func (c *cancelAfterTask) Priority() int       { return 100 }
+func (c *cancelAfterTask) Description() string              { return "cancel after task" }
+func (c *cancelAfterTask) Priority() int                    { return 100 }
+func (c *cancelAfterTask) Validate(types.TaskContext) error { return nil }
 func (c *cancelAfterTask) Execute(types.TaskContext) error {
 	c.cancel()
 	return nil

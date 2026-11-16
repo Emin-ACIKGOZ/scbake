@@ -27,6 +27,12 @@ type TaskContext struct {
 	// TargetPath is the path the task should operate in (e.g., "./backend").
 	TargetPath string
 
+	// Root is the absolute manifest/project root. It anchors root-relative
+	// decisions (managed_files keys, owning project, base shadow) when no
+	// transaction is active, as in a dry run. A transaction root, when present,
+	// remains authoritative.
+	Root string
+
 	// Manifest is the *current* state of the manifest, read-only.
 	Manifest *Manifest
 
@@ -68,7 +74,20 @@ type Task interface {
 	// Priority returns the execution order; lower values run first within a band.
 	Priority() int
 
-	// Execute performs the task under the supplied context and transaction.
+	// Validate performs every read-only check Execute makes before its first
+	// write: path safety, preconditions, conflict decisions, and up-front
+	// parsing. It must not create, modify, or delete anything, and must return
+	// the same error Execute would return for the same starting state.
+	//
+	// The executor calls Validate instead of Execute in a dry run, so a task
+	// without an honest Validate silently reintroduces false-success previews.
+	// Implementations must share their decision logic with Execute (for example
+	// a single render/decide helper) so the two cannot drift.
+	Validate(tc TaskContext) error
+
+	// Execute performs the task under the supplied context and transaction. It
+	// must remain consistent with Validate: the checks Validate performs come
+	// first, then the writes.
 	Execute(tc TaskContext) error
 }
 

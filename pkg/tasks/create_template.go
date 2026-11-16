@@ -357,13 +357,22 @@ func maybeAppendInternalStateIgnore(ledgerKey string, content []byte) []byte {
 	return appendInternalStateIgnore(content)
 }
 
-// WriteManagedFile performs state-aware reconciliation, transaction tracking,
-// safe file writing, and manifest state updating for a generated file.
-func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte, perm os.FileMode) error {
-	absPath, err := checkFilePreconditions(tc, outputRelPath, tc.TargetPath)
-	if err != nil {
-		return err
-	}
+// managedFileDecision is the read-only outcome of reconciling a proposed render
+// against the ledger and the on-disk state. It is what WriteManagedFile would
+// do, computed without touching the filesystem or the manifest.
+type managedFileDecision struct {
+	ledgerKey string
+	content   []byte
+	newHash   string
+	writePath string
+	override  []byte
+}
+
+// decideManagedFile computes what WriteManagedFile would do: ledger keying,
+// internal-state ignore injection, hashing, and the conflict/merge decision. It
+// is the single source of truth shared by Validate and WriteManagedFile, so a
+// preview cannot disagree with the real run.
+func decideManagedFile(tc types.TaskContext, absPath, outputRelPath string, content []byte) (managedFileDecision, error) {
 	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
 
 	// Make the ignore entry part of the managed render before hashing so the
@@ -374,8 +383,31 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 
 	writePath, override, err := checkReconciliation(absPath, outputRelPath, ledgerKey, newHash, content, tc)
 	if err != nil {
+		return managedFileDecision{}, err
+	}
+	return managedFileDecision{
+		ledgerKey: ledgerKey,
+		content:   content,
+		newHash:   newHash,
+		writePath: writePath,
+		override:  override,
+	}, nil
+}
+
+// WriteManagedFile performs state-aware reconciliation, transaction tracking,
+// safe file writing, and manifest state updating for a generated file.
+func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte, perm os.FileMode) error {
+	absPath, err := checkFilePreconditions(tc, outputRelPath, tc.TargetPath)
+	if err != nil {
+		return err
+	}
+
+	decision, err := decideManagedFile(tc, absPath, outputRelPath, content)
+	if err != nil {
 		return err // Conflict strategy is 'fail'
 	}
+	ledgerKey, content, newHash := decision.ledgerKey, decision.content, decision.newHash
+	writePath, override := decision.writePath, decision.override
 	if writePath == "" {
 		return nil // Skip (keep-local, unchanged, or a no-op)
 	}
@@ -498,11 +530,28 @@ func sameFileContent(path string, content []byte) bool {
 	return bytes.Equal(existing, content)
 }
 
-// taskRoot returns the absolute root a task's state lives under: the
-// transaction root when present, else the absolute target path.
+// rootAnchor returns the absolute project root that anchors root-relative
+// decisions. The transaction root is authoritative when a transaction is
+// active; a dry run has none, so TaskContext.Root supplies the same anchor. It
+// reports false when neither is available, which preserves the legacy
+// direct-caller behavior of the path helpers below.
+func rootAnchor(tc types.TaskContext) (string, bool) {
+	if tc.Tx != nil {
+		if root := tc.Tx.Root(); root != "" {
+			return root, true
+		}
+	}
+	if tc.Root != "" {
+		return filepath.Clean(tc.Root), true
+	}
+	return "", false
+}
+
+// taskRoot returns the absolute root a task's state lives under: the anchored
+// project root when available, else the absolute target path.
 func taskRoot(tc types.TaskContext) string {
-	if tc.Tx != nil && tc.Tx.Root() != "" {
-		return tc.Tx.Root()
+	if root, ok := rootAnchor(tc); ok {
+		return root
 	}
 	if tc.TargetPath == "" {
 		return ""
@@ -519,18 +568,18 @@ func taskRoot(tc types.TaskContext) string {
 //
 // Project paths are recorded repo-relative while a task's TargetPath is the
 // directory it writes into, so the lookup compares the target's path relative
-// to the transaction root (the manifest root) with each project path. That
-// requires an anchored transaction root: direct/library execution without one
-// yields nil, and the template fallback is intentional there. It also yields
-// nil when no [[projects]] entry matches the target directory (for example, a
-// monorepo root when no project declares the root path); a root project with
-// path "." resolves normally.
+// to the project root (the manifest root) with each project path. That requires
+// an anchored root (a transaction root, or TaskContext.Root in a dry run):
+// direct/library execution without one yields nil, and the template fallback is
+// intentional there. It also yields nil when no [[projects]] entry matches the
+// target directory (for example, a monorepo root when no project declares the
+// root path); a root project with path "." resolves normally.
 func currentProject(tc types.TaskContext) *types.Project {
-	if tc.Manifest == nil || tc.Tx == nil || tc.TargetPath == "" {
+	if tc.Manifest == nil || tc.TargetPath == "" {
 		return nil
 	}
-	root := tc.Tx.Root()
-	if root == "" {
+	root, ok := rootAnchor(tc)
+	if !ok {
 		return nil
 	}
 	rel, ok := targetRelPath(root, tc.TargetPath)
@@ -899,17 +948,13 @@ func recordManagedHash(m *types.Manifest, key, hash string) {
 }
 
 // managedFilesKey derives the managed_files ledger key for a file: the path
-// relative to the transaction's project root. Scoping by the root (rather than
-// the target project) keeps monorepo subprojects that generate the same
-// relative filename from aliasing each other's entry. Without a transaction
-// manager, or when the file lies outside its root, it falls back to the
-// target-relative path.
+// relative to the project root. Scoping by the root (rather than the target
+// project) keeps monorepo subprojects that generate the same relative filename
+// from aliasing each other's entry. Without an anchored root, or when the file
+// lies outside it, it falls back to the target-relative path.
 func managedFilesKey(tc types.TaskContext, absPath, outputRelPath string) string {
-	if tc.Tx == nil {
-		return outputRelPath
-	}
-	root := tc.Tx.Root()
-	if root == "" {
+	root, ok := rootAnchor(tc)
+	if !ok {
 		return outputRelPath
 	}
 	rel, err := filepath.Rel(root, absPath)
@@ -947,17 +992,17 @@ func recordedHash(m *types.Manifest, ledgerKey, legacyKey, existingHash string) 
 	return ""
 }
 
-// Execute performs the template creation task.
-func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
+// render produces the pristine bytes for this task's template.
+func (t *CreateTemplateTask) render(tc types.TaskContext) ([]byte, error) {
 	// 1. Read and parse the template using the override-aware helper
 	tplContent, err := ReadTemplate(t.TemplateFS, t.TemplatePath, tc.TemplateDir, tc.RegistryCacheDir, t.TemplateName, tc.RegistryNames)
 	if err != nil {
-		return fmt.Errorf("failed to read template %s: %w", t.TemplatePath, err)
+		return nil, fmt.Errorf("failed to read template %s: %w", t.TemplatePath, err)
 	}
 
 	tpl, err := template.New(t.TemplatePath).Funcs(templateFuncs).Parse(string(tplContent))
 	if err != nil {
-		return fmt.Errorf("failed to parse template %s: %w", t.TemplatePath, err)
+		return nil, fmt.Errorf("failed to parse template %s: %w", t.TemplatePath, err)
 	}
 
 	// 2. Render template to memory buffer first
@@ -971,9 +1016,33 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
 
 	var buf bytes.Buffer
 	if err = tpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to render template %s: %w", t.TemplatePath, err)
+		return nil, fmt.Errorf("failed to render template %s: %w", t.TemplatePath, err)
 	}
+	return buf.Bytes(), nil
+}
 
+// Validate resolves, renders, and reconciles the template without creating
+// directories, tracking, writing, or mutating the ledger. It shares render and
+// decideManagedFile with Execute, so the preview reports the real decision.
+func (t *CreateTemplateTask) Validate(tc types.TaskContext) error {
+	content, err := t.render(tc)
+	if err != nil {
+		return err
+	}
+	absPath, err := resolveTaskPath(tc.TargetPath, t.OutputPath, "output")
+	if err != nil {
+		return err
+	}
+	_, err = decideManagedFile(tc, absPath, t.OutputPath, content)
+	return err
+}
+
+// Execute performs the template creation task.
+func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
+	content, err := t.render(tc)
+	if err != nil {
+		return err
+	}
 	// 3. Delegate state reconciliation, transaction tracking, and writing to WriteManagedFile
-	return WriteManagedFile(tc, t.OutputPath, buf.Bytes(), fileutil.FilePerms)
+	return WriteManagedFile(tc, t.OutputPath, content, fileutil.FilePerms)
 }

@@ -26,8 +26,9 @@ type fakeManagedWriterTask struct {
 	content    string
 }
 
-func (t *fakeManagedWriterTask) Description() string { return "fake managed writer" }
-func (t *fakeManagedWriterTask) Priority() int       { return int(types.PrioConfigUniversal) }
+func (t *fakeManagedWriterTask) Description() string              { return "fake managed writer" }
+func (t *fakeManagedWriterTask) Priority() int                    { return int(types.PrioConfigUniversal) }
+func (t *fakeManagedWriterTask) Validate(types.TaskContext) error { return nil }
 func (t *fakeManagedWriterTask) WritesManagedFile() bool {
 	return true
 }

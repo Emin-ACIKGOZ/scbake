@@ -42,16 +42,51 @@ func (t *InsertXMLTask) Priority() int {
 	return t.TaskPrio
 }
 
-// Execute performs the XML insertion with safety checks and transaction tracking.
-func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
-	// Validate the target file path and the element path before any mode-specific
-	// handling, so dry-run and real runs reject invalid input identically.
+// prepareInsert performs every read-only check an insertion makes: target path
+// safety, element path syntax, XML well-formedness of the file and the snippet,
+// and whether the snippet is already present or the insertion point exists.
+// It returns the resolved path, the file content, and the idempotency decision.
+// It never tracks or writes, and it is shared by Validate and Execute so the
+// preview reports the real decision.
+func (t *InsertXMLTask) prepareInsert(tc types.TaskContext) (string, string, bool, error) {
 	absPath, err := t.validatePath(tc.TargetPath)
 	if err != nil {
-		return err
+		return "", "", false, err
 	}
 
 	if _, err := parseElementPath(t.ElementPath); err != nil {
+		return "", "", false, err
+	}
+
+	contentStr, err := t.readAndValidateXML(tc.TargetPath)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	if t.isAlreadyInserted(contentStr) {
+		return absPath, contentStr, true, nil
+	}
+
+	// Validate the insertion point in memory. Nothing is written, but a missing
+	// or self-closing target fails exactly as the apply path would.
+	if _, err := insertXMLElement(contentStr, t.ElementPath, t.XMLContent); err != nil {
+		return "", "", false, fmt.Errorf("failed to insert XML into %s: %w", t.FilePath, err)
+	}
+
+	return absPath, contentStr, false, nil
+}
+
+// Validate checks the target path, element path, file content, and insertion
+// point without tracking or writing.
+func (t *InsertXMLTask) Validate(tc types.TaskContext) error {
+	_, _, _, err := t.prepareInsert(tc)
+	return err
+}
+
+// Execute performs the XML insertion with safety checks and transaction tracking.
+func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
+	absPath, contentStr, alreadyInserted, err := t.prepareInsert(tc)
+	if err != nil {
 		return err
 	}
 
@@ -59,16 +94,11 @@ func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
 		return nil
 	}
 
-	contentStr, err := t.readAndValidateXML(tc.TargetPath)
-	if err != nil {
-		return err
-	}
-
 	if err := t.trackFile(tc, absPath); err != nil {
 		return err
 	}
 
-	if t.isAlreadyInserted(contentStr) {
+	if alreadyInserted {
 		return nil
 	}
 

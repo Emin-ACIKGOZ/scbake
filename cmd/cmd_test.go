@@ -87,8 +87,9 @@ exit 0`, fileutil.GitDir, fileutil.GitDir, failStr)
 // MockFailTask defines a task that always returns an error for rollback testing.
 type MockFailTask struct{ TargetFile string }
 
-func (m *MockFailTask) Description() string { return "Fail Task" }
-func (m *MockFailTask) Priority() int       { return 100 }
+func (m *MockFailTask) Description() string              { return "Fail Task" }
+func (m *MockFailTask) Priority() int                    { return 100 }
+func (m *MockFailTask) Validate(types.TaskContext) error { return nil }
 func (m *MockFailTask) Execute(tc types.TaskContext) error {
 	if tc.Tx != nil {
 		_ = tc.Tx.Track(m.TargetFile)
@@ -100,8 +101,9 @@ func (m *MockFailTask) Execute(tc types.TaskContext) error {
 // MockCreateTask defines a task that successfully creates a file.
 type MockCreateTask struct{ TargetFile string }
 
-func (m *MockCreateTask) Description() string { return "Create Task" }
-func (m *MockCreateTask) Priority() int       { return 50 }
+func (m *MockCreateTask) Description() string              { return "Create Task" }
+func (m *MockCreateTask) Priority() int                    { return 50 }
+func (m *MockCreateTask) Validate(types.TaskContext) error { return nil }
 func (m *MockCreateTask) Execute(tc types.TaskContext) error {
 	const content = "CREATED"
 	if tc.Tx != nil {
