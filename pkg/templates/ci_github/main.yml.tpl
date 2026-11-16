@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: {{ index .Metadata "runner_os" | default "ubuntu-latest" }}
 
     steps:
       - uses: actions/checkout@v4
