@@ -85,6 +85,27 @@ func (h *Handler) GetTasks(_ string, _ string, _ string, _ map[string]string) ([
 That's it. Your handler is a single Go struct that implements two methods:
 - `GetTasks(targetPath string, templateDir string, registryCacheDir string, vars map[string]string) ([]types.Task, error)` - Returns the tasks to execute. `vars` carries only the explicit `--set` values (see [Consuming variables](#consuming-variables)).
 
+If your handler reads template files **while building the plan** (instead of
+creating `CreateTemplateTask`, which resolves at execution time), it must also
+implement the optional `types.RegistryAwareHandler` interface:
+
+```go
+func (h *Handler) GetTasksWithRegistries(targetPath, templateDir, registryCacheDir string, registries []string) ([]types.Task, error) {
+    // Use `registries` for every plan-time template lookup.
+    content, err := tasks.ReadTemplate(fs, "snippet.tpl", templateDir, registryCacheDir, "my_template", registries)
+    // ...
+}
+```
+
+Core calls `GetTasksWithRegistries` when a handler implements it and falls back
+to `GetTasks` otherwise. Pass the allowlist through to `tasks.ReadTemplate`;
+nil or empty means the registry tier is disabled (fail closed), never "search
+every cache directory". See `pkg/templates/maven_linter` for an example.
+
+To disclose the resolved source tier in `--dry-run`, implement
+`DescriptionWithSource(tc types.TaskContext) string` (the `types.SourceDescriber`
+interface) on the task. Built-in `CreateTemplateTask` already does.
+
 ### Step 4: Register Your Handler
 
 Add one line to register your handler in `pkg/lang/registry.go`:
@@ -741,7 +762,20 @@ var templates embed.FS
 data, _ := templates.ReadFile("templates/Cargo.toml.tpl")
 ```
 
-Then pass `TemplateFS` to `CreateTemplateTask` so the template is resolved through the full resolution chain (override dir → registry cache → embedded).
+Then pass `TemplateFS` to `CreateTemplateTask` so the template is resolved through the full resolution chain (override dir → configured registry cache → embedded).
+
+### Migration: `tasks.ReadTemplate`
+
+`ReadTemplate` now takes the configured registry allowlist as its final
+argument. Nil or empty disables the registry tier (fail closed).
+
+```go
+// before
+content, err := tasks.ReadTemplate(fs, path, dir, cache, name)
+// after (execution-time path; tc is the types.TaskContext)
+content, err := tasks.ReadTemplate(fs, path, dir, cache, name, tc.RegistryNames)
+// plan-time handler: implement GetTasksWithRegistries and pass `registries`
+```
 
 ---
 

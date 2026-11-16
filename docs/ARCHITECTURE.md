@@ -55,7 +55,13 @@ The three path parameters support the **template resolution chain**:
 2. `templateDir` — local override directory (`--template-dir` or `$SCBAKE_TEMPLATE_DIR`)
 3. `registryCacheDir` — pulled template cache (`~/.cache/scbake/templates/`)
 
-Tasks created at plan time use `registryCacheDir` later at execution time via `TaskContext` to resolve template files through the chain: **local overrides → registry cache → embedded defaults**.
+Tasks created at plan time use `registryCacheDir` and the configured registry allowlist later at execution time via `TaskContext` to resolve template files through the chain: **local overrides → configured registry cache → embedded defaults**.
+
+Handlers that resolve templates while building the plan (before execution time)
+may implement the optional `types.RegistryAwareHandler`
+(`GetTasksWithRegistries(..., registries []string)`); core prefers it and passes
+the configured allowlist. The base `Handler` interfaces are unchanged, and
+handlers that only create `CreateTemplateTask` need not implement it.
 
 **Responsibility**: Given a project path, return a list of tasks to execute.
 
@@ -355,7 +361,7 @@ or `[metadata]` table.
 Template files are resolved at execution time through a 3-tier fallback chain:
 
 ```
-ReadTemplate(efs, tplPath, overrideDir, registryCacheDir)
+ReadTemplate(efs, tplPath, overrideDir, registryCacheDir, templateName, registries)
     │
     ├── 1. overrideDir (--template-dir or $SCBAKE_TEMPLATE_DIR)
     │      First check: local filesystem overrides
@@ -365,7 +371,9 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir)
     │
     ├── 2. registryCacheDir (~/.cache/scbake/templates/)
     │      Second check: pulled template archives
-    │      Searches all registry subdirectories
+    │      Searches only registries listed in registries.json, in
+    │      precedence order; an unconfigured cache directory is never read
+    │      (nil/empty configured set disables this tier)
     │      Found → return immediately
     │      Not found → fall through
     │
@@ -381,6 +389,20 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir)
 3. Archives are extracted to `<cacheDir>/<registry>/<templateName>/<files...>`
 4. On subsequent pulls, the cache is reused only when its manifest hash, version, and source URL match; a version or URL change (or a manifest without provenance) forces a re-download
 5. Token auth supported via stored config or `SCBAKE_REGISTRY_TOKEN_<NAME>` env var
+
+**Lifecycle and membership:**
+- A cached tree is eligible only while its registry is configured. Deleting or
+  hand-editing `registries.json` makes the cache inert rather than letting stale
+  content shadow an embedded template; the failure mode is closed.
+- `scbake template registry remove <name>` deletes `<cacheDir>/<registry>` (templates,
+  integrity manifests, and staging directories) before saving the config change.
+  If eviction fails, the registry stays configured and the command returns an error.
+  Other registries and the cache root are untouched. A symlink at the registry
+  path is removed as a link, never followed.
+- `--dry-run` appends the resolved tier to each file task: `[template-dir]`,
+  `[registry: <name>]`, or `[built-in]`. Normal runs and their output are unchanged.
+  The label is a plan-time snapshot, and the `maven_linter` snippet injected into
+  `pom.xml` is not disclosed.
 
 ### 4. Optimistic Locking (Fallback)
 

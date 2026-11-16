@@ -16,7 +16,7 @@ Core does one thing well:
 2. **Execute** — run those tasks with a transaction that restores backups on failure and deletes created regular files only when recorded content still matches, plus created directories deepest-first only when empty.
 3. **Extend** — dispatch to handlers (language packs and tooling templates) through a
    small, stable interface.
-4. **Distribute** — resolve templates through the override → registry → embedded chain,
+4. **Distribute** — resolve templates through the override → configured registry → embedded chain,
    and validate inputs against each template's schema.
 
 ## In scope (core)
