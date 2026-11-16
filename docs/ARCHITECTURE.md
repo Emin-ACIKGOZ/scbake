@@ -341,9 +341,18 @@ scbake_version = "v0.3.0"
 |-----|---------|
 | `scbake_version` | Manifest **schema** version, not the CLI release version. Written from `manifest.DefaultSbakeVersion` (`internal/manifest/io.go`). |
 | `[[projects]]` | One table per applied language pack. `path` is relative to the manifest root (`"."` for the root project). |
-| `[[templates]]` | One table per applied tooling template, recording its `name` and the `path` it was applied to. |
+| `[[templates]]` | One table per applied tooling template, recording its `name` and the `path` it was applied to. Like `[[projects]].path`, `path` is relative to the manifest root (`"."` for an apply at the root). |
 | `[metadata]` | Inputs declared by template schemas (including defaults), values passed with `--set`, and `--license`/`--copyright-holder`. Omitted when empty. |
 | `[managed_files]` | SHA-256 of every template-rendered file scbake manages, EOL-insensitive for NUL-free content, keyed by path relative to the manifest root. Drives `update` and `drift`. Omitted when empty. |
+
+`[[projects]].path` and `[[templates]].path` name the same directory as the
+matching `[managed_files]` key prefix. Older manifests may contain absolute
+paths: those are rebased against the discovered root in memory when the manifest
+is loaded, and the next mutating command (`apply`, `update`, `drift --repair`)
+persists the relative form. Relative paths written by older builds (`.`, `./svc`,
+`repo/svc`) are not rewritten, because the working directory that authored them
+cannot be recovered; correct them by hand or re-apply at the canonical spelling
+and remove the stale entry.
 
 The hashes above are real values from the current embedded templates; they change
 whenever a rendered template changes. `[metadata]` and `[managed_files]` are omitted
