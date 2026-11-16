@@ -52,6 +52,12 @@ file is written atomically, but the pair is not: a write or rename failure after
 the first output can leave a half-updated pair. The remaining atomic-pair work
 is tracked in #115.
 
+Refresh integrity: `TestEmbeddedArchiveIntegrity` pins the SHA-256 of the
+committed `licenses.zip`. That hash intentionally changes on an SPDX bump and
+must be updated together with `licenses.zip` and `index.go`. A Go toolchain
+change can change the compressed hash even when the license data is identical,
+so use the pinned toolchain for a refresh; the test is the enforcement point.
+
 After regenerating, run the package and integration tests:
 
 ```sh
