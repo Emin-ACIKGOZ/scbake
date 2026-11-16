@@ -72,10 +72,20 @@ func TestArchitectureManifestExample(t *testing.T) {
 	}
 }
 
+// exampleRenderData mirrors the additive render-data wrapper supplied by
+// pkg/tasks: embedding *types.Manifest keeps every legacy field available,
+// while Project names the manifest project that owns the template's target.
+type exampleRenderData struct {
+	*types.Manifest
+	Project *types.Project
+}
+
 // TestRustHandlerExampleTemplates keeps the documented Rust handler templates
 // renderable. It executes them against a real manifest so an invalid pipeline
 // (like the `index .Projects 0 | .Name` form fixed in issue #167) fails here
-// instead of at `scbake new` time.
+// instead of at `scbake new` time. The example templates use the project-scoped
+// .Project field from issue #168, so the test supplies the same wrapper shape
+// as pkg/tasks rather than the bare manifest.
 func TestRustHandlerExampleTemplates(t *testing.T) {
 	const templateDir = "docs/examples/rust-handler/templates"
 
@@ -87,6 +97,7 @@ func TestRustHandlerExampleTemplates(t *testing.T) {
 		}},
 	}
 	projectName := manifest.Projects[0].Name
+	renderData := exampleRenderData{Manifest: manifest, Project: &manifest.Projects[0]}
 
 	for _, tc := range []struct {
 		file string
@@ -108,7 +119,7 @@ func TestRustHandlerExampleTemplates(t *testing.T) {
 			}
 
 			var out strings.Builder
-			if err := tpl.Execute(&out, manifest); err != nil {
+			if err := tpl.Execute(&out, renderData); err != nil {
 				t.Fatalf("render %s: %v; the documented template must execute against a real manifest", path, err)
 			}
 

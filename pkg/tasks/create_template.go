@@ -57,6 +57,23 @@ var templateFuncs = template.FuncMap{
 	},
 }
 
+// templateRenderData is the data passed to a template when no explicit
+// TemplateData override is set. Embedding the manifest keeps every legacy
+// template field (.Projects, .Metadata, .SbakeVersion, ...) available, while
+// Project names the manifest project that owns the task's target directory.
+//
+// Project is an additive render field, not a manifest field. It is nil when no
+// [[projects]] entry matches the task's target directory (for example, a
+// monorepo root when no project declares the root path), or when execution has
+// no transaction root. A root project with path "." resolves normally.
+// Templates must guard it and fall back intentionally:
+//
+//	{{ if .Project }}{{ .Project.Name }}{{ else }}fallback{{ end }}
+type templateRenderData struct {
+	*types.Manifest
+	Project *types.Project
+}
+
 // CreateTemplateTask renders and writes a file from an embedded template.
 type CreateTemplateTask struct {
 	// TemplateFS is the embedded filesystem (e.g., lang.GoTemplates)
@@ -72,7 +89,8 @@ type CreateTemplateTask struct {
 
 	TaskPrio int
 
-	// Optional: Custom data to pass to the template instead of the full manifest
+	// Optional: Custom data to pass to the template instead of the default
+	// render data (manifest plus .Project).
 	TemplateData interface{}
 
 	// TemplateName identifies which registry template this task renders. It is
@@ -484,6 +502,64 @@ func taskRoot(tc types.TaskContext) string {
 	return abs
 }
 
+// currentProject returns the manifest project that owns the current task's
+// target directory, or nil when the owning project cannot be established.
+//
+// Project paths are recorded repo-relative while a task's TargetPath is the
+// directory it writes into, so the lookup compares the target's path relative
+// to the transaction root (the manifest root) with each project path. That
+// requires an anchored transaction root: direct/library execution without one
+// yields nil, and the template fallback is intentional there. It also yields
+// nil when no [[projects]] entry matches the target directory (for example, a
+// monorepo root when no project declares the root path); a root project with
+// path "." resolves normally.
+func currentProject(tc types.TaskContext) *types.Project {
+	if tc.Manifest == nil || tc.Tx == nil || tc.TargetPath == "" {
+		return nil
+	}
+	root := tc.Tx.Root()
+	if root == "" {
+		return nil
+	}
+	rel, ok := targetRelPath(root, tc.TargetPath)
+	if !ok {
+		return nil
+	}
+	return projectAtPath(tc.Manifest.Projects, rel)
+}
+
+// targetRelPath returns target's clean, slash-separated path relative to root.
+// It reports false when either path cannot be resolved.
+func targetRelPath(root, target string) (string, bool) {
+	if !filepath.IsAbs(target) {
+		abs, err := filepath.Abs(target)
+		if err != nil {
+			return "", false
+		}
+		target = abs
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return "", false
+	}
+	return filepath.ToSlash(filepath.Clean(rel)), true
+}
+
+// projectAtPath returns the project whose declared path matches rel, or nil
+// when no project claims that path. Empty paths never match.
+func projectAtPath(projects []types.Project, rel string) *types.Project {
+	for i := range projects {
+		project := &projects[i]
+		if project.Path == "" {
+			continue
+		}
+		if filepath.ToSlash(filepath.Clean(project.Path)) == rel {
+			return project
+		}
+	}
+	return nil
+}
+
 // baseShadowKey maps a ledger key to its path inside the committed base tree.
 // A base file must not keep the basename .gitignore or .gitattributes: Git
 // applies those files to the base tree itself, which can hide sibling payloads
@@ -874,6 +950,9 @@ func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
 
 	// 2. Render template to memory buffer first
 	data := interface{}(tc.Manifest)
+	if tc.Manifest != nil {
+		data = templateRenderData{Manifest: tc.Manifest, Project: currentProject(tc)}
+	}
 	if t.TemplateData != nil {
 		data = t.TemplateData
 	}

@@ -1,5 +1,5 @@
 [package]
-name = "{{ (index .Projects 0).Name }}"
+name = "{{ .Project.Name }}"
 version = "0.1.0"
 edition = "2021"
 
