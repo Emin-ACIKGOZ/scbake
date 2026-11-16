@@ -175,11 +175,11 @@ Every manifest field is available directly (`.Projects`, `.Metadata`,
   latter always names the first project in the manifest, which is wrong in a
   monorepo.
 
-`.Project` is nil when there is no owning manifest project: a root-level
-tooling template, a target directory not listed under `[[projects]]`, or
-direct/library execution where no transaction root anchors the target. Guard
-it and choose the fallback deliberately. To keep the historical
-first-project behavior:
+`.Project` is nil when no `[[projects]]` entry matches the task's target
+directory (for example, a monorepo root when no project declares the root
+path), or when execution has no transaction root. A root project with
+`path = "."` resolves normally. Guard `.Project` and choose the fallback
+deliberately. To keep the historical first-project behavior:
 
 ```gotemplate
 # Contributing to {{ if .Project }}{{ .Project.Name }}{{ else if .Projects }}{{ (index .Projects 0).Name }}{{ else }}this project{{ end }}

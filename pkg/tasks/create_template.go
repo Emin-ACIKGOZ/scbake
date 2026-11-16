@@ -63,9 +63,10 @@ var templateFuncs = template.FuncMap{
 // Project names the manifest project that owns the task's target directory.
 //
 // Project is an additive render field, not a manifest field. It is nil when no
-// transaction root anchors the target (direct/library execution), for a
-// root-level tooling template, and for a target that has no manifest project
-// entry. Templates must guard it and fall back intentionally:
+// [[projects]] entry matches the task's target directory (for example, a
+// monorepo root when no project declares the root path), or when execution has
+// no transaction root. A root project with path "." resolves normally.
+// Templates must guard it and fall back intentionally:
 //
 //	{{ if .Project }}{{ .Project.Name }}{{ else }}fallback{{ end }}
 type templateRenderData struct {
@@ -88,7 +89,8 @@ type CreateTemplateTask struct {
 
 	TaskPrio int
 
-	// Optional: Custom data to pass to the template instead of the full manifest
+	// Optional: Custom data to pass to the template instead of the default
+	// render data (manifest plus .Project).
 	TemplateData interface{}
 
 	// TemplateName identifies which registry template this task renders. It is
@@ -507,9 +509,10 @@ func taskRoot(tc types.TaskContext) string {
 // directory it writes into, so the lookup compares the target's path relative
 // to the transaction root (the manifest root) with each project path. That
 // requires an anchored transaction root: direct/library execution without one
-// yields nil, and the template fallback is intentional there. A root-level
-// tooling template or a target without a manifest project entry also yields
-// nil so templates use their fallback rather than guessing a project.
+// yields nil, and the template fallback is intentional there. It also yields
+// nil when no [[projects]] entry matches the target directory (for example, a
+// monorepo root when no project declares the root path); a root project with
+// path "." resolves normally.
 func currentProject(tc types.TaskContext) *types.Project {
 	if tc.Manifest == nil || tc.Tx == nil || tc.TargetPath == "" {
 		return nil
