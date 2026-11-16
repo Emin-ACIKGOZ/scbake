@@ -43,7 +43,14 @@ Use `-tag vX.Y.Z` to fetch a specific SPDX release. The generator writes
 the binary. Do not edit them by hand.
 
 The generator is maintainer-only tooling: without `-source` it downloads from
-GitHub. Its failure-path and matrix tests are tracked in #115.
+GitHub. Collision/ordering and deterministic-output coverage are in this PR; the
+remaining tag/local-source/HTTP failure matrix is tracked in #115.
+
+Generation guarantee: both outputs are built and validated before either is
+written, so a generation or validation error leaves both files untouched. Each
+file is written atomically, but the pair is not: a write or rename failure after
+the first output can leave a half-updated pair. The remaining atomic-pair work
+is tracked in #115.
 
 After regenerating, run the package and integration tests:
 

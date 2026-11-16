@@ -132,8 +132,11 @@ func run(ctx context.Context, cfg config) error {
 }
 
 // writeOutputs builds and validates both outputs before writing either, so a
-// generation error (for example a case-insensitive ID collision in the index)
-// cannot leave a half-updated pair.
+// generation or validation error (for example a case-insensitive ID collision
+// in the index) leaves both files untouched. It also prepares both output
+// directories before the first rename, but each file is still renamed
+// separately: a write or rename failure after the first rename can leave a
+// half-updated pair. Full atomic-pair support is tracked in #115.
 func writeOutputs(cfg config, version string, ids []string, texts map[string]string) error {
 	archive, err := buildArchive(ids, texts)
 	if err != nil {
@@ -142,6 +145,12 @@ func writeOutputs(cfg config, version string, ids []string, texts map[string]str
 	index, err := renderIndex(version, ids)
 	if err != nil {
 		return fmt.Errorf("render index: %w", err)
+	}
+
+	for _, path := range []string{cfg.outPath, cfg.indexPath} {
+		if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
+			return fmt.Errorf("prepare output directory for %s: %w", path, err)
+		}
 	}
 
 	if err := writeFileAtomic(cfg.outPath, archive); err != nil {
