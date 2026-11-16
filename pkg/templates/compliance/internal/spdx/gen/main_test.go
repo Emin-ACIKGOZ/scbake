@@ -72,6 +72,22 @@ func writeLicenseSource(t *testing.T, texts map[string]string) string {
 	return root
 }
 
+// writeRawLicenseList creates a local -source checkout from a literal
+// licenses.json body, so tests can exercise shapes the helper never emits.
+func writeRawLicenseList(t *testing.T, listJSON string) string {
+	t.Helper()
+
+	root := t.TempDir()
+	jsonDir := filepath.Join(root, "json")
+	if err := os.MkdirAll(jsonDir, 0o750); err != nil {
+		t.Fatalf("create fixture json dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(jsonDir, "licenses.json"), []byte(listJSON), 0o600); err != nil {
+		t.Fatalf("write fixture license list: %v", err)
+	}
+	return root
+}
+
 func readFile(t *testing.T, path string) []byte {
 	t.Helper()
 
@@ -135,6 +151,52 @@ func TestRunLeavesOutputsUntouchedOnCaseInsensitiveCollision(t *testing.T) {
 		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 			t.Errorf("collision created %s (stat err: %v)", path, statErr)
 		}
+	}
+}
+
+// TestRunRejectsEmptyLicenseListWithoutWriting guards against generating an
+// empty archive and index from a raw local source with "licenses": [].
+func TestRunRejectsEmptyLicenseListWithoutWriting(t *testing.T) {
+	source := writeRawLicenseList(t, `{"licenseListVersion":"test-1.0","licenses":[]}`)
+
+	outDir := t.TempDir()
+	archivePath := filepath.Join(outDir, "licenses.zip")
+	indexPath := filepath.Join(outDir, "index.go")
+	archiveSentinel := []byte("existing archive\n")
+	indexSentinel := []byte("existing index\n")
+	if err := os.WriteFile(archivePath, archiveSentinel, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(indexPath, indexSentinel, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config{sourceDir: source, outPath: archivePath, indexPath: indexPath}
+	err := run(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("run succeeded with an empty license list; want an error")
+	}
+	if !strings.Contains(err.Error(), "no licenses") {
+		t.Errorf("run error = %v, want it to report no licenses", err)
+	}
+	assertFileContents(t, archivePath, archiveSentinel)
+	assertFileContents(t, indexPath, indexSentinel)
+
+	freshDir := t.TempDir()
+	cfg = config{
+		sourceDir: source,
+		outPath:   filepath.Join(freshDir, "licenses.zip"),
+		indexPath: filepath.Join(freshDir, "index.go"),
+	}
+	if err := run(context.Background(), cfg); err == nil {
+		t.Fatal("run succeeded with an empty license list; want an error")
+	}
+	entries, err := os.ReadDir(freshDir)
+	if err != nil {
+		t.Fatalf("read fresh output dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("empty license list created %d entries in a fresh output dir: %v", len(entries), entries)
 	}
 }
 

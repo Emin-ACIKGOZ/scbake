@@ -116,6 +116,9 @@ func run(ctx context.Context, cfg config) error {
 	}
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
+	if len(ids) == 0 {
+		return errors.New("license list contains no licenses")
+	}
 
 	texts, err := l.loadTexts(ctx, ids)
 	if err != nil {
