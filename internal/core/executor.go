@@ -47,7 +47,13 @@ func executePlan(
 			return fmt.Errorf("execution interrupted before %q: %w", task.Description(), err)
 		}
 
-		reporter.TaskStart(task.Description(), i+1, len(plan.Tasks))
+		desc := task.Description()
+		if tc.DryRun {
+			if sd, ok := task.(types.SourceDescriber); ok {
+				desc = sd.DescriptionWithSource(tc)
+			}
+		}
+		reporter.TaskStart(desc, i+1, len(plan.Tasks))
 
 		var err error
 		if !tc.DryRun {

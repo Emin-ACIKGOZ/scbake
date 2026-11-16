@@ -6,6 +6,8 @@ package tasks
 import (
 	"os"
 	"path/filepath"
+	"scbake/internal/types"
+	"strings"
 	"testing"
 )
 
@@ -111,5 +113,37 @@ func TestIssue138_ResolveTemplateSourceTiers(t *testing.T) {
 				t.Errorf("Label() = %q, want %q", src.Label(), tc.wantLabel)
 			}
 		})
+	}
+}
+
+// TestIssue138_DescriptionWithSource verifies dry-run disclosure without
+// changing the plain description.
+func TestIssue138_DescriptionWithSource(t *testing.T) {
+	cacheDir := t.TempDir()
+	pullIntoCache(t, cacheDir, "acme", "go-api", "testdata/simple.tpl", "from registry")
+
+	task := &CreateTemplateTask{
+		TemplateFS:   testEmbedFS,
+		TemplatePath: "testdata/simple.tpl",
+		OutputPath:   "out.txt",
+		Desc:         "Create simple file",
+		TemplateName: "go-api",
+	}
+
+	if got := task.Description(); got != "Create simple file" {
+		t.Errorf("Description() = %q, want the unchanged description", got)
+	}
+
+	registryDesc := task.DescriptionWithSource(types.TaskContext{RegistryCacheDir: cacheDir, RegistryNames: []string{"acme"}})
+	if registryDesc != "Create simple file [registry: acme]" {
+		t.Errorf("configured registry description = %q, want %q", registryDesc, "Create simple file [registry: acme]")
+	}
+
+	builtinDesc := task.DescriptionWithSource(types.TaskContext{RegistryCacheDir: cacheDir, RegistryNames: nil})
+	if builtinDesc != "Create simple file [built-in]" {
+		t.Errorf("unconfigured description = %q, want %q", builtinDesc, "Create simple file [built-in]")
+	}
+	if strings.Contains(task.Description(), "[") {
+		t.Errorf("Description() gained a source suffix: %q", task.Description())
 	}
 }

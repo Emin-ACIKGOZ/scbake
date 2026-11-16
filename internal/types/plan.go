@@ -77,6 +77,14 @@ type Plan struct {
 	Tasks []Task
 }
 
+// SourceDescriber is implemented by tasks that can name the template source
+// tier they would resolve. The executor calls it only for dry-run output so a
+// preview shows whether a file comes from --template-dir, a configured
+// registry, or the embedded defaults.
+type SourceDescriber interface {
+	DescriptionWithSource(tc TaskContext) string
+}
+
 // RegistryAwareHandler is optionally implemented by language and tooling
 // handlers that resolve registry-cached templates at plan time. Core calls it
 // with the configured registry allowlist. Handlers that only build

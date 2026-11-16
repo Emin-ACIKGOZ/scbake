@@ -191,3 +191,30 @@ func TestIssue138_UpdateAfterRemoveUsesBuiltin(t *testing.T) {
 	issue138MustRun(t, "update")
 	issue138AssertBuiltin(t, projectPath)
 }
+
+// TestIssue138_DryRunNamesSource pins dry-run source disclosure before and
+// after removal.
+func TestIssue138_DryRunNamesSource(t *testing.T) {
+	work := issue138Setup(t)
+	srv := issue138RegistryServer(t)
+
+	issue138MustRun(t, "template", "registry", "add", "team", srv.URL)
+	issue138MustRun(t, "template", "pull", "editorconfig", "--registry", "team")
+
+	before := issue138MustRun(t, "new", "issue138-e1", "--with", "editorconfig", "--dry-run")
+	if !strings.Contains(before, "registry: team") {
+		t.Errorf("dry-run with a configured registry should name 'registry: team', got:\n%s", before)
+	}
+	issue138AssertMissing(t, filepath.Join(work, "issue138-e1"))
+
+	issue138MustRun(t, "template", "registry", "remove", "team")
+
+	after := issue138MustRun(t, "new", "issue138-e2", "--with", "editorconfig", "--dry-run")
+	if strings.Contains(after, "registry: team") {
+		t.Errorf("dry-run after removal still names the removed registry, got:\n%s", after)
+	}
+	if !strings.Contains(after, "[built-in]") {
+		t.Errorf("dry-run after removal should name '[built-in]', got:\n%s", after)
+	}
+	issue138AssertMissing(t, filepath.Join(work, "issue138-e2"))
+}

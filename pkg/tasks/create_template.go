@@ -104,6 +104,18 @@ func (t *CreateTemplateTask) Description() string {
 	return t.Desc
 }
 
+// DescriptionWithSource implements types.SourceDescriber. It appends the tier
+// that would supply this template so dry-run output discloses whether the file
+// comes from --template-dir, a configured registry, or the embedded defaults.
+// It uses the same resolver as Execute and is only called for dry-run display.
+func (t *CreateTemplateTask) DescriptionWithSource(tc types.TaskContext) string {
+	src := ResolveTemplateSource(t.TemplateFS, t.TemplatePath, tc.TemplateDir, tc.RegistryCacheDir, t.TemplateName, tc.RegistryNames)
+	if src.Tier == "" {
+		return t.Desc
+	}
+	return t.Desc + " [" + src.Label() + "]"
+}
+
 // Priority implements types.Task.
 func (t *CreateTemplateTask) Priority() int {
 	return t.TaskPrio
