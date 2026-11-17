@@ -396,12 +396,26 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir, templateName, registri
   hand-editing `registries.json` makes the cache inert rather than letting stale
   content shadow an embedded template; the failure mode is closed.
 - `scbake template registry remove <name>` renames `<cacheDir>/<registry>` to a
-  sibling `.evict-*` staging path inside the cache root, saves the config change,
-  then deletes the staging path. If saving fails, both the in-memory config and
-  the cache path are restored and the combined error is returned; if only the
-  final cleanup fails, the error says the config was saved. The rename stays on
-  one filesystem (one volume on Windows). Other registries and the cache root are
-  untouched. A symlink at the registry path is renamed as a link, never followed.
+  sibling `.evict-<key>-<random>` staging path inside the cache root, saves the
+  config change, then deletes the staging path. The key is an implementation
+  detail derived from the registry name, URL, version, and subdirectory (the
+  token is excluded so a token rotation does not invalidate recovery); it makes
+  the staged tree attributable to exactly one configured registry.
+  - If staging or saving fails, both the in-memory config and the cache path are
+    restored and the combined error is returned. A combined save-and-restore
+    failure is still an error, but its attributable residue is repaired by the
+    next sweep. If only the final cleanup fails, the error says the config was
+    saved.
+  - Every `add`, `remove`, and `set-token` starts by sweeping the cache root,
+    before it mutates anything. A staged root is restored only when its key still
+    matches a configured, validly named registry and that registry's live path is
+    absent; every other keyed root is deleted. Roots younger than 60 seconds,
+    live registries whose names begin with `.evict-`, and unparseable legacy
+    `.evict-<digits>` roots are never touched.
+  - The rename stays on one filesystem (one volume on Windows). Other registries
+    and the cache root are untouched. A symlink at the registry path is renamed
+    as a link and never followed, and the sweep uses `Lstat` plus lexical
+    containment only.
 - `--dry-run` appends the resolved tier to each file task: `[template-dir]`,
   `[registry: <name>]`, or `[built-in]`. Normal runs and their output are unchanged.
   The label is a plan-time snapshot, and the `maven_linter` snippet injected into
