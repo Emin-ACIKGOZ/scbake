@@ -90,7 +90,7 @@ func TestValidateSelectedTemplates_TemplateNotFound(t *testing.T) {
 
 func TestValidateSelectedTemplates_LangWithSchema(t *testing.T) {
 	// The Go language handler implements SchemaProvider and requires go_version
-	// to match pattern "^1\\.\\d+$". Set a valid value to verify the lang path.
+	// to match pattern "^1\\.\\d+(\\.\\d+)?$". Set a valid value to verify the lang path.
 	rc := RunContext{
 		LangFlag: "go",
 	}
@@ -113,6 +113,6 @@ func TestValidateSelectedTemplates_LangWithSchemaInvalidPattern(t *testing.T) {
 	}
 	err := validateSelectedTemplates(rc, map[string]string{"go_version": "v1.22"})
 	if err == nil {
-		t.Fatal("expected error for go_version not matching pattern ^1\\.\\d+$")
+		t.Fatal("expected error for go_version not matching pattern ^1\\.\\d+(\\.\\d+)?$")
 	}
 }

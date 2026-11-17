@@ -117,7 +117,7 @@ func appendInitTasks(plan []types.Task, seq *types.PrioritySequence, targetPath 
 		return nil, err
 	}
 
-	return appendTidyTask(plan, seq, "Run go mod tidy")
+	return appendTidyTask(plan, seq, "Run go mod tidy", vars)
 }
 
 // appendMaintenanceTasks adds jobs for a project that already has go.mod.
@@ -135,12 +135,19 @@ func appendMaintenanceTasks(plan []types.Task, seq *types.PrioritySequence, targ
 		return nil, err
 	}
 
-	return appendTidyTask(plan, seq, "Run go mod tidy (project exists)")
+	return appendTidyTask(plan, seq, "Run go mod tidy (project exists)", vars)
 }
 
-// appendTidyTask appends `go mod tidy`.
-func appendTidyTask(plan []types.Task, seq *types.PrioritySequence, desc string) ([]types.Task, error) {
+// appendTidyTask appends `go mod tidy`. An explicit go_version is passed to
+// tidy as well so a dependency whose effective Go requirement is higher
+// (including a patch component, e.g. 1.24.0 vs 1.24) makes tidy fail closed
+// instead of being silently overridden by Go; failure prevents the caller from
+// persisting metadata that contradicts go.mod.
+func appendTidyTask(plan []types.Task, seq *types.PrioritySequence, desc string, vars map[string]string) ([]types.Task, error) {
 	args := []string{goModSubcommand, "tidy"}
+	if version := vars["go_version"]; version != "" {
+		args = append(args, "-go="+version)
+	}
 
 	p, err := seq.Next()
 	if err != nil {

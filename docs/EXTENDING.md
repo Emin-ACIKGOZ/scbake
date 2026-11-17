@@ -489,17 +489,30 @@ that owns it reads it:
 - **Template handlers** read inputs from `.Metadata` while rendering, where both
   explicit values and schema defaults are available.
 
-Values are consumed only when passed on the current invocation: a value already
-recorded in `scbake.toml` is not re-applied by a later `apply` unless `--set` is
-given again. This keeps schema defaults (which are persisted in `[metadata]`)
-from silently overriding toolchain or project state.
+For **language handlers**, values are consumed only when passed on the current
+invocation: a value already recorded in `scbake.toml` is not re-applied by a
+later `apply` unless `--set` is given again. This keeps schema defaults (which
+are persisted in `[metadata]`) from silently overriding toolchain or project
+state.
 
 The Go language pack consumes `module_path` (new modules only; an existing
 module with a different path is an error, never a rewrite) and `go_version`
-(new modules and explicitly updated ones). The `ci_github` template consumes
-`runner_os` at render time. `build_tool` in the `makefile` template is the
-documented record-only example: it is validated and stored but intentionally has
-no consumer.
+(new modules and explicitly updated ones). An explicit version is also passed to
+`go mod tidy -go=<version>`, so a request lower than a dependency's effective Go
+requirement fails the run instead of leaving `go.mod` and recorded metadata
+disagreeing. The comparison includes the patch component: a project or dependency
+that requires `go 1.24.0` is not satisfied by a requested `1.24`, so name the
+full version (`1.24.0`) when the requirement carries a patch.
+`build_tool` in the `makefile` template is the documented record-only example:
+it is validated and stored but intentionally has no consumer.
+
+On a failed `apply --lang go` against a project without `go.mod`, the first
+content snapshot of the created `go.mod` is authoritative, so a later command
+write (for example a version edit before a failing tidy) makes rollback keep the
+file with a warning rather than delete bytes it cannot prove it wrote. The
+residue is a new `go.mod`; `new` is safe because a failed `new` removes the
+whole project directory. See [ARCHITECTURE.md](ARCHITECTURE.md) for the
+transaction rule.
 
 ### Schema Reference
 

@@ -6,6 +6,7 @@ package golang
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,6 +21,15 @@ func getPlanWithVarsOrFail(t *testing.T, h *Handler, path string, vars map[strin
 		t.Fatalf("GetTasks(%q, vars=%v) failed: %v", path, vars, err)
 	}
 	return plan
+}
+
+func assertArgs(t *testing.T, what string, got, want []string) {
+	t.Helper()
+	// Compare element-wise: joining with spaces would accept a single argument
+	// containing "tidy -go=1.23" as if it were two separate arguments.
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s args = %q, want %q", what, got, want)
+	}
 }
 
 func execTaskAt(t *testing.T, plan []types.Task, idx int) *tasks.ExecCommandTask {
@@ -165,6 +175,9 @@ func TestGetTasks_GoVersionOrderedBeforeTidy(t *testing.T) {
 		t.Errorf("edit description %q should contain the version", editTask.Desc)
 	}
 	assertStringSet(t, "go mod edit", editTask.PredictedCreated, []string{"go.mod"})
+
+	tidyTask := execTaskAt(t, plan, tidyIdx)
+	assertArgs(t, "go mod tidy", tidyTask.Args, []string{"mod", "tidy", "-go=1.23"})
 }
 
 func TestGetTasks_NoEditTaskWithoutExplicitVersion(t *testing.T) {
@@ -183,6 +196,8 @@ func TestGetTasks_NoEditTaskWithoutExplicitVersion(t *testing.T) {
 			plan := getPlanWithVarsOrFail(t, &Handler{}, t.TempDir(), tc.vars)
 			assertNoGoModVerb(t, plan, "edit")
 			assertPlanLength(t, plan, 4)
+			assertArgs(t, "go mod tidy", execTaskAt(t, plan, findGoModVerb(t, plan, "tidy")).Args,
+				[]string{"mod", "tidy"})
 		})
 	}
 }

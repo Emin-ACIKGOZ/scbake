@@ -159,6 +159,16 @@ and the manifest are snapshotted after their write. A created directory is
 removed deepest-first only when empty. Created regular files with no recorded
 hash (for example legacy journals or interrupted writes) are kept with a
 warning.
+The first content snapshot of a created path is authoritative: later command
+writes do not refresh it. If `go mod init` creates `go.mod` and a later command
+in the same transaction (such as `go mod edit` or `go mod tidy`) modifies it
+before a failure, rollback sees bytes that no longer match and keeps the file
+with a warning. This is intentional: rollback will not delete bytes it cannot
+prove the transaction wrote. A failed `apply --lang go` on a project without
+`go.mod` can therefore leave a new, possibly unusable `go.mod`; `new` is safe
+because a failed `new` removes the whole project directory. Recover with
+`go mod tidy` or by recreating the module.
+
 The check is forensic, not atomic: a writer can still replace bytes between
 verification and unlink, and a background child can race the post-command
 snapshot. Those races are accepted residuals.

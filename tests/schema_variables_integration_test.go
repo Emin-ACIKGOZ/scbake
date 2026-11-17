@@ -37,6 +37,13 @@ func readProjectFile(t *testing.T, path string) string {
 	return string(data)
 }
 
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 func requireRegexp(t *testing.T, what, body string, re *regexp.Regexp) {
 	t.Helper()
 	if !re.MatchString(body) {
@@ -206,6 +213,77 @@ func TestIssue140_ApplyGoVersionEditsExistingProject(t *testing.T) {
 	manifest := readProjectFile(t, "scbake.toml")
 	if !strings.Contains(manifest, `go_version = "1.23"`) {
 		t.Errorf("manifest does not record the applied version:\n%s", manifest)
+	}
+}
+
+// setupGoDependencyProject creates ../dep (go 1.24.0) and a Go project whose
+// go.mod also declares go 1.24.0 and requires the dependency, then chdirs into
+// the project.
+func setupGoDependencyProject(t *testing.T, workspace, name string) {
+	t.Helper()
+	depDir := filepath.Join(workspace, "dep")
+	if err := os.Mkdir(depDir, 0o700); err != nil {
+		t.Fatalf("create dependency dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(depDir, "go.mod"), "module example.com/dep\n\ngo 1.24.0\n")
+	writeTestFile(t, filepath.Join(depDir, "dep.go"), "package dep\n\nfunc Value() int { return 1 }\n")
+
+	if out, err := runCLI("new", name, "--lang", "go"); err != nil {
+		t.Fatalf("new failed: %v\n%s", err, out)
+	}
+	if err := os.Chdir(filepath.Join(workspace, name)); err != nil {
+		t.Fatalf("chdir project: %v", err)
+	}
+
+	writeTestFile(t, "go.mod", "module "+name+"\n\ngo 1.24.0\n\n"+
+		"require example.com/dep v0.0.0\n\nreplace example.com/dep => ../dep\n")
+	writeTestFile(t, "main.go", "package main\n\nimport \"example.com/dep\"\n\nfunc main() { _ = dep.Value() }\n")
+}
+
+// TestIssue140_ExplicitGoVersionCannotContradictDependency pins the fail-closed
+// path: `go mod tidy -go=<requested>` rejects a version below a dependency's
+// directive, the run fails before metadata is saved, and rollback restores the
+// original go.mod.
+func TestIssue140_ExplicitGoVersionCannotContradictDependency(t *testing.T) {
+	workspace := chdirTempWorkspace(t)
+	setupGoDependencyProject(t, workspace, "gvfail")
+
+	before := readProjectFile(t, "go.mod")
+	manifestBefore := readProjectFile(t, "scbake.toml")
+
+	out, err := runCLI("apply", "--lang", "go", "--set", "go_version=1.23",
+		"--conflict-strategy", "keep-local")
+	if err == nil {
+		t.Fatalf("apply with go_version=1.23 should fail against a go 1.24 dependency:\n%s", out)
+	}
+	for _, want := range []string{"requires go@1.24.0", "1.23 is requested"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("failure should mention %q:\n%s", want, out)
+		}
+	}
+	if after := readProjectFile(t, "go.mod"); after != before {
+		t.Errorf("rollback did not restore go.mod:\n--- before ---\n%s\n--- after ---\n%s", before, after)
+	}
+	if after := readProjectFile(t, "scbake.toml"); after != manifestBefore {
+		t.Errorf("failed run changed the manifest:\n--- before ---\n%s\n--- after ---\n%s", manifestBefore, after)
+	}
+}
+
+// TestIssue140_ExplicitPatchGoVersionMatchesDependency verifies the schema
+// accepts the patch-level form needed to satisfy a `go 1.24.0` dependency.
+func TestIssue140_ExplicitPatchGoVersionMatchesDependency(t *testing.T) {
+	workspace := chdirTempWorkspace(t)
+	setupGoDependencyProject(t, workspace, "gvpatch")
+
+	out, err := runCLI("apply", "--lang", "go", "--set", "go_version=1.24.0",
+		"--conflict-strategy", "keep-local")
+	if err != nil {
+		t.Fatalf("apply with go_version=1.24.0 failed: %v\n%s", err, out)
+	}
+	requireRegexp(t, "go.mod", readProjectFile(t, "go.mod"), regexp.MustCompile(`(?m)^go 1\.24\.0$`))
+	manifest := readProjectFile(t, "scbake.toml")
+	if !strings.Contains(manifest, `go_version = "1.24.0"`) {
+		t.Errorf("manifest does not record the patch-level version:\n%s", manifest)
 	}
 }
 

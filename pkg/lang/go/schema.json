@@ -11,7 +11,7 @@
       "required": false,
       "default": "1.22",
       "description": "Go version for the module's go directive when set with --set. The recorded default is not applied.",
-      "pattern": "^1\\.\\d+$"
+      "pattern": "^1\\.\\d+(\\.\\d+)?$"
     }
   }
 }
