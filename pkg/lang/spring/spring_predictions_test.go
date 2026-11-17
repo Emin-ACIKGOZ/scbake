@@ -27,9 +27,9 @@ func TestGetTasks_ExecPredictedPaths(t *testing.T) {
 	if unzipTask.ArchivePath != "spring-init.zip" {
 		t.Errorf("unzip ArchivePath = %q, want %q", unzipTask.ArchivePath, "spring-init.zip")
 	}
-	if len(unzipTask.PredictedCreated) != 0 {
-		t.Errorf("unzip should rely on ArchivePath, got predictions %v", unzipTask.PredictedCreated)
-	}
+	// Archive entries are only readable after extraction, so pom.xml is also
+	// declared directly for dry-run validation of later tasks.
+	assertSpringStringSet(t, "unzip", unzipTask.PredictedCreated, []string{"pom.xml"})
 
 	chmodTask := findSpringExecTask(t, plan, "chmod")
 	assertSpringStringSet(t, "chmod", chmodTask.PredictedCreated, []string{"mvnw"})

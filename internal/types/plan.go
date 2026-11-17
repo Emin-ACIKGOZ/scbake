@@ -5,7 +5,9 @@ package types
 
 import (
 	"context"
+	"path/filepath"
 	"scbake/internal/filesystem/transaction"
+	"strings"
 )
 
 // Conflict resolution strategies accepted by --conflict-strategy.
@@ -64,6 +66,41 @@ type TaskContext struct {
 	// Tx is the active filesystem transaction manager.
 	// If nil, tasks perform operations without safety tracking (legacy/testing mode).
 	Tx *transaction.Manager
+
+	// PlannedPaths lists absolute paths that earlier tasks in the current plan
+	// declared they may create (see CreatedPathProvider). The executor fills it
+	// between tasks; read-only validation uses it to distinguish an artifact
+	// that is not there yet from one that is genuinely missing.
+	PlannedPaths []string
+}
+
+// PathPlanned reports whether absPath, or an ancestor of it, was declared by an
+// earlier task in the current plan. It is read-only and makes no filesystem
+// calls.
+func (tc TaskContext) PathPlanned(absPath string) bool {
+	if absPath == "" {
+		return false
+	}
+	absPath = filepath.Clean(absPath)
+	for _, planned := range tc.PlannedPaths {
+		if planned == "" {
+			continue
+		}
+		planned = filepath.Clean(planned)
+		if absPath == planned || strings.HasPrefix(absPath, planned+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// CreatedPathProvider is an optional capability for tasks that can declare the
+// paths they create. Declarations must be absolute and computed without side
+// effects. The executor carries them into TaskContext.PlannedPaths so a later
+// task's Validate does not fail in a dry run on an artifact an earlier task is
+// expected to produce.
+type CreatedPathProvider interface {
+	CreatedPaths(tc TaskContext) []string
 }
 
 // Task is the interface for all atomic operations (e.g., create file, exec command).
