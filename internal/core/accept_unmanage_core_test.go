@@ -6,6 +6,7 @@ package core
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -294,6 +295,136 @@ func TestRunManageNoOpChecksPending(t *testing.T) {
 			t.Errorf("no-op unmanage rewrote the manifest")
 		}
 	})
+}
+
+// TestRunManageDryRunChecksPendingFirst: a dry run must surface an interrupted
+// transaction before argument validation, so a dead journal is not hidden by a
+// missing or untracked path error.
+func TestRunManageDryRunChecksPendingFirst(t *testing.T) {
+	t.Run("accept missing file", func(t *testing.T) {
+		root := t.TempDir()
+		writeManageFixture(t, root, map[string]string{"missing.txt": "pristine\n"})
+		writeDeadJournal(t, root)
+		rc := manageRunContext(root)
+		rc.DryRun = true
+
+		err := RunAccept(rc, []string{"missing.txt"})
+		if !errors.Is(err, transaction.ErrIncompleteTransaction) {
+			t.Fatalf("dry-run accept error = %v, want ErrIncompleteTransaction", err)
+		}
+	})
+
+	t.Run("unmanage untracked path", func(t *testing.T) {
+		root := t.TempDir()
+		writeManageFixture(t, root, map[string]string{"a.txt": "pristine\n"})
+		writeDeadJournal(t, root)
+		rc := manageRunContext(root)
+		rc.DryRun = true
+
+		err := RunUnmanage(rc, []string{"missing.txt"})
+		if !errors.Is(err, transaction.ErrIncompleteTransaction) {
+			t.Fatalf("dry-run unmanage error = %v, want ErrIncompleteTransaction", err)
+		}
+	})
+}
+
+// TestFinishManageReportsCommittedWithWarning: a durable commit with a cleanup
+// warning is still a successful run, so both the per-path result and the
+// deferred warning must be reported before returning nil.
+//
+//nolint:cyclop // Asserts committed-warning, plain-success, and fatal-error output.
+func TestFinishManageReportsCommittedWithWarning(t *testing.T) {
+	actions := []manageAction{{
+		key:             "a.txt",
+		accept:          true,
+		hash:            tasks.HashContent([]byte("edited\n")),
+		warnMissingBase: true,
+	}}
+
+	t.Run("committed with warning", func(t *testing.T) {
+		var err error
+		stdout, stderr := captureManageOutput(t, func() {
+			err = finishManage(transaction.ErrCommitted, actions, true)
+		})
+		if err != nil {
+			t.Fatalf("finishManage returned %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "Accepted a.txt") {
+			t.Errorf("stdout missing per-path result: %q", stdout)
+		}
+		if !strings.Contains(stderr, "committed with warning") {
+			t.Errorf("stderr missing commit warning: %q", stderr)
+		}
+		if !strings.Contains(stderr, "No committed base for a.txt") {
+			t.Errorf("stderr missing deferred warning: %q", stderr)
+		}
+	})
+
+	t.Run("plain success", func(t *testing.T) {
+		var err error
+		stdout, stderr := captureManageOutput(t, func() {
+			err = finishManage(nil, actions, true)
+		})
+		if err != nil {
+			t.Fatalf("finishManage returned %v, want nil", err)
+		}
+		if !strings.Contains(stdout, "Accepted a.txt") {
+			t.Errorf("stdout missing per-path result: %q", stdout)
+		}
+		if strings.Contains(stderr, "committed with warning") {
+			t.Errorf("stderr reported a commit warning for a clean commit: %q", stderr)
+		}
+	})
+
+	t.Run("fatal error", func(t *testing.T) {
+		fatal := errors.New("boom")
+		stdout, stderr := captureManageOutput(t, func() {
+			if err := finishManage(fatal, actions, true); !errors.Is(err, fatal) {
+				t.Errorf("finishManage error = %v, want %v", err, fatal)
+			}
+		})
+		if stdout != "" || stderr != "" {
+			t.Errorf("failed apply reported output: stdout %q stderr %q", stdout, stderr)
+		}
+	})
+}
+
+// captureManageOutput redirects os.Stdout and os.Stderr while fn runs and
+// returns what each wrote. Tests using it must not call t.Parallel.
+func captureManageOutput(t *testing.T, fn func()) (string, string) {
+	t.Helper()
+	outRead, outWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
+	}
+	errRead, errWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stderr pipe: %v", err)
+	}
+
+	oldOut, oldErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = outWrite, errWrite
+	defer func() { os.Stdout, os.Stderr = oldOut, oldErr }()
+
+	fn()
+
+	if err := outWrite.Close(); err != nil {
+		t.Fatalf("close stdout pipe: %v", err)
+	}
+	if err := errWrite.Close(); err != nil {
+		t.Fatalf("close stderr pipe: %v", err)
+	}
+	os.Stdout, os.Stderr = oldOut, oldErr
+
+	stdout, err := io.ReadAll(outRead)
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	stderr, err := io.ReadAll(errRead)
+	if err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	return string(stdout), string(stderr)
 }
 
 // writeDeadJournal installs an uncommitted journal owned by a PID that cannot

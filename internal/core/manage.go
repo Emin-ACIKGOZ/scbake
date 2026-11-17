@@ -67,6 +67,16 @@ func runManage(rc RunContext, paths []string, accept bool) error {
 		return err
 	}
 
+	// A dry run opens no transaction, so check for an interrupted run before
+	// validating arguments: recovery is the actionable error even when a path
+	// would also fail validation. Mutating runs are checked by
+	// setupTransaction, and real no-ops are checked after planning below.
+	if rc.DryRun {
+		if err := transaction.CheckPending(root); err != nil {
+			return err
+		}
+	}
+
 	// Validate and plan against a copy. The real manifest is only replaced by
 	// the copy when every argument succeeded.
 	updated, actions, err := planManage(rc, root, paths, accept, m.DeepCopy())
@@ -76,21 +86,33 @@ func runManage(rc RunContext, paths []string, accept bool) error {
 	changed := manageActionsChanged(actions)
 
 	if rc.DryRun || !changed {
-		// A dry run opens no transaction, but it must not plan against a tree
-		// left half-written by an interrupted run. A real no-op is checked too,
-		// so it agrees with --dry-run and drift instead of reporting success on
-		// a project that needs recovery. Mutating runs are checked by
-		// setupTransaction.
-		if err := transaction.CheckPending(root); err != nil {
-			return err
+		// A real no-op never reaches setupTransaction, so check it here to agree
+		// with --dry-run and drift instead of reporting success on a project
+		// that needs recovery. The dry-run check above already ran.
+		if !rc.DryRun {
+			if err := transaction.CheckPending(root); err != nil {
+				return err
+			}
 		}
 		reportManageActions(actions, accept, rc.DryRun)
 		reportManageWarnings(actions)
 		return nil
 	}
 
-	if err := applyManage(root, updated, actions); err != nil {
-		return err
+	return finishManage(applyManage(root, updated, actions), actions, accept)
+}
+
+// finishManage reports a completed apply. transaction.ErrCommitted means the
+// transaction is durable but cleanup failed, so it is a successful run: report
+// the cleanup warning along with the per-path confirmations and deferred
+// warnings, then return nil. Any other error is returned before reporting
+// because nothing is known to have landed.
+func finishManage(applyErr error, actions []manageAction, accept bool) error {
+	if applyErr != nil && !errors.Is(applyErr, transaction.ErrCommitted) {
+		return applyErr
+	}
+	if applyErr != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Transaction committed with warning: %v\n", applyErr)
 	}
 	reportManageActions(actions, accept, false)
 	reportManageWarnings(actions)
@@ -136,7 +158,8 @@ func manageActionsChanged(actions []manageAction) bool {
 }
 
 // applyManage applies all planned actions in one transaction and one manifest
-// save.
+// save. It returns transaction.ErrCommitted when the commit is durable but
+// cleanup failed, leaving the warning to the caller.
 func applyManage(root string, updated *types.Manifest, actions []manageAction) error {
 	tx, cleanup, err := setupTransaction(root, false, false)
 	if err != nil {
@@ -161,8 +184,7 @@ func applyManage(root string, updated *types.Manifest, actions []manageAction) e
 
 	if err := tx.Commit(); err != nil {
 		if errors.Is(err, transaction.ErrCommitted) {
-			fmt.Fprintf(os.Stderr, "⚠️  Transaction committed with warning: %v\n", err)
-			return nil
+			return err
 		}
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
