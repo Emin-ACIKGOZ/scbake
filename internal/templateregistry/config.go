@@ -443,9 +443,12 @@ func (m *Manager) Get(name string) *Registry {
 // The cached directory is first renamed aside inside the cache root, then the
 // config change is saved, and only then is the staging directory deleted. If
 // saving fails, both the in-memory config and the cache directory are restored
-// and the combined error is returned. This keeps a failed removal from leaving
-// the config listing a registry whose cache has already been deleted (or a
-// removed registry whose cache is still live in the common case).
+// and the combined error is returned. A staging or restore failure therefore
+// happens before the config change is durable and is reported as an error.
+//
+// Once the save has succeeded the removal is durable: a later failure to delete
+// the staged tree is reported as an *EvictionWarning, which callers may treat as
+// a successful removal because the next registry mutation retries the cleanup.
 func (m *Manager) Remove(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -488,7 +491,7 @@ func (m *Manager) Remove(name string) error {
 	}
 
 	if err := m.discardRegistryCache(staged); err != nil {
-		return fmt.Errorf("saved registry config but failed to delete evicted cache for registry %q: %w", name, err)
+		return &EvictionWarning{Registry: name, Path: staged.staging, Err: err}
 	}
 	return nil
 }
@@ -627,7 +630,9 @@ func (m *Manager) restoreRegistryCache(staged stagedRegistryCache) error {
 
 // discardRegistryCache deletes a staged cache entry after the config change is
 // durable. It is a no-op when nothing was staged. A staged symlink is unlinked
-// without following it; a staged directory tree is removed recursively.
+// without following it; a staged directory tree is removed recursively. A
+// failure here is reported as an *EvictionWarning by Remove: the removal has
+// already been saved, and the next sweep retries the cleanup.
 func (m *Manager) discardRegistryCache(staged stagedRegistryCache) error {
 	if staged.staging == "" {
 		return nil
@@ -646,6 +651,32 @@ func (m *Manager) discardRegistryCache(staged stagedRegistryCache) error {
 		return os.Remove(staged.staging)
 	}
 	return os.RemoveAll(staged.staging)
+}
+
+// EvictionWarning reports that a registry removal was saved but its staged cache
+// tree could not be deleted. The removal is durable, so callers should treat the
+// command as successful; the next registry mutation sweeps the residue.
+type EvictionWarning struct {
+	// Registry is the name of the registry that was removed.
+	Registry string
+	// Path is the staging path that could not be deleted.
+	Path string
+	// Err is the underlying cleanup error.
+	Err error
+}
+
+// Error describes the durable removal and the retried cleanup.
+func (w *EvictionWarning) Error() string {
+	return fmt.Sprintf(
+		"registry %q was removed, but its cached templates could not be deleted from %s: %v; the next registry mutation will retry the cleanup",
+		w.Registry, w.Path, w.Err,
+	)
+}
+
+// Unwrap returns the underlying cleanup error so errors.Is and errors.As can
+// inspect it.
+func (w *EvictionWarning) Unwrap() error {
+	return w.Err
 }
 
 // parseEvictionRoot parses a keyed staging basename this version writes:

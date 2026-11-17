@@ -76,7 +76,14 @@ var registryRemoveCmd = &cobra.Command{
 			return err
 		}
 		if err := m.Remove(args[0]); err != nil {
-			return err
+			// An EvictionWarning means the config change is already durable and
+			// only the staged cache cleanup failed; the next registry mutation
+			// retries it, so report a warning and keep the success exit status.
+			var warning *templateregistry.EvictionWarning
+			if !errors.As(err, &warning) {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", warning)
 		}
 		fmt.Printf("Removed registry %q\n", args[0])
 		return nil

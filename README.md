@@ -482,13 +482,13 @@ Only configured registries participate in resolution: a cache entry whose
 registry is absent from `registries.json` is never read. `template registry
 remove` deletes that registry's cached templates along with the config entry, so
 removal means removal. The config change is saved before the cached tree is
-deleted. An interrupted removal is recovered the same way: the staged tree is
-restored when the registry is still configured from the same source, and
-discarded otherwise; the next `registry add`, `remove`, or `set-token` reclaims
-a staged tree whose cleanup did not finish. Residue left by older versions under
-`.evict-<digits>` names cannot be attributed and is never removed automatically;
-delete it by hand while no registry command is running. Because resolution is
-config-derived, deleting or
+deleted; if that deletion fails, the command warns and still exits successfully,
+and the next `registry add`, `remove`, or `set-token` reclaims the leftover tree.
+An interrupted removal is recovered the same way: the staged tree is restored
+when the registry is still configured from the same source, and discarded
+otherwise. Residue left by older versions under `.evict-<digits>` names cannot be
+attributed and is never removed automatically; delete it by hand while no
+registry command is running. Because resolution is config-derived, deleting or
 hand-editing `registries.json` also disables the corresponding cache instead of
 letting stale content shadow an embedded template. Re-run `template registry add`
 and `template pull` to restore an override.

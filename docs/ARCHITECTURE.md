@@ -404,8 +404,10 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir, templateName, registri
   - If staging or saving fails, both the in-memory config and the cache path are
     restored and the combined error is returned. A combined save-and-restore
     failure is still an error, but its attributable residue is repaired by the
-    next sweep. If only the final cleanup fails, the error says the config was
-    saved.
+    next sweep.
+  - Once the save succeeds the removal is durable: if only the final cleanup
+    fails, `remove` prints a warning to stderr, still reports success, and exits
+    zero. The next sweep retries the cleanup.
   - Every `add`, `remove`, and `set-token` starts by sweeping the cache root,
     before it mutates anything. A staged root is restored only when its key still
     matches a configured, validly named registry and that registry's live path is
