@@ -159,15 +159,22 @@ and the manifest are snapshotted after their write. A created directory is
 removed deepest-first only when empty. Created regular files with no recorded
 hash (for example legacy journals or interrupted writes) are kept with a
 warning.
+
 The first content snapshot of a created path is authoritative: later command
 writes do not refresh it. If `go mod init` creates `go.mod` and a later command
 in the same transaction (such as `go mod edit` or `go mod tidy`) modifies it
 before a failure, rollback sees bytes that no longer match and keeps the file
 with a warning. This is intentional: rollback will not delete bytes it cannot
 prove the transaction wrote. A failed `apply --lang go` on a project without
-`go.mod` can therefore leave a new, possibly unusable `go.mod`; `new` is safe
-because a failed `new` removes the whole project directory. Recover with
-`go mod tidy` or by recreating the module.
+`go.mod` can therefore leave a new, possibly unusable `go.mod`; `new` normally
+avoids this because a failed `new` removes the whole project directory, though a
+lock-busy failure leaves the bootstrap residue described above. Recover by
+repairing the leftover directive and rerunning `apply`: set `GOTOOLCHAIN=local`
+and use `go mod edit -go=<valid version>`, edit the `go` line in `go.mod` by
+hand, or delete and recreate `go.mod`. `GOTOOLCHAIN=local` is needed because
+under the default `GOTOOLCHAIN=auto`, a residue such as `go 1.999` makes even
+`go mod edit` fail while it tries to download that toolchain. Plain
+`go mod tidy` only works once the directive is satisfiable.
 
 The check is forensic, not atomic: a writer can still replace bytes between
 verification and unlink, and a background child can race the post-command
@@ -205,13 +212,13 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 func buildPlan(rc RunContext) (*types.Plan, string, *manifestChanges, error) {
     // 1. Get language handler (if --lang specified)
     handler, err := lang.GetHandler(rc.LangFlag)
-    langTasks, err := handler.GetTasks(rc.TargetPath)
+    langTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir, rc.SetVars)
     plan.Tasks = append(plan.Tasks, langTasks...)
     
     // 2. Get template handlers (if --with specified)
     for _, tmpl := range rc.WithFlag {
         handler, err := templates.GetHandler(tmpl)
-        tmplTasks, err := handler.GetTasks(rc.TargetPath)
+        tmplTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir)
         plan.Tasks = append(plan.Tasks, tmplTasks...)
     }
     
@@ -605,7 +612,7 @@ import (
 
 type Handler struct{}
 
-func (h *Handler) GetTasks(targetPath string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string, _ map[string]string) ([]types.Task, error) {
     // Create priority sequence
     seq, _ := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
     var plan []types.Task

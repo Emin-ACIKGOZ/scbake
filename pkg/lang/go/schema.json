@@ -4,7 +4,7 @@
     "module_path": {
       "type": "string",
       "required": false,
-      "description": "Module path for a newly initialized Go module (default: derived from directory name). Existing modules are never rewritten."
+      "description": "Module path for a newly initialized Go module (default: derived from directory name). An existing module path is never rewritten."
     },
     "go_version": {
       "type": "string",

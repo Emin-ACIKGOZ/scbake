@@ -477,15 +477,18 @@ schema validation failed with 1 error(s):
 
 ### Consuming variables
 
-Declaring a variable in `schema.json` validates and records it; it does not by
-itself change generated output. A variable only affects output when the handler
-that owns it reads it:
+Declaring a variable in `schema.json` makes it validatable and documents it; it
+does not by itself change generated output or record a value. Only a supplied
+value (`--set`, or `--license`/`--copyright-holder`) or a schema `default` is
+written to `[metadata]`. A variable only affects output when the handler that
+owns it reads it:
 
 - **Language handlers** receive the explicit `--set` values as the `vars`
   argument of `GetTasks`. `vars` never contains schema defaults, may be `nil`,
-  and a missing or empty value means "no override". A handler must stay a no-op
-  when `vars` is empty, because `update` and ordinary `new`/`apply` runs pass no
-  values.
+  and a missing or empty value means "no override". A handler's *variable
+  handling* must be a no-op when `vars` is empty, because `update` and ordinary
+  `new`/`apply` runs pass no values; it still performs its normal setup, and it
+  must ignore `--set` keys owned by other selected handlers.
 - **Template handlers** read inputs from `.Metadata` while rendering, where both
   explicit values and schema defaults are available.
 
@@ -497,17 +500,29 @@ state.
 
 **Template handlers** are different: every render re-reads the effective inputs
 from `.Metadata` (persisted explicit values plus schema defaults), so a later
-`update` rewrites the output to match the recorded values. For example, editing
+`update` rewrites the output to match the recorded values for a managed file
+with no local edits. With the default `merge` strategy, local edits are kept or
+merged into the new render without an artifact; an artifact appears only when
+the local file cannot be reconciled safely (a conflicting local edit, a
+missing or stale merge base, or a file scbake did not previously manage) or when
+`--conflict-strategy artifact` is used. For example, editing
 `runner_os` in `[metadata]` and running `update` rewrites `runs-on`.
 
 The Go language pack consumes `module_path` (new modules only; an existing
-module with a different path is an error, never a rewrite) and `go_version`
-(new modules and explicitly updated ones). An explicit version is also passed to
-`go mod tidy -go=<version>`, so a request lower than a dependency's effective Go
-requirement fails the run instead of leaving `go.mod` and recorded metadata
-disagreeing. The comparison includes the patch component: a project or dependency
-that requires `go 1.24.0` is not satisfied by a requested `1.24`, so name the
-full version (`1.24.0`) when the requirement carries a patch.
+module path is never rewritten — a differing explicit value is an error) and
+`go_version` (new modules and explicitly updated ones). Existing `go.mod`
+tokens are compared after unquoting a double-quoted path; a backtick-quoted
+directive is invalid `go.mod` and is rejected. An explicit version is also
+passed to `go mod tidy -go=<version>`, so on that run a request lower than a
+dependency's effective Go requirement fails the run instead of leaving `go.mod`
+and the metadata recorded by that run disagreeing. Only a run that passes
+`--set go_version` is fail-closed: a later `apply` without `--set` runs plain
+`go mod tidy`, which can raise the directive and leave the recorded version
+stale. The comparison includes the patch component: a dependency that requires
+`go 1.24.0` is not satisfied by a requested `1.24`, so name the full version
+(`1.24.0`) when the requirement carries a patch. (The project's own `go`
+directive is not a blocker; `tidy -go=1.24` lowers a main-module `go 1.24.0` to
+`1.24`.)
 The `ci_github` template consumes `runner_os` at render time and emits
 `shell: bash` for the Windows runner, whose default shell is PowerShell.
 `build_tool` in the `makefile` template is the documented record-only example:
@@ -517,9 +532,15 @@ On a failed `apply --lang go` against a project without `go.mod`, the first
 content snapshot of the created `go.mod` is authoritative, so a later command
 write (for example a version edit before a failing tidy) makes rollback keep the
 file with a warning rather than delete bytes it cannot prove it wrote. The
-residue is a new `go.mod`; `new` is safe because a failed `new` removes the
-whole project directory. See [ARCHITECTURE.md](ARCHITECTURE.md) for the
-transaction rule.
+residue is a new `go.mod`; `new` normally avoids it because a failed `new`
+removes the whole project directory, though a lock-busy failure leaves the
+bootstrap residue. To recover, repair the leftover directive and rerun `apply`:
+use `GOTOOLCHAIN=local go mod edit -go=<valid version>`, edit the `go` line in
+`go.mod` by hand, or delete and recreate `go.mod`. `GOTOOLCHAIN=local` is needed
+because under the default `GOTOOLCHAIN=auto`, a residue such as `go 1.999` makes
+even `go mod edit` fail while it tries to download that toolchain. Plain
+`go mod tidy` only works once the directive is satisfiable. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for the transaction rule.
 
 ### Schema Reference
 
