@@ -426,6 +426,20 @@ scbake accept <path>...
 - **Template changes.** If a template render changes, `update` merges or writes
   against the pristine base and a canonical write clears the accepted entry;
   review the result and accept again if needed.
+- **Root `.gitignore` caveat.** Accepting the root `.gitignore` while it is
+  missing scbake's internal-state block records the block-less bytes as the
+  baseline, and the accepted no-op suppresses regeneration. Later `apply` and
+  `update` then leave `.scbake/` unignored and may not re-include
+  `!.scbake-base/`, breaking the committed-base guarantee; `git status` can show
+  `.scbake/` as untracked. Plain `scbake apply` fails because it needs a
+  language or template, `scbake apply --lang <lang>` only warns, and
+  `scbake update` exits 0 silently with the block still absent. Repair it first
+  with `scbake apply --force --lang <lang>` or
+  `scbake apply --conflict-strategy overwrite --lang <lang>`, or with
+  `scbake update --conflict-strategy overwrite`; a manual edit also works.
+  Only the language pack, or a custom template that renders the root
+  `.gitignore`, can repair it: no shipped `--with` tooling template renders
+  that file, so e.g. `--with makefile` leaves it block-less. Then accept.
 - **Atomic and dry-run safe.** All paths are validated before any change, and
   `--dry-run` validates and prints without writing or taking the project lock.
 

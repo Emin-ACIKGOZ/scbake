@@ -53,9 +53,11 @@ type Finding struct {
 	// wrote the file. It is always the pristine template hash from
 	// managed_files, even when Accepted is true.
 	Recorded string
-	// Baseline is the hash the working tree was compared against. It equals
-	// Recorded unless the key has an accepted_files entry, in which case it is
-	// the accepted working-tree baseline.
+	// Baseline is the hash the working tree was compared against for a content
+	// finding (Modified or Missing). It equals Recorded unless the key has an
+	// accepted_files entry, in which case it is the accepted working-tree
+	// baseline. It is empty for base findings (BaseMissing and BaseInvalid),
+	// which are about the committed base rather than the working tree.
 	Baseline string
 	// Accepted reports that Baseline came from accepted_files rather than the
 	// pristine managed_files ledger.

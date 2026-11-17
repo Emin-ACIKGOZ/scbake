@@ -900,7 +900,10 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 // checkManagedGitignore warns when a managed root .gitignore no longer exists or
 // no longer ignores the internal state directory and re-includes the committed
 // base tree. It never mutates the file: the managed render owns the ledger and
-// base shadow, so the fix is a normal apply/update that regenerates it.
+// base shadow, so the fix is to re-run apply/update with overwrite enabled
+// (--force with the same apply selector, or --conflict-strategy overwrite).
+// Only a render that owns .gitignore (the language pack or a custom template)
+// can regenerate it; tooling templates do not render the root .gitignore.
 func checkManagedGitignore(root, relPath string) {
 	existing, err := readRootGitignore(root, relPath)
 	if err != nil {
@@ -919,7 +922,7 @@ func checkManagedGitignore(root, relPath string) {
 func warnManagedGitignoreStale(relPath, detail string) {
 	fmt.Fprintf(
 		os.Stderr,
-		"⚠️  Managed %s %s; regenerate it with 'scbake apply' or 'scbake update'.\n",
+		"⚠️  Managed %s %s; regenerate it with 'scbake apply' or 'scbake update' using --conflict-strategy overwrite (or --force with the same apply selector).\n",
 		relPath, detail,
 	)
 }
