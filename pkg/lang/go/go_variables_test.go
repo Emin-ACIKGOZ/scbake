@@ -219,6 +219,73 @@ func TestGetTasks_ExistingModulePathEqualIsNoOp(t *testing.T) {
 	assertNoGoModVerb(t, plan, "edit")
 }
 
+// TestGetTasks_QuotedExistingModulePathIsNoOp covers go.mod files that spell
+// the module path as a double-quoted interpreted string: Go accepts that form,
+// so equality must be compared after unquoting.
+func TestGetTasks_QuotedExistingModulePathIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module \"example.com/quoted\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Assert the parsed directive directly; checking for a missing init task
+	// alone is weak because init is never planned when go.mod already exists.
+	got, err := moduleDirective(dir)
+	if err != nil {
+		t.Fatalf("moduleDirective failed for a double-quoted path: %v", err)
+	}
+	if got != "example.com/quoted" {
+		t.Fatalf("moduleDirective = %q, want %q", got, "example.com/quoted")
+	}
+
+	plan := getPlanWithVarsOrFail(t, &Handler{}, dir, map[string]string{
+		"module_path": "example.com/quoted",
+	})
+	assertNoGoModVerb(t, plan, "init")
+	if findGoModVerb(t, plan, "tidy") == -1 {
+		t.Fatal("maintenance plan is missing the go mod tidy task")
+	}
+}
+
+// TestGetTasks_BacktickModulePathErrors covers go.mod files that spell the
+// module path with backticks. Go's modfile parser rejects raw-string quoting,
+// so scbake rejects it at plan time instead of planning a tidy that would fail.
+func TestGetTasks_BacktickModulePathErrors(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module `example.com/backtick`\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := (&Handler{}).GetTasks(dir, "", "", map[string]string{
+		"module_path": "example.com/backtick",
+	})
+	if err == nil {
+		t.Fatalf("expected backtick-quoted module path to fail, got plan %v", plan)
+	}
+	for _, want := range []string{"malformed module directive", "backtick quoting"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want mention of %q", err, want)
+		}
+	}
+}
+
+func TestGetTasks_MalformedQuotedModuleDirectiveErrors(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module \"example.com/unterminated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := (&Handler{}).GetTasks(dir, "", "", map[string]string{
+		"module_path": "example.com/unterminated",
+	})
+	if err == nil {
+		t.Fatalf("expected malformed quoting to fail, got plan %v", plan)
+	}
+	if !strings.Contains(err.Error(), "malformed module directive") {
+		t.Errorf("error = %v, want mention of a malformed module directive", err)
+	}
+}
+
 func TestGetTasks_ExistingModulePathDifferentErrors(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/existing\n"), 0o600); err != nil {

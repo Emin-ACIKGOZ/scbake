@@ -12,6 +12,7 @@ import (
 	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
+	"strconv"
 	"strings"
 )
 
@@ -228,10 +229,37 @@ func moduleDirective(targetPath string) (string, error) {
 
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == "module" {
-			return fields[1], nil
+		if len(fields) < 2 || fields[0] != "module" {
+			continue
 		}
+		modulePath, err := unquoteModulePath(fields[1])
+		if err != nil {
+			return "", fmt.Errorf("%s has a malformed module directive: %w", goModFile, err)
+		}
+		return modulePath, nil
 	}
 
 	return "", fmt.Errorf("%s has no module directive", goModFile)
+}
+
+// unquoteModulePath returns the module path from a go.mod token. Go's modfile
+// syntax accepts a bare path or a double-quoted interpreted string; raw-string
+// (backtick) quoting is not valid in go.mod, so compare only against forms Go
+// itself accepts.
+func unquoteModulePath(token string) (string, error) {
+	if strings.Contains(token, "`") {
+		return "", fmt.Errorf("module path %q uses backtick quoting, which go.mod does not accept; use a double-quoted string", token)
+	}
+	if !strings.HasPrefix(token, `"`) {
+		if strings.Contains(token, `"`) {
+			return "", fmt.Errorf("unexpected quote in module path %q", token)
+		}
+		return token, nil
+	}
+
+	modulePath, err := strconv.Unquote(token)
+	if err != nil {
+		return "", fmt.Errorf("could not unquote module path %q: %w", token, err)
+	}
+	return modulePath, nil
 }
