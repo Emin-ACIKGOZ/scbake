@@ -63,10 +63,24 @@ func TestManifestDeepCopyEmptyAdditiveFields(t *testing.T) {
 }
 
 // TestManifestDeepCopyPreservesSortedOrder: the copy keeps the stored order so a
-// load/copy/save cycle does not reorder unmanaged_files.
+// load/copy/save cycle does not reorder unmanaged_files. The input is
+// deliberately unsorted: sorting is the writer's job, so a DeepCopy that
+// normalizes the slice must fail here.
 func TestManifestDeepCopyPreservesSortedOrder(t *testing.T) {
-	original := &Manifest{UnmanagedFiles: []string{"a", "m", "z"}}
-	if got := original.DeepCopy().UnmanagedFiles; !reflect.DeepEqual(got, []string{"a", "m", "z"}) {
-		t.Fatalf("order changed: %v", got)
+	want := []string{"z", "a", "m"}
+	original := &Manifest{UnmanagedFiles: append([]string(nil), want...)}
+
+	copied := original.DeepCopy()
+	if !reflect.DeepEqual(copied.UnmanagedFiles, want) {
+		t.Fatalf("copy reordered unmanaged files: got %v, want %v", copied.UnmanagedFiles, want)
+	}
+	if !reflect.DeepEqual(original.UnmanagedFiles, want) {
+		t.Fatalf("DeepCopy reordered the original: got %v, want %v", original.UnmanagedFiles, want)
+	}
+
+	// The copy must stay independent: reordering it must not touch the original.
+	copied.UnmanagedFiles[0], copied.UnmanagedFiles[2] = copied.UnmanagedFiles[2], copied.UnmanagedFiles[0]
+	if !reflect.DeepEqual(original.UnmanagedFiles, want) {
+		t.Errorf("copy mutation leaked into the original: got %v, want %v", original.UnmanagedFiles, want)
 	}
 }
