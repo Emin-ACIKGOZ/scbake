@@ -4,15 +4,18 @@
 package templateregistry
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // credentialQueryMarkers are case-insensitive substrings that, when present in
@@ -308,18 +311,18 @@ func (m *Manager) save() error {
 	if err := os.WriteFile(m.configPath, data, configFilePerm); err != nil {
 		return fmt.Errorf("writing registry config: %w", err)
 	}
-	// Best effort: record the registry insertion order next to the cache so the
-	// resolver can apply an explicit, deterministic precedence. If this cannot
-	// be written, resolution falls back to a sorted order rather than failing
-	// the config change.
+	// Best effort: record the registry insertion order next to the cache for
+	// older binaries that predate config-derived membership and still read it.
+	// The current resolver ignores this file and follows the running process's
+	// configured order. If writing fails, the config change still succeeds.
 	_ = m.writeRegistryOrder()
 	return nil
 }
 
 // registryOrderFileName is the file, stored at the root of the template cache,
-// that records the order in which registries were added. The resolver reads it
-// to give the first-added registry precedence when several cached registries
-// provide the same template.
+// that records the order in which registries were added. It is retained for
+// mixed-version compatibility: older binaries use it for precedence, but the
+// current resolver derives order from the configured registries slice instead.
 const registryOrderFileName = ".registry-order.json"
 
 // registryOrder is the on-disk representation of the registry precedence order.
@@ -329,7 +332,7 @@ type registryOrder struct {
 
 // writeRegistryOrder persists the current registry insertion order next to the
 // cache. It is best effort; callers ignore the error so a cache-side write
-// failure never blocks a config change.
+// failure never blocks a config change. Only older binaries read it.
 func (m *Manager) writeRegistryOrder() error {
 	if m.cacheDir == "" {
 		return nil
@@ -349,7 +352,8 @@ func (m *Manager) writeRegistryOrder() error {
 }
 
 // readRegistryOrder loads the recorded registry precedence order, or nil when it
-// is absent or unreadable.
+// is absent or unreadable. The current resolver no longer consults it; it is
+// kept for mixed-version compatibility and diagnostics.
 func readRegistryOrder(cacheDir string) []string {
 	//nolint:gosec // path is derived from the cache root, not user input
 	data, err := os.ReadFile(filepath.Join(cacheDir, registryOrderFileName))
@@ -363,40 +367,6 @@ func readRegistryOrder(cacheDir string) []string {
 	return o.Registries
 }
 
-// orderRegistries returns registry directory names in precedence order: the
-// order the registries were added, as recorded in the cache's order file.
-// Directories absent from the order file are appended in lexical order so the
-// result is always deterministic. When no order file exists it falls back to
-// lexical order.
-func orderRegistries(cacheDir string, dirs []string) []string {
-	order := readRegistryOrder(cacheDir)
-	if len(order) == 0 {
-		sort.Strings(dirs)
-		return dirs
-	}
-	rank := make(map[string]int, len(order))
-	for i, name := range order {
-		if _, seen := rank[name]; !seen {
-			rank[name] = i
-		}
-	}
-	sort.SliceStable(dirs, func(i, j int) bool {
-		ri, iKnown := rank[dirs[i]]
-		rj, jKnown := rank[dirs[j]]
-		switch {
-		case iKnown && jKnown:
-			return ri < rj
-		case iKnown:
-			return true
-		case jKnown:
-			return false
-		default:
-			return dirs[i] < dirs[j]
-		}
-	})
-	return dirs
-}
-
 // Add registers a new registry with optional token, version, and subdirectory.
 func (m *Manager) Add(name, url, token, version, subdirectory string) error {
 	m.mu.Lock()
@@ -408,6 +378,12 @@ func (m *Manager) Add(name, url, token, version, subdirectory string) error {
 	if err := validateSubdirectory(subdirectory); err != nil {
 		return err
 	}
+
+	// Reclaim attributed staging residue before appending. The removal of any
+	// matching name has already been saved, so the sweep deletes rather than
+	// restores it; running before the duplicate check keeps a rejected add from
+	// mutating the cache.
+	m.sweepEvictedCaches(time.Now())
 
 	for _, r := range m.config.Registries {
 		if r.Name == name {
@@ -429,6 +405,10 @@ func (m *Manager) Add(name, url, token, version, subdirectory string) error {
 func (m *Manager) SetToken(name, token string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// A token rotation may be the first mutation after a crash, so reclaim
+	// attributed residue before looking the registry up.
+	m.sweepEvictedCaches(time.Now())
 
 	for i := range m.config.Registries {
 		if m.config.Registries[i].Name == name {
@@ -459,9 +439,23 @@ func (m *Manager) Get(name string) *Registry {
 }
 
 // Remove deletes a registry by name. Returns an error if not found.
+//
+// The cached directory is first renamed aside inside the cache root, then the
+// config change is saved, and only then is the staging directory deleted. If
+// saving fails, both the in-memory config and the cache directory are restored
+// and the combined error is returned. A staging or restore failure therefore
+// happens before the config change is durable and is reported as an error.
+//
+// Once the save has succeeded the removal is durable: a later failure to delete
+// the staged tree is reported as an *EvictionWarning, which callers may treat as
+// a successful removal because the next registry mutation retries the cleanup.
 func (m *Manager) Remove(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Reclaim attributed residue first. On a retry after a post-save cleanup
+	// failure this deletes the old staged tree before the not-found check.
+	m.sweepEvictedCaches(time.Now())
 
 	idx := -1
 	for i, r := range m.config.Registries {
@@ -474,8 +468,355 @@ func (m *Manager) Remove(name string) error {
 		return fmt.Errorf("registry %q not found", name)
 	}
 
-	m.config.Registries = append(m.config.Registries[:idx], m.config.Registries[idx+1:]...)
-	return m.save()
+	staged, err := m.stageRegistryCache(name)
+	if err != nil {
+		return err
+	}
+
+	// Build a new slice instead of appending into the old backing array, so the
+	// previous config (restored on a save failure) is not mutated in place.
+	registries := make([]Registry, 0, len(m.config.Registries)-1)
+	registries = append(registries, m.config.Registries[:idx]...)
+	registries = append(registries, m.config.Registries[idx+1:]...)
+	previous := m.config
+	m.config = Config{Registries: registries}
+
+	if err := m.save(); err != nil {
+		m.config = previous
+		if restoreErr := m.restoreRegistryCache(staged); restoreErr != nil {
+			return fmt.Errorf("%w; restoring cached templates for registry %q also failed: %v",
+				err, name, restoreErr)
+		}
+		return err
+	}
+
+	if err := m.discardRegistryCache(staged); err != nil {
+		return &EvictionWarning{Registry: name, Path: staged.staging, Err: err}
+	}
+	return nil
+}
+
+// evictionStagePrefix names the temporary sibling directory that holds a cache
+// entry between the rename-aside and the config save. It stays inside the cache
+// root, so the rename never crosses a filesystem (or volume on Windows).
+const evictionStagePrefix = ".evict-"
+
+const (
+	// evictionKeyBytes is the truncated SHA-256 length embedded in a staging
+	// path. 48 bits makes an accidental collision negligible; an attacker who
+	// can plant a staging root can already write the cache itself.
+	evictionKeyBytes = 6
+	// evictionKeyHexLen is the length of the hex-encoded key in a staging name.
+	evictionKeyHexLen = 2 * evictionKeyBytes
+	// evictionSweepGrace protects a staging root that another process has just
+	// created but not yet renamed or saved over. A normal stage-to-save window
+	// is milliseconds, so a minute only delays reclaiming abandoned residue.
+	evictionSweepGrace = time.Minute
+)
+
+// evictionKey derives the short key embedded in a staging path. It binds a
+// staged tree to the configured registry name and source: a re-add under a
+// different name, URL, version, or subdirectory yields a different key, so the
+// sweep deletes the old tree instead of restoring it.
+//
+// Each field is length-prefixed so no value can shift the boundary between
+// fields, and the field order is a stability contract with roots already on
+// disk. The token is deliberately excluded: it is an Authorization header, not
+// part of the download URL, and the pull path also reuses a cache across a token
+// rotation.
+func evictionKey(reg Registry) string {
+	encoded := fmt.Sprintf("%d:%s|%d:%s|%d:%s|%d:%s",
+		len(reg.Name), reg.Name,
+		len(reg.URL), reg.URL,
+		len(reg.Version), reg.Version,
+		len(reg.Subdirectory), reg.Subdirectory,
+	)
+	sum := sha256.Sum256([]byte(encoded))
+	return hex.EncodeToString(sum[:evictionKeyBytes])
+}
+
+// stagedRegistryCache records a cache directory that was renamed aside while the
+// config change is saved. staging is empty when there was nothing to evict.
+type stagedRegistryCache struct {
+	original string
+	staging  string
+}
+
+// stageRegistryCache renames <cacheDir>/<name> to a keyed sibling
+// .evict-<key>-<random> path inside the cache root. It is a no-op when no cache
+// is configured, nothing is cached, the name is invalid (an invalid name can
+// never be resolved, so its residue is inert), or the target is missing.
+//
+// A symlink at <cacheDir>/<name> is renamed as a link; its target is never
+// followed. The containment check is lexical (see ensureLexicallyWithin) so the
+// link itself is moved rather than refused as if it pointed outside.
+func (m *Manager) stageRegistryCache(name string) (stagedRegistryCache, error) {
+	if !evictableCacheEntry(m.cacheDir, name) {
+		return stagedRegistryCache{}, nil
+	}
+
+	target := filepath.Join(m.cacheDir, name)
+	if err := ensureLexicallyWithin(m.cacheDir, target); err != nil {
+		return stagedRegistryCache{}, fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+	}
+	if _, err := os.Lstat(target); errors.Is(err, fs.ErrNotExist) {
+		return stagedRegistryCache{}, nil
+	} else if err != nil {
+		return stagedRegistryCache{}, fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+	}
+
+	reg, ok := m.firstRegistry(name)
+	if !ok {
+		return stagedRegistryCache{}, fmt.Errorf("evicting cached templates for registry %q: registry is not configured", name)
+	}
+
+	staging, err := reserveEvictionPath(m.cacheDir, evictionKey(reg))
+	if err != nil {
+		return stagedRegistryCache{}, fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+	}
+	if err := os.Rename(target, staging); err != nil {
+		return stagedRegistryCache{}, fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+	}
+	return stagedRegistryCache{original: target, staging: staging}, nil
+}
+
+// firstRegistry returns the first configured registry with the given name. The
+// resolver gives the earliest match precedence, so the sweep must attribute a
+// staged tree to the same registry.
+func (m *Manager) firstRegistry(name string) (Registry, bool) {
+	for _, r := range m.config.Registries {
+		if r.Name == name {
+			return r, true
+		}
+	}
+	return Registry{}, false
+}
+
+// evictableCacheEntry reports whether a cache entry could exist for name. An
+// invalid name is not evictable because it can never be resolved.
+func evictableCacheEntry(cacheDir, name string) bool {
+	return cacheDir != "" && ValidateName(name) == nil
+}
+
+// reserveEvictionPath returns an unused path inside cacheDir for a staged cache
+// entry. MkdirTemp picks the unique name atomically; the empty directory is then
+// removed so the path can receive the rename. All staging stays on the same
+// volume as <cacheDir>/<name>, so the rename is a same-parent move.
+func reserveEvictionPath(cacheDir, key string) (string, error) {
+	dir, err := os.MkdirTemp(cacheDir, evictionStagePrefix+key+"-")
+	if err != nil {
+		return "", fmt.Errorf("creating eviction staging path: %w", err)
+	}
+	if err := os.Remove(dir); err != nil {
+		return "", fmt.Errorf("preparing eviction staging path: %w", err)
+	}
+	return dir, nil
+}
+
+// restoreRegistryCache moves a staged cache entry back after a failed save. It
+// is a no-op when nothing was staged.
+func (m *Manager) restoreRegistryCache(staged stagedRegistryCache) error {
+	if staged.staging == "" {
+		return nil
+	}
+	if err := ensureLexicallyWithin(m.cacheDir, staged.staging); err != nil {
+		return err
+	}
+	if err := ensureLexicallyWithin(m.cacheDir, staged.original); err != nil {
+		return err
+	}
+	return os.Rename(staged.staging, staged.original)
+}
+
+// discardRegistryCache deletes a staged cache entry after the config change is
+// durable. It is a no-op when nothing was staged. A staged symlink is unlinked
+// without following it; a staged directory tree is removed recursively. A
+// failure here is reported as an *EvictionWarning by Remove: the removal has
+// already been saved, and the next sweep retries the cleanup.
+func (m *Manager) discardRegistryCache(staged stagedRegistryCache) error {
+	if staged.staging == "" {
+		return nil
+	}
+	if err := ensureLexicallyWithin(m.cacheDir, staged.staging); err != nil {
+		return err
+	}
+	info, err := os.Lstat(staged.staging)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return os.Remove(staged.staging)
+	}
+	return os.RemoveAll(staged.staging)
+}
+
+// EvictionWarning reports that a registry removal was saved but its staged cache
+// tree could not be deleted. The removal is durable, so callers should treat the
+// command as successful; the next registry mutation sweeps the residue.
+type EvictionWarning struct {
+	// Registry is the name of the registry that was removed.
+	Registry string
+	// Path is the staging path that could not be deleted.
+	Path string
+	// Err is the underlying cleanup error.
+	Err error
+}
+
+// Error describes the durable removal and the retried cleanup.
+func (w *EvictionWarning) Error() string {
+	return fmt.Sprintf(
+		"registry %q was removed, but its cached templates could not be deleted from %s: %v; the next registry mutation will retry the cleanup",
+		w.Registry, w.Path, w.Err,
+	)
+}
+
+// Unwrap returns the underlying cleanup error so errors.Is and errors.As can
+// inspect it.
+func (w *EvictionWarning) Unwrap() error {
+	return w.Err
+}
+
+// parseEvictionRoot parses a keyed staging basename this version writes:
+// ".evict-" followed by evictionKeyHexLen lowercase hex digits, "-", and one or
+// more ASCII digits. Anything else (including the legacy random ".evict-<digits>"
+// roots) is unattributable and is left alone.
+func parseEvictionRoot(base string) (key string, ok bool) {
+	rest, found := strings.CutPrefix(base, evictionStagePrefix)
+	if !found || len(rest) < evictionKeyHexLen+2 {
+		return "", false
+	}
+	key = rest[:evictionKeyHexLen]
+	if rest[evictionKeyHexLen] != '-' {
+		return "", false
+	}
+	if !isLowerHex(key) || !isASCIIDigits(rest[evictionKeyHexLen+1:]) {
+		return "", false
+	}
+	return key, true
+}
+
+// isLowerHex reports whether s is non-empty lowercase hexadecimal.
+func isLowerHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// isASCIIDigits reports whether s is non-empty and all ASCII digits.
+func isASCIIDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// sweepEvictedCaches reclaims attributed staging residue left by an interrupted
+// or failed removal. It runs at the start of every config mutation, under m.mu,
+// so the configured set it reads matches the set the mutation is about to
+// change.
+//
+// A staged root is restored only when its key still maps to a configured,
+// validly named registry and that registry's live path is absent. Every other
+// parseable root is deleted. The sweep is best effort: any error (an unreadable
+// cache, a race with another process, a permission failure) leaves the entry for
+// a later sweep and never aborts the mutation. Legacy random roots, configured
+// registries whose names begin with the staging prefix, and roots younger than
+// the grace period are never touched.
+func (m *Manager) sweepEvictedCaches(now time.Time) {
+	if m.cacheDir == "" {
+		return
+	}
+	entries, err := os.ReadDir(m.cacheDir)
+	if err != nil {
+		// A missing or unreadable cache has nothing to reclaim.
+		return
+	}
+
+	// Skip any entry whose name is a configured registry: a live registry may
+	// legitimately be named ".evict-..." and must never be swept.
+	configuredNames := make(map[string]struct{}, len(m.config.Registries))
+	// Attribute each key to the first configured registry with a valid name,
+	// matching the resolver's precedence. Invalid or duplicate hand-edited
+	// entries cannot produce a restore.
+	byKey := make(map[string]Registry, len(m.config.Registries))
+	for _, reg := range m.config.Registries {
+		configuredNames[reg.Name] = struct{}{}
+		if ValidateName(reg.Name) != nil {
+			continue
+		}
+		key := evictionKey(reg)
+		if _, exists := byKey[key]; !exists {
+			byKey[key] = reg
+		}
+	}
+
+	for _, entry := range entries {
+		m.sweepEvictionRoot(now, entry, configuredNames, byKey)
+	}
+}
+
+// sweepEvictionRoot applies the restore-or-discard decision to one cache entry.
+// DirEntry.Info reports the entry itself (never a symlink target), so the grace
+// check cannot be redirected outside the cache.
+func (m *Manager) sweepEvictionRoot(now time.Time, entry os.DirEntry, configuredNames map[string]struct{}, byKey map[string]Registry) {
+	base := entry.Name()
+	if !strings.HasPrefix(base, evictionStagePrefix) {
+		return
+	}
+	if _, configured := configuredNames[base]; configured {
+		return
+	}
+	key, ok := parseEvictionRoot(base)
+	if !ok {
+		return
+	}
+	info, err := entry.Info()
+	if err != nil || now.Sub(info.ModTime()) < evictionSweepGrace {
+		return
+	}
+	root := filepath.Join(m.cacheDir, base)
+	if err := ensureLexicallyWithin(m.cacheDir, root); err != nil {
+		return
+	}
+	reg, ok := byKey[key]
+	if !ok {
+		// The registry is gone, renamed, or re-added from a different source:
+		// the staged tree can never be served safely, so discard it.
+		_ = os.RemoveAll(root)
+		return
+	}
+	m.restoreOrDiscardEvictionRoot(root, filepath.Join(m.cacheDir, reg.Name))
+}
+
+// restoreOrDiscardEvictionRoot restores root to live when the live path is
+// absent, and discards root when live exists (live wins; it is never
+// overwritten). It uses Lstat only and never follows a symlink.
+func (m *Manager) restoreOrDiscardEvictionRoot(root, live string) {
+	if _, err := os.Lstat(live); err == nil {
+		_ = os.RemoveAll(root)
+		return
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		// Cannot decide safely; keep the tree for a later sweep.
+		return
+	}
+	if err := ensureLexicallyWithin(m.cacheDir, live); err != nil {
+		return
+	}
+	_ = os.Rename(root, live)
 }
 
 // List returns a copy of all registries in the order they were added. That

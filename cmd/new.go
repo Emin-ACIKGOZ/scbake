@@ -191,6 +191,7 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 	// resolves it to an absolute root only for consistency checks.
 	targetPath := newTargetPath(projectName)
 	reporter.Step("🚀", "Applying templates...")
+	cacheDir, registryNames := registryPolicy()
 	rc := core.RunContext{
 		LangFlag:            newLangFlag,
 		WithFlag:            newWithFlag,
@@ -199,7 +200,8 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 		Force:               force,
 		ConflictStrategy:    newConflictStrategyFlag,
 		TemplateDir:         resolvedTemplateDir,
-		RegistryCacheDir:    GetRegistryCacheDir(),
+		RegistryCacheDir:    cacheDir,
+		RegistryNames:       registryNames,
 		ManifestPathArg:     ".",
 		License:             newLicenseFlag,
 		CopyrightHolder:     newCopyrightHolderFlag,

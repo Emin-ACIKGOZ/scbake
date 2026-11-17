@@ -77,7 +77,7 @@ graph LR
   Override any embedded `.tpl` file with your own version by passing `--template-dir` or setting the `SCBAKE_TEMPLATE_DIR` environment variable. Files in the override directory shadow the compiled-in defaults, enabling team-specific customizations without recompiling. The override directory is resolved and must exist before `new`, `apply`, `update`, or `drift --repair` starts, so a stale `SCBAKE_TEMPLATE_DIR` now fails those commands instead of silently falling back to the built-in templates.
 
 - **Private Template Registries**  
-  Define named remote registries to host and distribute team templates. Use `scbake template registry add` to register a source, then `scbake template pull` to cache templates locally. The resolution chain checks **local overrides → registry cache → embedded defaults**, so you can layer customizations at every level. Registries can override files of built-in templates and language packs, but they cannot add new template or language names.
+  Define named remote registries to host and distribute team templates. Use `scbake template registry add` to register a source, then `scbake template pull` to cache templates locally. The resolution chain checks **local overrides → configured registry cache → embedded defaults**, so you can layer customizations at every level. Only registries listed in `registries.json` participate: a cached template whose registry is not configured is never read, and removing a registry deletes its cached templates (a failed delete leaves inert `.evict-*` residue that is retried later). Registries can override files of built-in templates and language packs, but they cannot add new template or language names.
 
 - **Template Schema & Input Validation**  
   Every template can declare its expected inputs in a `schema.json` embedded alongside its templates. Before a single task executes, scbake validates the manifest metadata and `--set` flags against all selected templates' schemas, catching missing required variables early.
@@ -463,7 +463,7 @@ scbake template registry list
 | Command | Description |
 | :------ | :---------- |
 | `add <name> <url>` | Register a new template registry with optional auth token, default version, and archive subdirectory |
-| `remove <name>` | Remove a registered registry |
+| `remove <name>` | Remove a registered registry; delete its cached templates best-effort (leftover residue is retried) |
 | `list` | List all configured registries |
 
 #### `template pull`: Cache Templates Locally
@@ -477,6 +477,35 @@ scbake template pull <name> [--registry <name>]
 Only built-in tooling template and language-pack names can be pulled (see `scbake list templates` and `scbake list langs`). A registry overrides files belonging to those names; it cannot add new template or language names. Pulls only take effect for handlers that read template files: the `git`, `svelte`, and `spring` handlers currently scaffold without overridable templates.
 
 If `--registry` is omitted, all configured registries are tried in order.
+
+Only configured registries participate in resolution: a cache entry whose
+registry is absent from `registries.json` is never read. `template registry
+remove` deletes that registry's cached templates along with the config entry, so
+removal means removal. The config change is saved before the cached tree is
+deleted; if that deletion fails, the command warns and still exits successfully,
+and the next `registry add` or `registry remove` (or the internal `SetToken`
+API) reclaims the leftover tree once it is older than 60 seconds, provided the
+staged residue is deletable; if the cleanup failed because the residue's
+directories are read-only, fix their permissions (for example `chmod 755` them)
+so a later sweep can reclaim it.
+An interrupted removal is recovered the same way: the staged tree is restored
+when the registry is still configured from the same source, and discarded
+otherwise. Residue left by older versions under `.evict-<digits>` names cannot be
+attributed and is never removed automatically; delete it by hand while no
+registry command is running. Because resolution is config-derived, deleting
+`registries.json` or removing (or renaming) a registry entry disables that cache
+instead of letting stale content shadow an embedded template; a malformed or
+unreadable config disables the registry tier. Changing only a registry's URL,
+version, or token does not evict or invalidate existing cached content: it keeps
+resolving until `template pull` refreshes it or `registry remove` deletes it.
+Re-run `template registry add` and `template pull` to restore an override.
+
+`--dry-run` names the tier that supplies each template-rendered file: `[template-dir]`,
+`[registry: <name>]`, or `[built-in]`. For example:
+
+```
+[DRY RUN] Create standardized .editorconfig [registry: team]
+```
 
 Archives with a single top-level directory named exactly like the template and
 at least one file directly inside it (for example `makefile/makefile.tpl` for
@@ -548,7 +577,7 @@ for the pinned version and maintainer refresh instructions.
 
 ### Available Task Types
 
-- **CreateTemplateTask**: Creates new files from templates using a 3-tier resolution chain: **local overrides** (`--template-dir`) → **registry cache** (pulled templates) → **embedded defaults** (compiled-in)
+- **CreateTemplateTask**: Creates new files from templates using a 3-tier resolution chain: **local overrides** (`--template-dir`) → **registry cache** (configured registries only) → **embedded defaults** (compiled-in)
 - **AppendFileTask**: Appends content to existing files with idempotency checks
 - **ExecCommandTask**: Executes shell commands with optional output tracking
 - **CreateDirTask**: Creates directories with transaction tracking

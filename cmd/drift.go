@@ -249,6 +249,7 @@ func repairDrift(ctx context.Context, absPath, manifestPathArg string) error {
 		return err
 	}
 
+	cacheDir, registryNames := registryPolicy()
 	rc := core.RunContext{
 		TargetPath:          absPath,
 		ManifestPathArg:     manifestPathArg,
@@ -256,7 +257,8 @@ func repairDrift(ctx context.Context, absPath, manifestPathArg string) error {
 		Force:               force,
 		ConflictStrategy:    driftStrategyFlag,
 		TemplateDir:         resolvedTemplateDir,
-		RegistryCacheDir:    GetRegistryCacheDir(),
+		RegistryCacheDir:    cacheDir,
+		RegistryNames:       registryNames,
 		Ctx:                 ctx,
 		AllowAncestorSearch: allowAncestorSearch,
 	}

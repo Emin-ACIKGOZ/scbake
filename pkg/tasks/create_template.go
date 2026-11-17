@@ -104,6 +104,18 @@ func (t *CreateTemplateTask) Description() string {
 	return t.Desc
 }
 
+// DescriptionWithSource implements types.SourceDescriber. It appends the tier
+// that would supply this template so dry-run output discloses whether the file
+// comes from --template-dir, a configured registry, or the embedded defaults.
+// It uses the same resolver as Execute and is only called for dry-run display.
+func (t *CreateTemplateTask) DescriptionWithSource(tc types.TaskContext) string {
+	src := ResolveTemplateSource(t.TemplateFS, t.TemplatePath, tc.TemplateDir, tc.RegistryCacheDir, t.TemplateName, tc.RegistryNames)
+	if src.Tier == "" {
+		return t.Desc
+	}
+	return t.Desc + " [" + src.Label() + "]"
+}
+
 // Priority implements types.Task.
 func (t *CreateTemplateTask) Priority() int {
 	return t.TaskPrio
@@ -938,7 +950,7 @@ func recordedHash(m *types.Manifest, ledgerKey, legacyKey, existingHash string) 
 // Execute performs the template creation task.
 func (t *CreateTemplateTask) Execute(tc types.TaskContext) error {
 	// 1. Read and parse the template using the override-aware helper
-	tplContent, err := ReadTemplate(t.TemplateFS, t.TemplatePath, tc.TemplateDir, tc.RegistryCacheDir, t.TemplateName)
+	tplContent, err := ReadTemplate(t.TemplateFS, t.TemplatePath, tc.TemplateDir, tc.RegistryCacheDir, t.TemplateName, tc.RegistryNames)
 	if err != nil {
 		return fmt.Errorf("failed to read template %s: %w", t.TemplatePath, err)
 	}

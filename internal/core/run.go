@@ -50,9 +50,13 @@ type RunContext struct {
 	ConflictStrategy string
 	TemplateDir      string
 	RegistryCacheDir string
-	License          string
-	CopyrightHolder  string
-	SetVars          map[string]string
+	// RegistryNames is the set of configured registry names. Registry cache
+	// resolution is limited to these names; an empty set disables the registry
+	// tier (fail closed).
+	RegistryNames   []string
+	License         string
+	CopyrightHolder string
+	SetVars         map[string]string
 
 	// Ctx is the caller's cancellation context. It is typically the CLI signal
 	// context; nil means context.Background(). buildTaskContext derives the
@@ -380,6 +384,7 @@ func buildTaskContext(
 		ConflictStrategy: rc.ConflictStrategy,
 		TemplateDir:      rc.TemplateDir,
 		RegistryCacheDir: rc.RegistryCacheDir,
+		RegistryNames:    rc.RegistryNames,
 		Tx:               tx,
 	}
 
@@ -847,6 +852,40 @@ func projectNameSource(rc RunContext) string {
 	return rc.ManifestPathArg
 }
 
+// templateTaskProvider is the part of the tooling handler interface that core
+// needs to build a plan. Language handlers share this shape but additionally
+// take explicit schema variables (see langTaskProvider).
+type templateTaskProvider interface {
+	GetTasks(targetPath, templateDir, registryCacheDir string) ([]types.Task, error)
+}
+
+// langTaskProvider is the part of the language handler interface that core
+// needs to build a plan.
+type langTaskProvider interface {
+	GetTasks(targetPath, templateDir, registryCacheDir string, vars map[string]string) ([]types.Task, error)
+}
+
+// getTemplateTasks asks a tooling handler for its tasks, preferring the optional
+// RegistryAwareHandler interface so handlers that resolve registry-cached
+// templates at plan time receive the configured registry allowlist. Handlers
+// that only build CreateTemplateTask resolve later, at execution time.
+func getTemplateTasks(h templateTaskProvider, rc RunContext) ([]types.Task, error) {
+	if ra, ok := h.(types.RegistryAwareHandler); ok {
+		return ra.GetTasksWithRegistries(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir, rc.RegistryNames)
+	}
+	return h.GetTasks(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir)
+}
+
+// getLangTasks asks a language handler for its tasks, preferring the optional
+// RegistryAwareHandler interface so handlers that resolve registry-cached
+// templates at plan time receive the configured registry allowlist.
+func getLangTasks(h langTaskProvider, rc RunContext) ([]types.Task, error) {
+	if ra, ok := h.(types.RegistryAwareHandler); ok {
+		return ra.GetTasksWithRegistries(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir, rc.RegistryNames)
+	}
+	return h.GetTasks(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir, rc.SetVars)
+}
+
 // handleLangFlag processes the --lang flag, adding language tasks and project info.
 func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *manifestChanges) (string, error) {
 	// `update` only writes managed files, so language toolchains (go, npm,
@@ -867,7 +906,8 @@ func handleLangFlag(rc RunContext, rootPath string, plan *types.Plan, changes *m
 
 	// vars is deliberately rc.SetVars (explicit --set only). Schema defaults are
 	// applied later in buildTaskContext and must never drive command construction.
-	langTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir, rc.SetVars)
+	// getLangTasks forwards them alongside the configured registry allowlist.
+	langTasks, err := getLangTasks(handler, rc)
 	if err != nil {
 		return "", fmt.Errorf("failed to get tasks for lang '%s': %w", rc.LangFlag, err)
 	}
@@ -918,7 +958,7 @@ func handleWithFlag(rc RunContext, plan *types.Plan, changes *manifestChanges) e
 			return err
 		}
 
-		tmplTasks, err := handler.GetTasks(rc.TargetPath, rc.TemplateDir, rc.RegistryCacheDir)
+		tmplTasks, err := getTemplateTasks(handler, rc)
 		if err != nil {
 			return fmt.Errorf("failed to get tasks for template '%s': %w", tmplName, err)
 		}

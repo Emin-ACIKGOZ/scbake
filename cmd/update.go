@@ -47,6 +47,7 @@ apply --with compliance to change license terms.`,
 			return err
 		}
 
+		cacheDir, registryNames := registryPolicy()
 		rc := core.RunContext{
 			TargetPath:          absPath,
 			ManifestPathArg:     manifestPathArg,
@@ -54,7 +55,8 @@ apply --with compliance to change license terms.`,
 			Force:               force,
 			ConflictStrategy:    updateConflictStrategyFlag,
 			TemplateDir:         resolvedTemplateDir,
-			RegistryCacheDir:    GetRegistryCacheDir(),
+			RegistryCacheDir:    cacheDir,
+			RegistryNames:       registryNames,
 			Ctx:                 cmd.Context(),
 			AllowAncestorSearch: allowAncestorSearch,
 		}

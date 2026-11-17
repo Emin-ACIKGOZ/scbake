@@ -55,7 +55,13 @@ The three path parameters support the **template resolution chain**:
 2. `templateDir` — local override directory (`--template-dir` or `$SCBAKE_TEMPLATE_DIR`)
 3. `registryCacheDir` — pulled template cache (`~/.cache/scbake/templates/`)
 
-Tasks created at plan time use `registryCacheDir` later at execution time via `TaskContext` to resolve template files through the chain: **local overrides → registry cache → embedded defaults**.
+Tasks created at plan time use `registryCacheDir` and the configured registry allowlist later at execution time via `TaskContext` to resolve template files through the chain: **local overrides → configured registry cache → embedded defaults**.
+
+Handlers that resolve templates while building the plan (before execution time)
+may implement the optional `types.RegistryAwareHandler`
+(`GetTasksWithRegistries(..., registries []string)`); core prefers it and passes
+the configured allowlist. The base `Handler` interfaces are unchanged, and
+handlers that only create `CreateTemplateTask` need not implement it.
 
 **Responsibility**: Given a project path, return a list of tasks to execute.
 
@@ -355,7 +361,7 @@ or `[metadata]` table.
 Template files are resolved at execution time through a 3-tier fallback chain:
 
 ```
-ReadTemplate(efs, tplPath, overrideDir, registryCacheDir)
+ReadTemplate(efs, tplPath, overrideDir, registryCacheDir, templateName, registries)
     │
     ├── 1. overrideDir (--template-dir or $SCBAKE_TEMPLATE_DIR)
     │      First check: local filesystem overrides
@@ -365,7 +371,10 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir)
     │
     ├── 2. registryCacheDir (~/.cache/scbake/templates/)
     │      Second check: pulled template archives
-    │      Searches all registry subdirectories
+    │      Searches only registries listed in registries.json, in the
+    │      order they are configured; a cache order file is ignored, and
+    │      an unconfigured cache directory is never read (nil/empty
+    │      configured set disables this tier)
     │      Found → return immediately
     │      Not found → fall through
     │
@@ -381,6 +390,43 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir)
 3. Archives are extracted to `<cacheDir>/<registry>/<templateName>/<files...>`
 4. On subsequent pulls, the cache is reused only when its manifest hash, version, and source URL match; a version or URL change (or a manifest without provenance) forces a re-download
 5. Token auth supported via stored config or `SCBAKE_REGISTRY_TOKEN_<NAME>` env var
+
+**Lifecycle and membership:**
+- A cached tree is eligible only while its registry is configured. Deleting
+  `registries.json` or removing (or renaming) a registry entry makes that cache
+  inert rather than letting stale content shadow an embedded template; a
+  malformed or unreadable config disables the registry tier. Changing only the
+  URL, version, or token does not evict or invalidate existing cached content:
+  it keeps resolving until `template pull` refreshes it or `remove` deletes it.
+- `scbake template registry remove <name>` renames `<cacheDir>/<registry>` to a
+  sibling `.evict-<key>-<random>` staging path inside the cache root, saves the
+  config change, then deletes the staging path. The key is an implementation
+  detail derived from the registry name, URL, version, and subdirectory (the
+  token is excluded so a token rotation does not invalidate recovery); it makes
+  the staged tree attributable to exactly one configured registry.
+  - If staging fails, nothing is changed. If saving fails, the in-memory config
+    and the staged cache path are restored and the save error is returned. If
+    that restore also fails, a combined error is returned and the attributable
+    residue is repaired by the next sweep.
+  - Once the save succeeds the removal is durable: if only the final cleanup
+    fails, `remove` prints a warning to stderr, still reports success, and exits
+    zero. The next sweep retries the cleanup.
+  - Every `add` and `remove` (and the internal `Manager.SetToken` API) starts by
+    sweeping the cache root,
+    before it mutates anything. A staged root is restored only when its key still
+    matches a configured, validly named registry and that registry's live path is
+    absent; every other keyed root is deleted. Roots younger than 60 seconds,
+    live registries whose names begin with `.evict-`, and unparseable legacy
+    `.evict-<digits>` roots are never touched.
+  - The rename stays on one filesystem (one volume on Windows). Other registries
+    and the cache root are untouched. A symlink at the registry path is renamed
+    as a link and never followed, and the sweep uses `Lstat` plus lexical
+    containment only.
+- `--dry-run` appends the resolved tier to each template-rendered
+  (`CreateTemplateTask`) file: `[template-dir]`, `[registry: <name>]`, or
+  `[built-in]`. Normal runs and their output are unchanged. The label is resolved
+  at dry-run time with the same resolver, and the `maven_linter` snippet injected
+  into `pom.xml` is not disclosed.
 
 ### 4. Optimistic Locking (Fallback)
 
