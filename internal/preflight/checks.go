@@ -20,11 +20,13 @@ const (
 	gitProbeTimeout   = 10 * time.Second
 	gitAuthorIdent    = "GIT_AUTHOR_IDENT"
 	gitCommitterIdent = "GIT_COMMITTER_IDENT"
+	// gitIdentityProbeCount is the number of identities `git commit` needs.
+	gitIdentityProbeCount = 2
 )
 
 const (
 	gitSkipExistingRepo   = "target already contains a .git entry"
-	gitSkipInsideWorkTree = "target is already inside a Git work tree"
+	gitSkipInsideWorkTree = "target is already inside a Git work tree or under a .git marker"
 )
 
 // CheckBinaries ensures all required binaries are in the user's $PATH.
@@ -39,12 +41,13 @@ func CheckBinaries(binaries ...string) error {
 
 // GitSkipReason reports why the git template must not run in targetPath, or ""
 // when it may run. A target with a .git entry is skipped without invoking Git
-// (SCB-037): its repository config is untrusted. A target inside a work tree is
-// skipped because initializing a repository there would create a nested
-// repository and bound later root discovery to that subdirectory.
+// (SCB-037): its repository config is untrusted. A target inside a work tree, or
+// below a `.git` marker that root discovery would honor, is skipped because
+// initializing a repository there would create a nested repository and bound
+// later root discovery to that subdirectory.
 //
 // An empty targetPath means the caller has no path to inspect; it is not
-// treated as "." so direct handler callers keep their existing behaviour.
+// treated as "." so direct handler callers keep their existing behavior.
 func GitSkipReason(targetPath string) string {
 	if targetPath == "" {
 		return ""
@@ -59,10 +62,17 @@ func GitSkipReason(targetPath string) string {
 }
 
 // InsideWorkTree reports whether dir (or its nearest existing ancestor) is
-// inside a Git work tree. A non-existing target is probed through its nearest
-// existing ancestor so a dry-run `new` previews the same decision as the real
-// run. Git plumbing (`rev-parse`) is read-only and does not run hooks, filters,
-// or fsmonitor programs.
+// inside a Git work tree or below a filesystem `.git` marker. A non-existing
+// target is probed through its nearest existing ancestor so a dry-run `new`
+// previews the same decision as the real run. Git plumbing (`rev-parse`) is
+// read-only and does not run hooks, filters, or fsmonitor programs.
+//
+// A Git error is not evidence that the target is outside a repository. Git
+// refuses to inspect repositories hidden by GIT_CEILING_DIRECTORIES, an empty
+// or corrupt `.git`, or a repository owned by another user (dubious ownership),
+// even though scbake's root discovery still treats that `.git` as a hard
+// boundary. Falling back to the same marker walk keeps the skip decision aligned
+// with discovery, so those cases cannot create a nested repository.
 func InsideWorkTree(dir string) bool {
 	probe := nearestExistingDir(dir)
 	if probe == "" {
@@ -76,10 +86,29 @@ func InsideWorkTree(dir string) bool {
 	cmd := exec.CommandContext(ctx, gitCommand, "-C", probe, "rev-parse", "--is-inside-work-tree")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
-		return false
+	if err := cmd.Run(); err == nil && strings.TrimSpace(stdout.String()) == "true" {
+		return true
 	}
-	return strings.TrimSpace(stdout.String()) == "true"
+
+	return hasGitMarkerAncestor(probe)
+}
+
+// hasGitMarkerAncestor reports whether dir or one of its ancestors contains a
+// `.git` entry. The os.Stat test and the walk to the filesystem root intentionally
+// mirror manifest.walkToMarker, which bounds root discovery. It is reimplemented
+// here (rather than imported) to keep preflight independent of discovery.
+func hasGitMarkerAncestor(dir string) bool {
+	current := dir
+	for {
+		if _, err := os.Stat(filepath.Join(current, fileutil.GitDir)); err == nil {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+		current = parent
+	}
 }
 
 // CheckGitIdentity verifies that Git can resolve both the author and the
@@ -98,7 +127,7 @@ func CheckGitIdentity(dir string) error {
 		probe = "."
 	}
 
-	failures := make([]string, 0, 2)
+	failures := make([]string, 0, gitIdentityProbeCount)
 	for _, ident := range []string{gitAuthorIdent, gitCommitterIdent} {
 		if detail := gitIdentityFailure(probe, ident); detail != "" {
 			failures = append(failures, ident+": "+detail)

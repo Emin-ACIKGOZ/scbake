@@ -984,10 +984,8 @@ func preflightGit(rc RunContext) error {
 	if rc.Update || !containsTemplate(rc.WithFlag, gitTemplateName) {
 		return nil
 	}
-	if preflight.GitSkipReason(rc.TargetPath) != "" {
-		return nil
-	}
-	return preflight.CheckGitIdentity(rc.TargetPath)
+	// One shared skip/identity decision with `new` validation and the handler.
+	return CheckGitPrerequisites(rc.TargetPath)
 }
 
 // containsTemplate reports whether name appears in the template selection.

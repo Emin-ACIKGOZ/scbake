@@ -117,7 +117,7 @@ func issue151FixtureRepo(t *testing.T, workDir string) string {
 		t.Skip("git not installed")
 	}
 	repo := filepath.Join(workDir, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
+	if err := os.MkdirAll(repo, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	runGit151(t, repo, "init", "-q")
@@ -194,16 +194,16 @@ func TestIssue151NewDryRunFailsMissingIdentity(t *testing.T) {
 // environment has no identity; the only identity is repo-local config, which a
 // fresh nested repository does not inherit. A naive identity-only fix would
 // probe `git var` in svc (seeing the parent config), pass, then create
-// svc/.git and fail to commit. The fixed behaviour is to skip the template,
+// svc/.git and fail to commit. The fixed behavior is to skip the template,
 // commit nothing, and keep the root manifest as the discovery root.
-func TestIssue151ApplySkipsNestedRepo(t *testing.T) {
+func TestIssue151ApplySkipsNestedRepo(t *testing.T) { //nolint:cyclop // destructive regression with follow-up assertions
 	if runtime.GOOS == "windows" {
-		t.Skip("fixture uses POSIX-relative Git behaviour")
+		t.Skip("fixture uses POSIX-relative Git behavior")
 	}
 	work := t.TempDir()
 	repo := issue151FixtureRepo(t, work)
 	svc := filepath.Join(repo, "svc")
-	if err := os.MkdirAll(svc, 0o755); err != nil {
+	if err := os.MkdirAll(svc, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(svc, "app.txt"), []byte("pre-existing\n"), 0o600); err != nil {
@@ -257,6 +257,176 @@ func TestIssue151ApplySkipsNestedRepo(t *testing.T) {
 	}
 }
 
+// setIssue151Env replaces key in env so a test can force a Git discovery
+// boundary without inheriting a duplicate value.
+func setIssue151Env(env []string, key, value string) []string {
+	prefix := key + "="
+	result := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			result = append(result, entry)
+		}
+	}
+	return append(result, prefix+value)
+}
+
+func issue151Path(env []string) string {
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "PATH="); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+// assertIssue151Skipped runs `apply --with git svc` and requires the template
+// to be skipped without creating svc/.git.
+func assertIssue151Skipped(t *testing.T, root, svc string, env []string) {
+	t.Helper()
+
+	output, err := runIssue151(t, root, env, "apply", "--with", "git", "svc")
+	if err != nil {
+		t.Fatalf("apply failed: %v\n%s", err, output)
+	}
+	if _, statErr := os.Lstat(filepath.Join(svc, ".git")); !os.IsNotExist(statErr) {
+		t.Errorf("apply created a nested svc/.git (stat error: %v):\n%s", statErr, output)
+	}
+	if !strings.Contains(output, "Skipping template 'git'") {
+		t.Errorf("apply did not print the skip notice:\n%s", output)
+	}
+}
+
+// TestIssue151ApplySkipsWhenGitCannotSeeBoundary covers repositories that
+// scbake discovery treats as boundaries but Git refuses or is told not to
+// inspect: GIT_CEILING_DIRECTORIES, an empty or corrupt ancestor `.git`, and a
+// dubious-ownership error. Treating those errors as "not inside" would create
+// svc/.git and commit pre-existing files into it.
+func TestIssue151ApplySkipsWhenGitCannotSeeBoundary(t *testing.T) { //nolint:cyclop // one branch per Git discovery failure
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses POSIX shell and relative Git behavior")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+
+	t.Run("GIT_CEILING_DIRECTORIES", func(t *testing.T) {
+		work := t.TempDir()
+		repo := issue151FixtureRepo(t, work)
+		svc := filepath.Join(repo, "svc")
+		if err := os.MkdirAll(svc, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "scbake.toml"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env := issue151Env(t, work, true)
+		env = setIssue151Env(env, "GIT_CEILING_DIRECTORIES", repo)
+		assertIssue151Skipped(t, repo, svc, env)
+	})
+
+	t.Run("empty ancestor .git", func(t *testing.T) {
+		work := t.TempDir()
+		boundary := filepath.Join(work, "broken")
+		svc := filepath.Join(boundary, "svc")
+		if err := os.MkdirAll(filepath.Join(boundary, ".git"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(svc, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(boundary, "scbake.toml"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		assertIssue151Skipped(t, boundary, svc, issue151Env(t, work, true))
+	})
+
+	t.Run("corrupt ancestor .git file", func(t *testing.T) {
+		work := t.TempDir()
+		boundary := filepath.Join(work, "broken")
+		svc := filepath.Join(boundary, "svc")
+		if err := os.MkdirAll(boundary, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(boundary, ".git"), []byte("not a gitdir\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(svc, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(boundary, "scbake.toml"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		assertIssue151Skipped(t, boundary, svc, issue151Env(t, work, true))
+	})
+
+	t.Run("dubious ownership error", func(t *testing.T) {
+		work := t.TempDir()
+		repo := issue151FixtureRepo(t, work)
+		svc := filepath.Join(repo, "svc")
+		if err := os.MkdirAll(svc, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "scbake.toml"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		realGit, err := exec.LookPath("git")
+		if err != nil {
+			t.Fatal(err)
+		}
+		binDir := t.TempDir()
+		script := "#!/bin/sh\n" +
+			"for arg in \"$@\"; do\n" +
+			"  if [ \"$arg\" = rev-parse ]; then\n" +
+			"    echo \"fatal: detected dubious ownership in repository\" >&2\n" +
+			"    exit 128\n" +
+			"  fi\n" +
+			"done\n" +
+			"exec '" + realGit + "' \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(script), 0o700); err != nil { //nolint:gosec // wrapper must be executable
+			t.Fatal(err)
+		}
+
+		env := issue151Env(t, work, true)
+		env = setIssue151Env(env, "PATH", binDir+string(os.PathListSeparator)+issue151Path(env))
+		assertIssue151Skipped(t, repo, svc, env)
+	})
+}
+
+// TestIssue151NewUsesAncestorMarkerWhenGitFails pins that `new` validation and
+// the post-chdir apply use the same skip decision. Validation sees the cwd
+// `.git` directly; the child probe can only see it through the ancestor walk
+// because Git refuses to inspect the empty ancestor repository.
+func TestIssue151NewUsesAncestorMarkerWhenGitFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses POSIX shell and relative Git behavior")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+
+	work := t.TempDir()
+	boundary := filepath.Join(work, "broken")
+	if err := os.MkdirAll(filepath.Join(boundary, ".git"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	env := issue151Env(t, work, true)
+	output, err := runIssue151(t, boundary, env, "new", "nested", "--with", "git")
+	if err != nil {
+		t.Fatalf("new inside a broken ancestor repository failed: %v\n%s", err, output)
+	}
+	if _, statErr := os.Lstat(filepath.Join(boundary, "nested", ".git")); !os.IsNotExist(statErr) {
+		t.Errorf("new created a nested .git below the broken ancestor (stat error: %v):\n%s", statErr, output)
+	}
+	if !strings.Contains(output, "Skipping template 'git'") {
+		t.Errorf("new did not print the skip notice:\n%s", output)
+	}
+	if _, statErr := os.Stat(filepath.Join(boundary, "nested", "scbake.toml")); statErr != nil {
+		t.Errorf("new did not create the project without the git template: %v", statErr)
+	}
+}
+
 // TestIssue151NewSkipsNestedRepo covers `new` inside an existing repository
 // with a full identity available. Base exits 0 but creates nested/.git; the fix
 // creates the project without a nested repository and prints the notice.
@@ -287,7 +457,7 @@ func TestIssue151NewSkipsNestedRepo(t *testing.T) {
 func TestIssue151DryRunApplyShowsSkip(t *testing.T) {
 	work := t.TempDir()
 	repo := issue151FixtureRepo(t, work)
-	if err := os.MkdirAll(filepath.Join(repo, "svc"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repo, "svc"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "scbake.toml"), nil, 0o600); err != nil {

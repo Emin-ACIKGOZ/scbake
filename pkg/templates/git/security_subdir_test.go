@@ -22,7 +22,7 @@ func TestGitHandler_InsideWorkTree_NoTasks(t *testing.T) {
 	repo := t.TempDir()
 	runInDir(t, repo, "git", "init")
 	child := filepath.Join(repo, "child")
-	if err := os.MkdirAll(child, 0o755); err != nil {
+	if err := os.MkdirAll(child, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -53,7 +53,7 @@ func TestGitHandler_SubdirOfUntrustedRepo(t *testing.T) {
 	repo := t.TempDir()
 	markers := plantUntrustedRepoVectors(t, repo)
 	child := filepath.Join(repo, "child")
-	if err := os.MkdirAll(child, 0o755); err != nil {
+	if err := os.MkdirAll(child, 0o750); err != nil {
 		t.Fatal(err)
 	}
 

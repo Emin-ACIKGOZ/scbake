@@ -4,6 +4,7 @@
 package preflight
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,7 +71,7 @@ func requireGit(t *testing.T) {
 func execGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	//nolint:gosec // fixed test helper
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -88,7 +89,7 @@ func setIdentity(t *testing.T) {
 // TestCheckGitIdentity covers the identity matrix. `git var` is authoritative;
 // these cases are the ones where checking `git config user.name/user.email`
 // would disagree with `git commit`.
-func TestCheckGitIdentity(t *testing.T) {
+func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy identity matrix
 	requireGit(t)
 
 	t.Run("no identity", func(t *testing.T) {
@@ -214,17 +215,24 @@ func writeFakeGit(t *testing.T, dir, body string, exitCode int) string {
 	t.Helper()
 	path := filepath.Join(dir, "git")
 	script := "#!/bin/sh\n" + body + "\nexit " + strconv.Itoa(exitCode) + "\n"
+	//nolint:gosec // the fake git must be executable for exec to invoke it
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
+// shellQuote single-quotes s for /bin/sh so the fake-git body can create a
+// marker without relying on external commands such as touch.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // TestGitSkipReason covers the predicates that decide whether a repository
 // may be initialized. Cases marked "documented edge" deliberately follow the
-// shipped fail-closed (or fail-open) behaviour; they are pinned so a future
+// shipped fail-closed (or fail-open) behavior; they are pinned so a future
 // change has to make a conscious choice.
-func TestGitSkipReason(t *testing.T) {
+func TestGitSkipReason(t *testing.T) { //nolint:cyclop // one branch per skip predicate
 	requireGit(t)
 
 	t.Run("empty target does not probe cwd", func(t *testing.T) {
@@ -234,7 +242,7 @@ func TestGitSkipReason(t *testing.T) {
 		isolateGitEnv(t)
 		marker := filepath.Join(t.TempDir(), "invoked.marker")
 		binDir := t.TempDir()
-		writeFakeGit(t, binDir, "touch "+marker, 1)
+		writeFakeGit(t, binDir, ": > "+shellQuote(marker), 1)
 		t.Setenv("PATH", binDir)
 
 		if reason := GitSkipReason(""); reason != "" {
@@ -265,7 +273,7 @@ func TestGitSkipReason(t *testing.T) {
 		}
 		marker := filepath.Join(t.TempDir(), "invoked.marker")
 		binDir := t.TempDir()
-		writeFakeGit(t, binDir, "touch "+marker, 1)
+		writeFakeGit(t, binDir, ": > "+shellQuote(marker), 1)
 		t.Setenv("PATH", binDir)
 
 		if reason := GitSkipReason(target); reason != gitSkipExistingRepo {
@@ -306,7 +314,7 @@ func TestGitSkipReason(t *testing.T) {
 		root := t.TempDir()
 		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(root))
 		repo := filepath.Join(root, "repo")
-		if err := os.MkdirAll(filepath.Join(repo, "sub"), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(repo, "sub"), 0o750); err != nil {
 			t.Fatal(err)
 		}
 		execGit(t, repo, "init", "-q")
@@ -320,7 +328,7 @@ func TestGitSkipReason(t *testing.T) {
 		root := t.TempDir()
 		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(root))
 		repo := filepath.Join(root, "repo")
-		if err := os.MkdirAll(repo, 0o755); err != nil {
+		if err := os.MkdirAll(repo, 0o750); err != nil {
 			t.Fatal(err)
 		}
 		execGit(t, repo, "init", "-q")
@@ -330,12 +338,94 @@ func TestGitSkipReason(t *testing.T) {
 		}
 	})
 
+	t.Run("GIT_CEILING_DIRECTORIES hides the work tree from git", func(t *testing.T) {
+		isolateGitEnv(t)
+		root := t.TempDir()
+		repo := filepath.Join(root, "repo")
+		if err := os.MkdirAll(filepath.Join(repo, "sub"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		execGit(t, repo, "init", "-q")
+		// Git stops below repo and cannot see repo/.git, but discovery still
+		// treats repo as the boundary. The marker fallback must skip.
+		t.Setenv("GIT_CEILING_DIRECTORIES", repo)
+		if reason := GitSkipReason(filepath.Join(repo, "sub")); reason != gitSkipInsideWorkTree {
+			t.Errorf("GitSkipReason(ceiling-hidden subdir) = %q, want %q", reason, gitSkipInsideWorkTree)
+		}
+		// A `new` target does not exist yet; the fallback must still find the
+		// boundary by walking from its nearest existing ancestor.
+		missing := filepath.Join(repo, "not", "created", "yet")
+		if reason := GitSkipReason(missing); reason != gitSkipInsideWorkTree {
+			t.Errorf("GitSkipReason(ceiling-hidden missing target) = %q, want %q", reason, gitSkipInsideWorkTree)
+		}
+	})
+
+	t.Run("empty ancestor .git", func(t *testing.T) {
+		isolateGitEnv(t)
+		root := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", root)
+		boundary := filepath.Join(root, "broken")
+		if err := os.MkdirAll(filepath.Join(boundary, ".git"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		sub := filepath.Join(boundary, "sub")
+		if err := os.MkdirAll(sub, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if reason := GitSkipReason(sub); reason != gitSkipInsideWorkTree {
+			t.Errorf("GitSkipReason(empty ancestor .git) = %q, want %q", reason, gitSkipInsideWorkTree)
+		}
+		missing := filepath.Join(boundary, "not", "created", "yet")
+		if reason := GitSkipReason(missing); reason != gitSkipInsideWorkTree {
+			t.Errorf("GitSkipReason(nonexistent target under empty ancestor .git) = %q, want %q", reason, gitSkipInsideWorkTree)
+		}
+	})
+
+	t.Run("corrupt ancestor .git file", func(t *testing.T) {
+		isolateGitEnv(t)
+		root := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", root)
+		boundary := filepath.Join(root, "broken")
+		if err := os.MkdirAll(boundary, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(boundary, ".git"), []byte("not a gitdir\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sub := filepath.Join(boundary, "sub")
+		if err := os.MkdirAll(sub, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if reason := GitSkipReason(sub); reason != gitSkipInsideWorkTree {
+			t.Errorf("GitSkipReason(corrupt ancestor .git) = %q, want %q", reason, gitSkipInsideWorkTree)
+		}
+	})
+
+	t.Run("dubious ownership error falls back to the marker", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("POSIX fake git script")
+		}
+		isolateGitEnv(t)
+		root := t.TempDir()
+		repo := filepath.Join(root, "repo")
+		if err := os.MkdirAll(filepath.Join(repo, "sub"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		execGit(t, repo, "init", "-q")
+		binDir := t.TempDir()
+		writeFakeGit(t, binDir, `echo "fatal: detected dubious ownership in repository" >&2`, 128)
+		t.Setenv("PATH", binDir)
+		if reason := GitSkipReason(filepath.Join(repo, "sub")); reason != gitSkipInsideWorkTree {
+			t.Errorf("GitSkipReason(dubious ownership) = %q, want %q", reason, gitSkipInsideWorkTree)
+		}
+	})
+
 	t.Run("linked worktree", func(t *testing.T) {
 		isolateGitEnv(t)
 		root := t.TempDir()
 		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(root))
 		repo := filepath.Join(root, "repo")
-		if err := os.MkdirAll(repo, 0o755); err != nil {
+		if err := os.MkdirAll(repo, 0o750); err != nil {
 			t.Fatal(err)
 		}
 		execGit(t, repo, "init", "-q")
@@ -355,7 +445,7 @@ func TestGitSkipReason(t *testing.T) {
 			t.Errorf("GitSkipReason(linked worktree root) = %q, want %q", reason, gitSkipExistingRepo)
 		}
 		sub := filepath.Join(wt, "sub")
-		if err := os.MkdirAll(sub, 0o755); err != nil {
+		if err := os.MkdirAll(sub, 0o750); err != nil {
 			t.Fatal(err)
 		}
 		if reason := GitSkipReason(sub); reason != gitSkipInsideWorkTree {
@@ -379,12 +469,12 @@ func TestGitSkipReason(t *testing.T) {
 		root := t.TempDir()
 		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(root))
 		repo := filepath.Join(root, "repo")
-		if err := os.MkdirAll(repo, 0o755); err != nil {
+		if err := os.MkdirAll(repo, 0o750); err != nil {
 			t.Fatal(err)
 		}
 		execGit(t, repo, "init", "-q")
 		plain := filepath.Join(root, "plain")
-		if err := os.MkdirAll(plain, 0o755); err != nil {
+		if err := os.MkdirAll(plain, 0o750); err != nil {
 			t.Fatal(err)
 		}
 		t.Setenv("GIT_DIR", filepath.Join(repo, ".git"))

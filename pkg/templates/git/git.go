@@ -72,7 +72,8 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task,
 	// symlink to anywhere, regular file, or directory) is treated as a
 	// pre-existing repository and no Git tasks are scheduled (fail closed).
 	// Only after that short-circuit may the helper run read-only
-	// `git rev-parse` to discover an ancestor work tree.
+	// `git rev-parse` (with a filesystem `.git` marker fallback) to discover an
+	// ancestor work tree.
 	if preflight.GitSkipReason(targetPath) != "" {
 		return nil, nil
 	}

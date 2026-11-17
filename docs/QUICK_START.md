@@ -101,8 +101,11 @@ git log  # Already has initial commit!
 Run this outside an existing Git work tree. The `git` template needs a
 configured author and committer identity; if either is missing, `new` fails
 before creating the project directory (a `--dry-run` fails the same way). When
-the target already contains `.git` or is inside a work tree, the template is
-skipped with a notice and no nested repository is created.
+the target already contains `.git`, has a `.git` marker in its nearest existing
+ancestors, or is inside a work tree, the template is skipped with a notice, so
+no nested repository is created there. The ancestor check still applies when Git
+cannot inspect the repository (`GIT_CEILING_DIRECTORIES`, an empty or corrupt
+`.git`, or dubious ownership); bare repositories are not detected.
 
 ## Available Languages
 
@@ -118,7 +121,7 @@ skipped with a notice and no nested repository is created.
 
 | Template | What it does |
 |----------|--|
-| **git** | Initialize repo, first commit (skipped inside an existing work tree; requires Git identity) |
+| **git** | Initialize repo, first commit (skipped inside an existing work tree, below a `.git` marker, or when `.git` exists; requires Git identity) |
 | **editorconfig** | Standard editor formatting |
 | **ci_github** | GitHub Actions workflows |
 | **makefile** | Universal build scripts |

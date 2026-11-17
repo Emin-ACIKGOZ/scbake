@@ -160,7 +160,7 @@ mv scbake /usr/local/bin/
 
 Creates a new directory, bootstraps the `scbake.toml` manifest, and applies language packs and templates. 
 
-**Note:** Git initialization can be added via the `--with git` template. Git must be installed and able to resolve both the author and committer identity (`user.name`/`user.email`, `GIT_AUTHOR_*`, or `GIT_COMMITTER_*`); a missing identity fails before anything is written, including in a dry run. The template is skipped with a notice when the target already contains `.git` or is inside an existing Git work tree, so `scbake` never creates a nested repository.
+**Note:** Git initialization can be added via the `--with git` template. Git must be installed and able to resolve both the author and committer identity (`user.name`/`user.email`, `GIT_AUTHOR_*`, or `GIT_COMMITTER_*`); a missing identity fails before anything is written, including in a dry run. The template is skipped with a notice when the target already contains `.git` (even a broken or dangling entry), when a `.git` entry exists in the target's nearest existing ancestor chain (the filesystem boundary root discovery uses), or when Git reports it inside a work tree. The ancestor check still applies when Git refuses to inspect the repository, for example with `GIT_CEILING_DIRECTORIES`, an empty or corrupt `.git`, or dubious ownership, and `GIT_DIR`/`GIT_WORK_TREE` can make an unrelated target look like a work tree. A bare repository has no `.git` entry and is not detected. At detectable boundaries, `scbake` does not create a nested repository.
 
 ```bash
 scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spdx>] [--copyright-holder <name>] [--template-dir <dir>] [--conflict-strategy <strategy>]
@@ -633,7 +633,7 @@ Discovery is bounded by the nearest Git root: a manifest at or below that root w
 - **Central Manifest**: Initialize your monorepo root with `scbake new <root-name> --with git` (or run `git init` in the root). This gives discovery an unambiguous repository boundary.
 - **Add Projects**: Run `scbake apply <path> --lang <lang>` to add a new project in a subdirectory. `scbake` will find the root manifest and add the project to the central tracking list.
 - **Scoped Templates**: Apply templates to specific sub-directories by passing the path: `scbake apply services/api --with go_linter`.
-- **No Nested Repositories**: `--with git` is skipped with a notice when the target is inside the repository (or already has `.git`). The root `.git` remains the discovery boundary; an existing nested `.git` from an older version is not removed automatically.
+- **No Nested Repositories**: `--with git` is skipped with a notice when the target already has a `.git` entry, when a `.git` marker exists in its nearest existing ancestors (even if Git cannot inspect that repository), or when Git reports it inside a work tree. The root `.git` remains the discovery boundary; a bare repository has no `.git` marker and is not detected, and an existing nested `.git` from an older version is not removed automatically.
 - **Fleet-wide Governance**: Run `scbake apply --with makefile` at the root to generate a unified build system that orchestrates all sub-projects.
 - **Non-Git Monorepos**: If the central manifest lives in a tree without a Git root, pass `--allow-ancestor-search` to `apply`, `update`, `drift`, `list`, `accept`, `unmanage`, or `recover` so an ancestor manifest can be adopted. The flag never crosses a `.git` root. It is not a security boundary: a principal that can write an ancestor directory can also plant a `.git` marker there.
 
@@ -664,7 +664,7 @@ Discovery is bounded by the nearest Git root: a manifest at or below that root w
 | `svelte_linter` | Linter (1200)           | ESLint 9 integration for Svelte projects          |
 | `makefile`      | Build System (1400)     | Universal build/lint scripts for all projects  |
 | `devcontainer`  | Dev Env (1500)          | Containerized DX with auto-detected toolchains |
-| `git`  | Version Control (2000)          | Initializes repo, stages all files, and creates initial commit. Skipped with a notice inside an existing work tree or when `.git` already exists; requires a resolvable Git identity |
+| `git`  | Version Control (2000)          | Initializes repo, stages all files, and creates initial commit. Skipped with a notice inside an existing work tree, below an ancestor `.git` marker, or when `.git` already exists; requires a resolvable Git identity |
 
 The `compliance` template resolves `--license` from an SPDX License List
 snapshot embedded in the binary, so license generation works offline. See
