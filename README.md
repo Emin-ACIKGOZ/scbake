@@ -248,8 +248,9 @@ user-accepted working-tree baseline per managed key, while `[managed_files]`
 keeps the pristine template hash; `unmanaged_files` lists paths detached from
 scbake. `update` and `drift --repair` never re-manage a detached path, and an
 accepted file is a no-op only while both its working bytes and the template
-render are unchanged. Use the `accept` and `unmanage` commands rather than
-editing these fields by hand.
+render are unchanged; an `update --force` or `--conflict-strategy overwrite`
+still rewrites it and clears the acceptance. Use the `accept` and `unmanage`
+commands rather than editing these fields by hand.
 
 #### Committed merge base and migration
 
@@ -451,8 +452,8 @@ scbake unmanage <path>...
 - **No drift, no updates.** `drift` ignores a detached path, and `update` or
   `drift --repair` will not rewrite, recreate, or re-record it.
 - **Apply needs `--force`.** `apply` skips unmanaged paths by default. Running
-  `scbake apply --force` re-manages one, writes canonical content, and clears
-  the unmanaged entry.
+  `scbake apply --force --lang <lang>` (or `--with <template>`) re-manages one,
+  writes canonical content, and clears the unmanaged entry.
 - **Root `.gitignore` is refused.** Scbake maintains its internal-state ignore
   block in the root `.gitignore`; use `accept` or edit that block manually. A
   nested `.gitignore` can be unmanaged.
@@ -471,9 +472,10 @@ scbake unmanage --dry-run main.go
 
 > **Downgrade warning.** `[accepted_files]` and `unmanaged_files` are additive
 > and do not change the schema version. An older scbake binary ignores unknown
-> fields, may drop them on save, and will report accepted edits as drift or
-> re-manage detached paths. Commit before running an older binary on a project
-> that uses these fields.
+> fields and may drop them on save. It will report accepted edits as drift,
+> recreate and re-record a missing detached path, and write an existing detached
+> file to a `.scbake-new` artifact instead of re-managing it. Commit before
+> running an older binary on a project that uses these fields.
 
 
 ### `recover`: Roll Back an Interrupted Transaction
@@ -617,9 +619,9 @@ Discovery is bounded by the nearest Git root: a manifest at or below that root w
 - **Add Projects**: Run `scbake apply <path> --lang <lang>` to add a new project in a subdirectory. `scbake` will find the root manifest and add the project to the central tracking list.
 - **Scoped Templates**: Apply templates to specific sub-directories by passing the path: `scbake apply services/api --with go_linter`.
 - **Fleet-wide Governance**: Run `scbake apply --with makefile` at the root to generate a unified build system that orchestrates all sub-projects.
-- **Non-Git Monorepos**: If the central manifest lives in a tree without a Git root, pass `--allow-ancestor-search` to `apply`, `update`, `drift`, or `list` so an ancestor manifest can be adopted. The flag never crosses a `.git` root. It is not a security boundary: a principal that can write an ancestor directory can also plant a `.git` marker there.
+- **Non-Git Monorepos**: If the central manifest lives in a tree without a Git root, pass `--allow-ancestor-search` to `apply`, `update`, `drift`, `list`, `accept`, `unmanage`, or `recover` so an ancestor manifest can be adopted. The flag never crosses a `.git` root. It is not a security boundary: a principal that can write an ancestor directory can also plant a `.git` marker there.
 
-**Note:** `--allow-ancestor-search` is an explicit opt-in for non-Git monorepos. Without it, applying to a marker-less subproject creates a nested manifest in that subproject instead of updating the central one. `update`, `drift`, and `list` also need the flag in a non-Git monorepo; without it, `drift` finds no local manifest and fails instead of evaluating the central one.
+**Note:** `--allow-ancestor-search` is an explicit opt-in for non-Git monorepos. Without it, applying to a marker-less subproject creates a nested manifest in that subproject instead of updating the central one. `update`, `drift`, `list`, `accept`, `unmanage`, and `recover` also need the flag in a non-Git monorepo; without it, `drift` finds no local manifest and fails instead of evaluating the central one.
 
 
 ## Supported Language Packs

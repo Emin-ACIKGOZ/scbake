@@ -392,8 +392,10 @@ whenever a rendered template changes. `[metadata]`, `[managed_files]`,
 `[accepted_files]`, and `unmanaged_files` are omitted entirely when empty, so a
 manifest for a run with no language pack has no `[[projects]]` or `[metadata]`
 table. The accepted and unmanaged fields are additive and do not change
-`scbake_version`; an older binary ignores them, may drop them on save, and will
-report accepted edits as drift or re-manage detached paths.
+`scbake_version`; an older binary ignores them and may drop them on save. It
+reports accepted edits as drift, recreates and re-records a missing detached
+path, and writes an existing detached file to a `.scbake-new` artifact instead
+of re-managing it.
 
 **Why this matters**:
 - ✅ Consistency: `scbake apply` re-reads manifest
