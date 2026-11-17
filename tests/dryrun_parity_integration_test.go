@@ -75,7 +75,7 @@ func dryRunTakeSnapshot(t *testing.T, root string) dryRunSnapshot {
 			snap[rel] = "d " + info.Mode().Perm().String()
 			return nil
 		}
-		data, err := os.ReadFile(filepath.Clean(path)) // #nosec G304 -- walking a test temp dir
+		data, err := os.ReadFile(filepath.Clean(path)) // #nosec G304,G122 -- walking a test temp dir
 		if err != nil {
 			return err
 		}
@@ -127,7 +127,7 @@ func dryRunAssertNoResidue(t *testing.T, snap dryRunSnapshot) {
 func dryRunWriteFile(t *testing.T, dir, rel, content string) {
 	t.Helper()
 	path := filepath.Join(dir, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatalf("creating parent for %s: %v", rel, err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil { // #nosec G306 -- test fixture
@@ -255,7 +255,7 @@ func dryRunSetupManagedEdit(t *testing.T, dir string) string {
 	if err != nil {
 		t.Fatalf("reading managed .editorconfig: %v", err)
 	}
-	if err := os.WriteFile(editorconfig, append(data, []byte("\n# local edit\n")...), 0o644); err != nil { // #nosec G306 -- test fixture
+	if err := os.WriteFile(editorconfig, append(data, []byte("\n# local edit\n")...), 0o644); err != nil { //nolint:gosec // test fixture
 		t.Fatalf("editing managed .editorconfig: %v", err)
 	}
 	return project
@@ -349,7 +349,7 @@ func dryRunSetupSubproject(t *testing.T, dir string) string {
 		t.Fatalf("preparing monorepo root: %v\n%s", err, out)
 	}
 	repo := filepath.Join(dir, "repo")
-	if err := os.Mkdir(filepath.Join(repo, "svc"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(repo, "svc"), 0o750); err != nil {
 		t.Fatalf("creating svc: %v", err)
 	}
 	if out, err := dryRunRunIn(t, repo, "apply", "--with", "editorconfig", "svc"); err != nil {
@@ -588,10 +588,9 @@ func TestDryRunNewSuccessParity(t *testing.T) {
 func TestDryRunNewFailureClassParity(t *testing.T) {
 	t.Run("existing target", func(t *testing.T) {
 		for _, lang := range []string{"go", "spring", "svelte"} {
-			lang := lang
 			t.Run(lang, func(t *testing.T) {
 				prepare := func(dir string) {
-					if err := os.Mkdir(filepath.Join(dir, "p"), 0o755); err != nil {
+					if err := os.Mkdir(filepath.Join(dir, "p"), 0o750); err != nil {
 						t.Fatalf("creating existing target: %v", err)
 					}
 					dryRunWriteFile(t, dir, "p/sentinel.txt", "keep")
@@ -606,7 +605,7 @@ func TestDryRunNewFailureClassParity(t *testing.T) {
 				realOut, realErr := dryRunRunIn(t, realDir, "new", "p", "--lang", lang)
 
 				dryRunAssertSameFailure(t, dryOut, dryErr, realOut, realErr, "")
-				if content, err := os.ReadFile(filepath.Join(realDir, "p", "sentinel.txt")); err != nil || string(content) != "keep" {
+				if content, err := os.ReadFile(filepath.Join(realDir, "p", "sentinel.txt")); err != nil || string(content) != "keep" { //nolint:gosec // test fixture
 					t.Errorf("real run changed the existing target (content %q, err %v)", content, err)
 				}
 			})

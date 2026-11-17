@@ -154,6 +154,47 @@ func TestCreateDirTask_PathTraversalRejected(t *testing.T) {
 	}
 }
 
+func TestCreateDirTask_DryRunDoesNotCreateNestedDirectory(t *testing.T) {
+	root := t.TempDir()
+	// The target itself does not exist yet, so the nested path has a missing
+	// parent at every level.
+	target := filepath.Join(root, "missing-target")
+
+	task := &CreateDirTask{
+		Path:     filepath.Join("generated", "api"),
+		Desc:     "Nested dry-run dir",
+		TaskPrio: 50,
+	}
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: target,
+		DryRun:     true,
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() with DryRun failed: %v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created target directory %q", target)
+	}
+	if _, err := os.Stat(filepath.Join(target, "generated", "api")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created nested directory under %q", target)
+	}
+}
+
+func TestCreateDirTask_DryRunPreservesTraversalErrors(t *testing.T) {
+	tc := types.TaskContext{
+		Ctx:        context.Background(),
+		TargetPath: t.TempDir(),
+		DryRun:     true,
+	}
+	task := &CreateDirTask{Path: "../outside/dir", Desc: "Traversal dry run", TaskPrio: 50}
+
+	if err := task.Execute(tc); err == nil {
+		t.Fatal("dry-run accepted a directory path outside the target")
+	}
+}
+
 // TestCreateDirTask_RollbackRemovesMissingTargetSubdir is a regression test for
 // SCB-055: when the target directory itself does not exist yet (e.g.
 // `apply <subproject>` in a monorepo, where the transaction root is the existing
