@@ -394,11 +394,13 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir, templateName, registri
 - A cached tree is eligible only while its registry is configured. Deleting or
   hand-editing `registries.json` makes the cache inert rather than letting stale
   content shadow an embedded template; the failure mode is closed.
-- `scbake template registry remove <name>` deletes `<cacheDir>/<registry>` (templates,
-  integrity manifests, and staging directories) before saving the config change.
-  If eviction fails, the registry stays configured and the command returns an error.
-  Other registries and the cache root are untouched. A symlink at the registry
-  path is removed as a link, never followed.
+- `scbake template registry remove <name>` renames `<cacheDir>/<registry>` to a
+  sibling `.evict-*` staging path inside the cache root, saves the config change,
+  then deletes the staging path. If saving fails, both the in-memory config and
+  the cache path are restored and the combined error is returned; if only the
+  final cleanup fails, the error says the config was saved. The rename stays on
+  one filesystem (one volume on Windows). Other registries and the cache root are
+  untouched. A symlink at the registry path is renamed as a link, never followed.
 - `--dry-run` appends the resolved tier to each file task: `[template-dir]`,
   `[registry: <name>]`, or `[built-in]`. Normal runs and their output are unchanged.
   The label is a plan-time snapshot, and the `maven_linter` snippet injected into

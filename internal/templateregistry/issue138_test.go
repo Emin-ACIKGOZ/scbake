@@ -122,6 +122,8 @@ func issue138CacheFixture(t *testing.T) (string, string, *Manager) {
 
 // TestIssue138_RemoveEvictsOnlyTargetRegistry proves eviction is scoped to
 // <cache>/<name>: sibling registries, the cache root, and the order file stay.
+//
+//nolint:cyclop // assertion-heavy test with one branch per checked invariant
 func TestIssue138_RemoveEvictsOnlyTargetRegistry(t *testing.T) {
 	configPath, cacheDir, m := issue138CacheFixture(t)
 
@@ -238,6 +240,8 @@ func TestIssue138_RemoveEscapingSymlinkUnlinksOnly(t *testing.T) {
 // TestIssue138_EvictionFailureKeepsConfigConsistent proves a failed eviction
 // aborts Remove, leaves the registry configured on disk, and returns an
 // actionable error naming the registry.
+//
+//nolint:cyclop // assertion-heavy test with one branch per checked invariant
 func TestIssue138_EvictionFailureKeepsConfigConsistent(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "registries.json")

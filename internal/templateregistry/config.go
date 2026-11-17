@@ -463,6 +463,13 @@ func (m *Manager) Get(name string) *Registry {
 }
 
 // Remove deletes a registry by name. Returns an error if not found.
+//
+// The cached directory is first renamed aside inside the cache root, then the
+// config change is saved, and only then is the staging directory deleted. If
+// saving fails, both the in-memory config and the cache directory are restored
+// and the combined error is returned. This keeps a failed removal from leaving
+// the config listing a registry whose cache has already been deleted (or a
+// removed registry whose cache is still live in the common case).
 func (m *Manager) Remove(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -478,50 +485,136 @@ func (m *Manager) Remove(name string) error {
 		return fmt.Errorf("registry %q not found", name)
 	}
 
-	// Evict the cached templates before saving the config change. If eviction
-	// fails the registry stays configured and the command is all-or-nothing in
-	// the common case; a concurrent older binary also never observes a removed
-	// registry whose cache is still live.
-	if err := m.evictRegistryCache(name); err != nil {
+	staged, err := m.stageRegistryCache(name)
+	if err != nil {
 		return err
 	}
 
-	m.config.Registries = append(m.config.Registries[:idx], m.config.Registries[idx+1:]...)
-	return m.save()
+	// Build a new slice instead of appending into the old backing array, so the
+	// previous config (restored on a save failure) is not mutated in place.
+	registries := make([]Registry, 0, len(m.config.Registries)-1)
+	registries = append(registries, m.config.Registries[:idx]...)
+	registries = append(registries, m.config.Registries[idx+1:]...)
+	previous := m.config
+	m.config = Config{Registries: registries}
+
+	if err := m.save(); err != nil {
+		m.config = previous
+		if restoreErr := m.restoreRegistryCache(staged); restoreErr != nil {
+			return fmt.Errorf("%w; restoring cached templates for registry %q also failed: %v",
+				err, name, restoreErr)
+		}
+		return err
+	}
+
+	if err := m.discardRegistryCache(staged); err != nil {
+		return fmt.Errorf("saved registry config but failed to delete evicted cache for registry %q: %w", name, err)
+	}
+	return nil
 }
 
-// evictRegistryCache removes <cacheDir>/<name>, including the registry's
-// templates, their integrity manifests, and any in-flight staging directories.
-// It is a no-op when no cache is configured, nothing is cached, or the name is
-// invalid (an invalid name can never be resolved, so its residue is inert).
-// Only the named registry is removed; other registries and the cache root are
-// left intact. A symlink at <cacheDir>/<name> is removed as a link; its target
-// is never followed or deleted.
-func (m *Manager) evictRegistryCache(name string) error {
-	if m.cacheDir == "" || ValidateName(name) != nil {
-		return nil
+// evictionStagePrefix names the temporary sibling directory that holds a cache
+// entry between the rename-aside and the config save. It stays inside the cache
+// root, so the rename never crosses a filesystem (or volume on Windows).
+const evictionStagePrefix = ".evict-"
+
+// stagedRegistryCache records a cache directory that was renamed aside while the
+// config change is saved. staging is empty when there was nothing to evict.
+type stagedRegistryCache struct {
+	original string
+	staging  string
+}
+
+// stageRegistryCache renames <cacheDir>/<name> to a sibling .evict-* path inside
+// the cache root. It is a no-op when no cache is configured, nothing is cached,
+// the name is invalid (an invalid name can never be resolved, so its residue is
+// inert), or the target is missing.
+//
+// A symlink at <cacheDir>/<name> is renamed as a link; its target is never
+// followed. The containment check is lexical (see ensureLexicallyWithin) so the
+// link itself is moved rather than refused as if it pointed outside.
+func (m *Manager) stageRegistryCache(name string) (stagedRegistryCache, error) {
+	if !evictableCacheEntry(m.cacheDir, name) {
+		return stagedRegistryCache{}, nil
 	}
 
 	target := filepath.Join(m.cacheDir, name)
-	info, err := os.Lstat(target)
+	if err := ensureLexicallyWithin(m.cacheDir, target); err != nil {
+		return stagedRegistryCache{}, fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+	}
+	if _, err := os.Lstat(target); errors.Is(err, fs.ErrNotExist) {
+		return stagedRegistryCache{}, nil
+	} else if err != nil {
+		return stagedRegistryCache{}, fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+	}
+
+	staging, err := reserveEvictionPath(m.cacheDir)
+	if err != nil {
+		return stagedRegistryCache{}, fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+	}
+	if err := os.Rename(target, staging); err != nil {
+		return stagedRegistryCache{}, fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+	}
+	return stagedRegistryCache{original: target, staging: staging}, nil
+}
+
+// evictableCacheEntry reports whether a cache entry could exist for name. An
+// invalid name is not evictable because it can never be resolved.
+func evictableCacheEntry(cacheDir, name string) bool {
+	return cacheDir != "" && ValidateName(name) == nil
+}
+
+// reserveEvictionPath returns an unused path inside cacheDir for a staged cache
+// entry. MkdirTemp picks the unique name atomically; the empty directory is then
+// removed so the path can receive the rename. All staging stays on the same
+// volume as <cacheDir>/<name>.
+func reserveEvictionPath(cacheDir string) (string, error) {
+	dir, err := os.MkdirTemp(cacheDir, evictionStagePrefix+"*")
+	if err != nil {
+		return "", fmt.Errorf("creating eviction staging path: %w", err)
+	}
+	if err := os.Remove(dir); err != nil {
+		return "", fmt.Errorf("preparing eviction staging path: %w", err)
+	}
+	return dir, nil
+}
+
+// restoreRegistryCache moves a staged cache entry back after a failed save. It
+// is a no-op when nothing was staged.
+func (m *Manager) restoreRegistryCache(staged stagedRegistryCache) error {
+	if staged.staging == "" {
+		return nil
+	}
+	if err := ensureLexicallyWithin(m.cacheDir, staged.staging); err != nil {
+		return err
+	}
+	if err := ensureLexicallyWithin(m.cacheDir, staged.original); err != nil {
+		return err
+	}
+	return os.Rename(staged.staging, staged.original)
+}
+
+// discardRegistryCache deletes a staged cache entry after the config change is
+// durable. It is a no-op when nothing was staged. A staged symlink is unlinked
+// without following it; a staged directory tree is removed recursively.
+func (m *Manager) discardRegistryCache(staged stagedRegistryCache) error {
+	if staged.staging == "" {
+		return nil
+	}
+	if err := ensureLexicallyWithin(m.cacheDir, staged.staging); err != nil {
+		return err
+	}
+	info, err := os.Lstat(staged.staging)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
+		return err
 	}
-
 	if info.Mode()&os.ModeSymlink != 0 {
-		if err := os.Remove(target); err != nil {
-			return fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
-		}
-		return nil
+		return os.Remove(staged.staging)
 	}
-
-	if err := removeAllContained(m.cacheDir, target); err != nil {
-		return fmt.Errorf("evicting cached templates for registry %q: %w", name, err)
-	}
-	return nil
+	return os.RemoveAll(staged.staging)
 }
 
 // List returns a copy of all registries in the order they were added. That

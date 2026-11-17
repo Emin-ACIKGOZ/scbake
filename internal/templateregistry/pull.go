@@ -605,6 +605,31 @@ func ensureWithin(base, target string) error {
 	return ensureContained(base, target, true)
 }
 
+// ensureLexicallyWithin returns an error unless target is lexically strictly
+// inside base. Unlike ensureStrictlyWithin it does not resolve any path
+// component, so a symlink at target is treated as the path itself: callers that
+// rename or unlink a cache entry need to move the link, not refuse it because
+// it points outside the cache. Both paths are made absolute and cleaned first.
+func ensureLexicallyWithin(base, target string) error {
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return fmt.Errorf("resolving base path %q: %w", base, err)
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return fmt.Errorf("resolving path %q: %w", target, err)
+	}
+	rel, err := filepath.Rel(absBase, absTarget)
+	if err != nil {
+		return fmt.Errorf("resolving %q relative to %q: %w", target, base, err)
+	}
+	if filepath.IsAbs(rel) || rel == "." || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("refusing to use path %q outside %q", target, base)
+	}
+	return nil
+}
+
 // ensureContained resolves symlinks in base and target and reports whether the
 // resolved target stays inside the resolved base. allowEqual permits the two to
 // resolve to the same path (the whole-archive promotion case); otherwise the
