@@ -258,6 +258,13 @@ func requireManifestUnchanged(t *testing.T, path string, before manifestSnapshot
 // TestManifestRecordsRootRelativePaths is the core D4 matrix. Each subtest uses
 // a fresh fixture and asserts the recorded paths, the generated consumers, and
 // that update selects the same directory from any spelling.
+//
+// It is also the end-to-end update-direction regression: when apply is invoked
+// from the target with ".", master records "." and can no longer update the
+// directory it wrote to. The matrix covers the whole failure surface of that
+// bug — the root update must refuse and write nothing, updates at the target
+// and from every alternate spelling must succeed idempotently, and the recorded
+// entries must stay root-relative and unduplicated.
 func TestManifestRecordsRootRelativePaths(t *testing.T) {
 	spellings := []struct {
 		name   string
@@ -371,16 +378,19 @@ func TestManifestRecordsRootRelativePaths(t *testing.T) {
 				requireNoArtifactsIn(t, repo, "main.go", "Makefile", ".editorconfig", "go.mod", ".github", ".scbake")
 			}
 
-			// update in the target succeeds and is idempotent.
+			// update in the target succeeds and is idempotent, including a
+			// repeated bare update (no explicit target argument).
 			targetCwd := filepath.Join(manifestRoot, filepath.FromSlash(wantPath))
 			sigBefore := manifestSignature(decodeManifest(t, manifestRoot))
-			out, err := runManifestCLI(t, targetCwd, "update")
-			if err != nil {
-				t.Fatalf("update in the applied directory failed: %v\n%s", err, out)
-			}
-			sigAfter := manifestSignature(decodeManifest(t, manifestRoot))
-			if sigAfter != sigBefore {
-				t.Errorf("update changed the manifest signature:\nbefore:\n%s\nafter:\n%s", sigBefore, sigAfter)
+			for i := 0; i < 2; i++ {
+				out, err := runManifestCLI(t, targetCwd, "update")
+				if err != nil {
+					t.Fatalf("update #%d in the applied directory failed: %v\n%s", i+1, err, out)
+				}
+				sigAfter := manifestSignature(decodeManifest(t, manifestRoot))
+				if sigAfter != sigBefore {
+					t.Errorf("update #%d changed the manifest signature:\nbefore:\n%s\nafter:\n%s", i+1, sigBefore, sigAfter)
+				}
 			}
 
 			// Alternate spellings of the same target must select the same
@@ -495,90 +505,6 @@ func TestApplyDryRunWritesNothing(t *testing.T) {
 		t.Errorf("dry-run apply created a template file: %v", err)
 	}
 	requireNoScbakeNewFiles(t, repo)
-}
-
-// TestUpdateDirectionFromSubdirectoryApply is the end-to-end update-direction
-// regression: apply was invoked from the target with ".", so master records "."
-// and later cannot update the directory it wrote to.
-func TestUpdateDirectionFromSubdirectoryApply(t *testing.T) {
-	applyFromTarget := func(t *testing.T) (repo string) {
-		t.Helper()
-		_, repo = manifestPathRepo(t, false)
-		out, err := runManifestCLI(t, filepath.Join(repo, "svc"),
-			"apply", "--lang", "go", "--with", "editorconfig", ".")
-		if err != nil {
-			t.Fatalf("apply from the target failed: %v\n%s", err, out)
-		}
-		return repo
-	}
-
-	t.Run("root update refuses and writes nothing", func(t *testing.T) {
-		repo := applyFromTarget(t)
-		manifestPath := filepath.Join(repo, "scbake.toml")
-		before := snapshotManifest(t, manifestPath)
-
-		out, err := runManifestCLI(t, repo, "update")
-		if err == nil {
-			t.Fatalf("root update over a subproject-only manifest succeeded:\n%s", out)
-		}
-		if !strings.Contains(out, "records no templates") {
-			t.Errorf("root update error is not the expected selection error:\n%s", out)
-		}
-		requireManifestUnchanged(t, manifestPath, before)
-		requireNoArtifactsIn(t, repo, "main.go", "Makefile", ".editorconfig", "go.mod", ".github")
-	})
-
-	t.Run("target update succeeds and is idempotent", func(t *testing.T) {
-		repo := applyFromTarget(t)
-		manifestPath := filepath.Join(repo, "scbake.toml")
-		want := manifestSignature(decodeManifest(t, repo))
-
-		for i := 0; i < 2; i++ {
-			out, err := runManifestCLI(t, filepath.Join(repo, "svc"), "update")
-			if err != nil {
-				t.Fatalf("update #%d in the target failed: %v\n%s", i+1, err, out)
-			}
-			if got := manifestSignature(decodeManifest(t, repo)); got != want {
-				t.Errorf("update #%d rewrote the manifest:\nwant:\n%s\ngot:\n%s", i+1, want, got)
-			}
-		}
-		m := decodeManifest(t, repo)
-		requireSingleProject(t, m, "svc", "svc", "go")
-		requireTemplatesAt(t, m, "svc", "editorconfig")
-		if _, err := os.Stat(manifestPath); err != nil {
-			t.Fatalf("manifest missing after update: %v", err)
-		}
-	})
-
-	t.Run("alternate spellings do not duplicate entries", func(t *testing.T) {
-		work, repo := manifestPathRepo(t, false)
-		out, err := runManifestCLI(t, filepath.Join(repo, "svc"),
-			"apply", "--lang", "go", "--with", "editorconfig", ".")
-		if err != nil {
-			t.Fatalf("apply from the target failed: %v\n%s", err, out)
-		}
-		want := manifestSignature(decodeManifest(t, repo))
-
-		invocations := []struct {
-			cwd  string
-			args []string
-		}{
-			{repo, []string{"update", "./svc"}},
-			{repo, []string{"update", "svc/"}},
-			{work, []string{"update", "repo/svc"}},
-			{filepath.Join(repo, "svc"), []string{"update"}},
-		}
-		for _, inv := range invocations {
-			out, err := runManifestCLI(t, inv.cwd, inv.args...)
-			if err != nil {
-				t.Fatalf("update (%s from %s) failed: %v\n%s", strings.Join(inv.args, " "), inv.cwd, err, out)
-			}
-			if got := manifestSignature(decodeManifest(t, repo)); got != want {
-				t.Errorf("update (%s) duplicated or rewrote entries:\nwant:\n%s\ngot:\n%s", strings.Join(inv.args, " "), want, got)
-			}
-		}
-		requireNoScbakeNewFiles(t, work)
-	})
 }
 
 // legacyAbsoluteManifestFixture applies a normal subproject and then rewrites
