@@ -96,7 +96,7 @@ func TestWriteManagedFileAcceptedNoOpStrategies(t *testing.T) {
 				t.Fatalf("WriteManagedFile: %v", err)
 			}
 			assertAcceptedFileFrozen(t, path)
-			if got, _ := os.ReadFile(path); string(got) != string(edited) {
+			if got, _ := os.ReadFile(path); string(got) != string(edited) { //nolint:gosec // test-controlled fixture path under t.TempDir()
 				t.Fatalf("accepted bytes changed: %q", got)
 			}
 			if got := m.ManagedFiles["file.txt"]; got != HashContent(pristine) {
@@ -129,7 +129,7 @@ func TestWriteManagedFileAcceptedNoOpRequiresMatchingAcceptedHash(t *testing.T) 
 	if err == nil {
 		t.Fatalf("post-accept edit was silently accepted")
 	}
-	if got, _ := os.ReadFile(filepath.Join(root, "file.txt")); string(got) != string(second) {
+	if got, _ := os.ReadFile(filepath.Join(root, "file.txt")); string(got) != string(second) { //nolint:gosec // test-controlled fixture path under t.TempDir()
 		t.Errorf("file changed despite the conflict: %q", got)
 	}
 	if got := m.AcceptedFiles["file.txt"]; got != HashContent(accepted) {
@@ -151,7 +151,7 @@ func TestWriteManagedFileOverwriteWritesAndClearsAccepted(t *testing.T) {
 	if err := WriteManagedFile(tc, "file.txt", pristine, fileutil.FilePerms); err != nil {
 		t.Fatalf("WriteManagedFile: %v", err)
 	}
-	if got, _ := os.ReadFile(filepath.Join(root, "file.txt")); string(got) != string(pristine) {
+	if got, _ := os.ReadFile(filepath.Join(root, "file.txt")); string(got) != string(pristine) { //nolint:gosec // test-controlled fixture path under t.TempDir()
 		t.Fatalf("overwrite did not restore pristine content: %q", got)
 	}
 	if got := m.AcceptedFiles["file.txt"]; got != "" {
@@ -178,7 +178,7 @@ func TestWriteManagedFileTemplateChangeMergesAndClearsAccepted(t *testing.T) {
 	if err := WriteManagedFile(tc, "file.txt", newTemplate, fileutil.FilePerms); err != nil {
 		t.Fatalf("WriteManagedFile: %v", err)
 	}
-	got, _ := os.ReadFile(filepath.Join(root, "file.txt"))
+	got, _ := os.ReadFile(filepath.Join(root, "file.txt")) //nolint:gosec // test-controlled fixture path under t.TempDir()
 	if string(got) != "ALPHA\nbeta\nGAMMA\n" {
 		t.Fatalf("clean merge result = %q", got)
 	}
@@ -195,7 +195,7 @@ func TestWriteManagedFileTemplateChangeMergesAndClearsAccepted(t *testing.T) {
 
 // TestWriteManagedFileUnmanagedSkipMatrix pins the update/apply/force policy at
 // the execution level.
-func TestWriteManagedFileUnmanagedSkipMatrix(t *testing.T) {
+func TestWriteManagedFileUnmanagedSkipMatrix(t *testing.T) { //nolint:cyclop // table-driven skip/force matrix
 	content := []byte("template\n")
 	local := []byte("local\n")
 
@@ -227,7 +227,7 @@ func TestWriteManagedFileUnmanagedSkipMatrix(t *testing.T) {
 			if err := WriteManagedFile(tc, "file.txt", content, fileutil.FilePerms); err != nil {
 				t.Fatalf("WriteManagedFile: %v", err)
 			}
-			got, _ := os.ReadFile(path)
+			got, _ := os.ReadFile(path) //nolint:gosec // test-controlled fixture path under t.TempDir()
 			if tcCase.wantSkipped {
 				assertAcceptedFileFrozen(t, path)
 				if string(got) != string(local) {

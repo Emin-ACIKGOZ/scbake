@@ -29,7 +29,7 @@ func findRootCommands(name string) []*cobra.Command {
 // TestAcceptUnmanageRegistration pins the CLI surface: one top-level verb each,
 // at least one path argument, and help that distinguishes rebaseline from
 // detach.
-func TestAcceptUnmanageRegistration(t *testing.T) {
+func TestAcceptUnmanageRegistration(t *testing.T) { //nolint:cyclop // table-driven CLI registration assertions
 	resetFlags()
 	t.Cleanup(resetFlags)
 

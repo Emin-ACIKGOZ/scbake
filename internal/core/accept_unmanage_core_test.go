@@ -148,7 +148,7 @@ func TestPersistAcceptedUnmanagedReplaceSemantics(t *testing.T) {
 // TestRunAcceptUnmanageRoundTrip exercises the core mutation without the CLI:
 // accept leaves bytes/base alone, unmanage detaches and removes the base, and
 // the second unmanage is a no-op.
-func TestRunAcceptUnmanageRoundTrip(t *testing.T) {
+func TestRunAcceptUnmanageRoundTrip(t *testing.T) { //nolint:cyclop // assertion-heavy round-trip regression test
 	root := t.TempDir()
 	pristine := []byte("pristine a.txt\n")
 	m := writeManageFixture(t, root, map[string]string{"a.txt": string(pristine)})
@@ -158,15 +158,15 @@ func TestRunAcceptUnmanageRoundTrip(t *testing.T) {
 		t.Fatalf("write edit: %v", err)
 	}
 	basePath := filepath.Join(root, tasks.BaseShadowRelPath("a.txt"))
-	baseBefore, _ := os.ReadFile(basePath)
+	baseBefore, _ := os.ReadFile(basePath) //nolint:gosec // test-controlled fixture path under t.TempDir()
 
 	if err := RunAccept(manageRunContext(root), []string{"a.txt"}); err != nil {
 		t.Fatalf("RunAccept: %v", err)
 	}
-	if got, _ := os.ReadFile(path); string(got) != string(edited) {
+	if got, _ := os.ReadFile(path); string(got) != string(edited) { //nolint:gosec // test-controlled fixture path under t.TempDir()
 		t.Fatalf("accept rewrote the file: %q", got)
 	}
-	if got, _ := os.ReadFile(basePath); string(got) != string(baseBefore) {
+	if got, _ := os.ReadFile(basePath); string(got) != string(baseBefore) { //nolint:gosec // test-controlled fixture path under t.TempDir()
 		t.Fatalf("accept rewrote the base")
 	}
 	loaded := loadManageTestManifest(t, root)
@@ -193,7 +193,7 @@ func TestRunAcceptUnmanageRoundTrip(t *testing.T) {
 	if _, err := os.Stat(basePath); !os.IsNotExist(err) {
 		t.Errorf("unmanage did not remove the base: %v", err)
 	}
-	if got, _ := os.ReadFile(path); string(got) != string(edited) {
+	if got, _ := os.ReadFile(path); string(got) != string(edited) { //nolint:gosec // test-controlled fixture path under t.TempDir()
 		t.Errorf("unmanage changed the working file: %q", got)
 	}
 
@@ -302,7 +302,7 @@ func TestRunAcceptAtomicBatch(t *testing.T) {
 
 // TestRunUnmanageBaseDeletionSafety: a non-regular committed base fails closed
 // before the manifest is touched.
-func TestRunUnmanageBaseDeletionSafety(t *testing.T) {
+func TestRunUnmanageBaseDeletionSafety(t *testing.T) { //nolint:cyclop // table-driven safety regression test
 	for _, kind := range []string{"directory", "symlink"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
@@ -368,7 +368,7 @@ func TestRemoveUnmanagedBasesRollbackRestoresBase(t *testing.T) {
 
 	// The deferred cleanup is the rollback path taken when manifest.Save fails.
 	cleanup()
-	got, err := os.ReadFile(basePath)
+	got, err := os.ReadFile(basePath) //nolint:gosec // test-controlled fixture path under t.TempDir()
 	if err != nil {
 		t.Fatalf("rollback did not restore the base: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestRunUnmanageRootGitignoreRefused(t *testing.T) {
 
 func mustManageRead(t *testing.T, path string) string {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // test-controlled fixture path under t.TempDir()
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}

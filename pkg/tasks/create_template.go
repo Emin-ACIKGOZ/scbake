@@ -246,14 +246,8 @@ func checkReconciliation(
 	// equals the accepted hash and the template still renders the pristine
 	// hash. A later edit (existingHash != accepted) or a template change
 	// (newContentHash != originalHash) falls through to normal conflict
-	// handling, and overwrite always writes. Without the existingHash condition
-	// a second edit after accept would be silently no-op'd.
-	accepted := ""
-	if tc.Manifest != nil {
-		accepted = tc.Manifest.AcceptedFiles[ledgerKey]
-	}
-	if accepted != "" && existingHash == accepted && newContentHash == originalHash &&
-		tc.ConflictStrategy != types.ConflictOverwrite {
+	// handling, and overwrite always writes.
+	if acceptedBaselineSuppressesWrite(tc, ledgerKey, existingHash, newContentHash, originalHash) {
 		return "", nil, nil
 	}
 
@@ -261,7 +255,7 @@ func checkReconciliation(
 	// strategy there is nothing to apply regardless of local edits, which is
 	// what makes a second `update` a no-op. Other strategies keep the historic
 	// behavior of surfacing drift.
-	if newContentHash == originalHash && tc.ConflictStrategy == types.ConflictMerge {
+	if unchangedTemplateForMerge(tc, newContentHash, originalHash) {
 		return "", nil, nil
 	}
 
@@ -285,6 +279,26 @@ func checkReconciliation(
 
 	p, cErr := handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
 	return p, nil, cErr
+}
+
+// unchangedTemplateForMerge reports whether the merge strategy can skip this
+// file because the template still renders the recorded pristine hash.
+func unchangedTemplateForMerge(tc types.TaskContext, newContentHash, originalHash string) bool {
+	return newContentHash == originalHash && tc.ConflictStrategy == types.ConflictMerge
+}
+
+// acceptedBaselineSuppressesWrite reports whether an accepted working-tree
+// baseline makes this write a no-op. Without the existingHash condition a
+// second edit after accept would be silently no-op'd.
+func acceptedBaselineSuppressesWrite(
+	tc types.TaskContext, ledgerKey, existingHash, newContentHash, originalHash string,
+) bool {
+	if tc.Manifest == nil {
+		return false
+	}
+	accepted := tc.Manifest.AcceptedFiles[ledgerKey]
+	return accepted != "" && existingHash == accepted && newContentHash == originalHash &&
+		tc.ConflictStrategy != types.ConflictOverwrite
 }
 
 // reconcileMerge performs the `merge` strategy: a clean three-way merge writes
@@ -397,23 +411,6 @@ type managedFileDecision struct {
 	override  []byte
 }
 
-// skipUnmanaged reports whether the managed file at ledgerKey must be skipped
-// because it is recorded as unmanaged. update/repair never re-manage; a
-// non-update run (apply) only re-manages when --force is set. The apply-time
-// skip prints a hint; update stays silent because it is not the re-manage path.
-func skipUnmanaged(tc types.TaskContext, ledgerKey string) bool {
-	if !manifestListsUnmanaged(tc.Manifest, ledgerKey) {
-		return false
-	}
-	if !tc.Update && tc.Force {
-		return false
-	}
-	if !tc.Update {
-		fmt.Fprintf(os.Stderr, "⚠️  Skipping unmanaged %s; use --force to manage it again\n", ledgerKey)
-	}
-	return true
-}
-
 // decideManagedFile computes what WriteManagedFile would do: ledger keying,
 // internal-state ignore injection, hashing, and the conflict/merge decision. It
 // is the single source of truth shared by Validate and WriteManagedFile, so a
@@ -424,7 +421,7 @@ func decideManagedFile(tc types.TaskContext, absPath, outputRelPath string, cont
 	// A plan-level filter normally removes unmanaged tasks, but direct and
 	// library callers still need the execution-level defense. Returning an
 	// empty write path is the same no-op signal as the other skip paths.
-	if skipUnmanaged(tc, ledgerKey) {
+	if shouldSkipUnmanaged(tc, ledgerKey) {
 		return managedFileDecision{ledgerKey: ledgerKey}, nil
 	}
 
@@ -474,11 +471,11 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 
 	// Resolve the ledger key before preconditions so an unmanaged path is
 	// skipped without creating directories or walking conflict handling.
-	prelimAbs, err := fileutil.SafePath(tc.TargetPath, outputRelPath)
+	_, skipped, err := manageWriteKey(tc, outputRelPath)
 	if err != nil {
 		return err
 	}
-	if skipUnmanaged(tc, managedFilesKey(tc, prelimAbs, outputRelPath)) {
+	if skipped {
 		return nil
 	}
 
@@ -499,38 +496,80 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 
 	// Idempotent artifact: a repeated conflict must not rewrite a side artifact
 	// whose content is already identical.
-	if writePath != absPath && sameFileContent(writePath, content) {
+	if isIdenticalArtifact(writePath, absPath, content) {
 		return nil
 	}
 
+	if err := writePendingContent(tc, writePath, content, override, perm); err != nil {
+		return err
+	}
+
+	if writePath == absPath {
+		return recordCanonicalWrite(tc, ledgerKey, newHash, content)
+	}
+	return nil
+}
+
+// writePendingContent writes the pending render, preferring the merge override
+// when reconciliation produced one.
+func writePendingContent(
+	tc types.TaskContext, writePath string, content, override []byte, perm os.FileMode,
+) error {
 	toWrite := content
 	if override != nil {
 		toWrite = override
 	}
-	if err := trackAndWrite(tc, writePath, toWrite, perm); err != nil {
-		return err
-	}
+	return trackAndWrite(tc, writePath, toWrite, perm)
+}
 
-	// The ledger entry (and the pristine base shadow that mirrors it) only
-	// advances when we actually wrote the canonical path. Under artifact or
-	// keep-local we write elsewhere (or nowhere), so the original file keeps its
-	// previous baseline (SCB-056). The recorded hash is always the pristine
-	// render, never the possibly-merged content, so a merged file stays
-	// recognized as locally modified.
-	if writePath == absPath {
-		recordManagedHash(tc.Manifest, ledgerKey, newHash)
-		// A canonical write advances the pristine baseline, so any accepted
-		// working-tree baseline for this key is stale and must be cleared.
-		unrecordAccepted(tc.Manifest, ledgerKey)
-		// An explicit apply --force is the documented re-manage path: the
-		// canonical write records the hash, so the key is no longer unmanaged.
-		// update/repair never reach here for an unmanaged key.
-		if !tc.Update && tc.Force {
-			unrecordUnmanaged(tc.Manifest, ledgerKey)
-		}
-		return writeBaseShadow(tc, ledgerKey, content)
+// manageWriteKey resolves the ledger key before preconditions so an unmanaged
+// path is skipped without creating directories or walking conflict handling.
+func manageWriteKey(tc types.TaskContext, outputRelPath string) (string, bool, error) {
+	prelimAbs, err := fileutil.SafePath(tc.TargetPath, outputRelPath)
+	if err != nil {
+		return "", false, err
 	}
-	return nil
+	ledgerKey := managedFilesKey(tc, prelimAbs, outputRelPath)
+	return ledgerKey, shouldSkipUnmanaged(tc, ledgerKey), nil
+}
+
+// shouldSkipUnmanaged reports whether the path is detached and this run must not
+// re-manage it. update/repair never re-manage; a non-update run (apply) only
+// re-manages when --force is set. The plan-level filter normally removes the
+// task, so this is the execution-level defense.
+func shouldSkipUnmanaged(tc types.TaskContext, ledgerKey string) bool {
+	if !manifestListsUnmanaged(tc.Manifest, ledgerKey) || (!tc.Update && tc.Force) {
+		return false
+	}
+	if !tc.Update {
+		fmt.Fprintf(os.Stderr, "⚠️  Skipping unmanaged %s; use --force to manage it again\n", ledgerKey)
+	}
+	return true
+}
+
+// isIdenticalArtifact reports whether a non-canonical write already holds the
+// pending bytes, so a repeated conflict does not rewrite the side artifact.
+func isIdenticalArtifact(writePath, absPath string, content []byte) bool {
+	return writePath != absPath && sameFileContent(writePath, content)
+}
+
+// recordCanonicalWrite advances the ledger entry and the pristine base shadow
+// after a canonical write. Under artifact or keep-local the original file keeps
+// its previous baseline (SCB-056); the recorded hash is always the pristine
+// render, never the possibly-merged content, so a merged file stays recognized
+// as locally modified.
+func recordCanonicalWrite(tc types.TaskContext, ledgerKey, newHash string, content []byte) error {
+	recordManagedHash(tc.Manifest, ledgerKey, newHash)
+	// A canonical write advances the pristine baseline, so any accepted
+	// working-tree baseline for this key is stale and must be cleared.
+	unrecordAccepted(tc.Manifest, ledgerKey)
+	// An explicit apply --force is the documented re-manage path: the canonical
+	// write records the hash, so the key is no longer unmanaged. update/repair
+	// never reach here for an unmanaged key.
+	if !tc.Update && tc.Force {
+		unrecordUnmanaged(tc.Manifest, ledgerKey)
+	}
+	return writeBaseShadow(tc, ledgerKey, content)
 }
 
 // ManagedFileUnchanged reports whether outputRelPath exists and still matches

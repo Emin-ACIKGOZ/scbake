@@ -36,7 +36,7 @@ func TestSaveLoadRoundTripAcceptedUnmanaged(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(root, "scbake.toml"))
+	raw, err := os.ReadFile(filepath.Join(root, "scbake.toml")) //nolint:gosec // test-controlled fixture path under t.TempDir()
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestSaveOmitsEmptyAdditiveFields(t *testing.T) {
 	if err := Save(m, root); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "scbake.toml"))
+	raw, err := os.ReadFile(filepath.Join(root, "scbake.toml")) //nolint:gosec // test-controlled fixture path under t.TempDir()
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestSaveOmitsEmptyAdditiveFields(t *testing.T) {
 
 // TestSavedAdditiveFieldsLoadInLegacyReader models the downgrade hazard: an
 // older reader ignores the new fields and still loads the managed ledger. The
-// new state is not honoured by old binaries (documented), but the file stays
+// new state is not honored by old binaries (documented), but the file stays
 // decodable.
 func TestSavedAdditiveFieldsLoadInLegacyReader(t *testing.T) {
 	root := t.TempDir()
@@ -105,7 +105,7 @@ func TestSavedAdditiveFieldsLoadInLegacyReader(t *testing.T) {
 	if err := Save(m, root); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "scbake.toml"))
+	raw, err := os.ReadFile(filepath.Join(root, "scbake.toml")) //nolint:gosec // test-controlled fixture path under t.TempDir()
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}

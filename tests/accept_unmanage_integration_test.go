@@ -102,6 +102,7 @@ func freezeAcceptTree(t *testing.T, root string) map[string]time.Time {
 			return err
 		}
 		stamp := time.Unix(1_000_000_000, 0)
+		//nolint:gosec // G122: path comes from Walk over the test's own t.TempDir tree
 		if err := os.Chtimes(path, stamp, stamp); err != nil {
 			return err
 		}
@@ -353,7 +354,7 @@ func TestAcceptDryRunWritesNothing(t *testing.T) {
 // TestUnmanageDetachesFromDriftAndUpdate: after unmanage the path is not
 // drift-gated, update never rewrites/recreates/re-records it, and the base
 // shadow is gone.
-func TestUnmanageDetachesFromDriftAndUpdate(t *testing.T) {
+func TestUnmanageDetachesFromDriftAndUpdate(t *testing.T) { //nolint:cyclop // assertion-heavy end-to-end regression test
 	project := setupAcceptProject(t)
 	mainGo := filepath.Join(project, "main.go")
 	basePath := filepath.Join(project, fileutil.CommittedBaseDir, "main.go")
@@ -471,7 +472,7 @@ func TestUnmanageDryRunWritesNothing(t *testing.T) {
 // TestUnmanageRootGitignoreRefusedNestedAllowed: the root .gitignore carries
 // scbake's internal-state block and is refused; a nested .gitignore is a normal
 // managed file and can be detached.
-func TestUnmanageRootGitignoreRefusedNestedAllowed(t *testing.T) {
+func TestUnmanageRootGitignoreRefusedNestedAllowed(t *testing.T) { //nolint:cyclop // assertion-heavy regression test
 	project := setupAcceptProject(t)
 	manifestPath := filepath.Join(project, "scbake.toml")
 	rootBase := filepath.Join(project, fileutil.CommittedBaseDir, ".gitignore.scbake-shadow")
@@ -521,7 +522,7 @@ func TestUnmanageRootGitignoreRefusedNestedAllowed(t *testing.T) {
 
 // TestApplySkipsUnmanagedUntilForce: apply must not silently re-manage a
 // detached path; only --force does, and dry-run agrees.
-func TestApplySkipsUnmanagedUntilForce(t *testing.T) {
+func TestApplySkipsUnmanagedUntilForce(t *testing.T) { //nolint:cyclop // assertion-heavy regression test
 	project := setupAcceptProject(t)
 	mainGo := filepath.Join(project, "main.go")
 	edited := "package main\n\nfunc main() { println(\"detached\") }\n"

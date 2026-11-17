@@ -226,27 +226,42 @@ func planAccept(m *types.Manifest, root, key, arg string) (manageAction, error) 
 	}
 	action.hash = tasks.HashContent(data)
 
+	if err := validateAcceptBase(root, key, recorded, &action); err != nil {
+		return action, err
+	}
+	recordAcceptState(m, key, recorded, &action)
+	return action, nil
+}
+
+// validateAcceptBase preflights the committed base against the pristine ledger
+// hash. An invalid base fails so accept cannot claim success while drift stays
+// red; a missing base only warns because missing bases are advisory by default.
+func validateAcceptBase(root, key, recorded string, action *manageAction) error {
 	switch base, baseErr := fileutil.SafeReadFile(root, tasks.BaseShadowRelPath(key)); {
 	case baseErr == nil:
 		if !tasks.BaseMatchesRecordedHash(base, recorded) {
-			return action, fmt.Errorf("committed base for %q is invalid; restore it before accepting", key)
+			return fmt.Errorf("committed base for %q is invalid; restore it before accepting", key)
 		}
 	case errors.Is(baseErr, os.ErrNotExist):
 		action.warnMissingBase = true
 	default:
-		return action, fmt.Errorf("cannot read committed base for %q: %w", key, baseErr)
+		return fmt.Errorf("cannot read committed base for %q: %w", key, baseErr)
 	}
+	return nil
+}
 
-	// The bytes already match the pristine render, so there is nothing to
-	// accept; clear a stale accepted baseline if one exists.
+// recordAcceptState records the accepted hash on m. Bytes that already match
+// the pristine render have nothing to accept, so a stale accepted baseline is
+// cleared instead; bytes that already match an accepted baseline are a no-op.
+func recordAcceptState(m *types.Manifest, key, recorded string, action *manageAction) {
 	if action.hash == recorded {
 		if _, ok := m.AcceptedFiles[key]; ok {
 			action.cleared = true
 			delete(m.AcceptedFiles, key)
-			return action, nil
+			return
 		}
 		action.alreadyCurrent = true
-		return action, nil
+		return
 	}
 
 	if m.AcceptedFiles == nil {
@@ -254,10 +269,9 @@ func planAccept(m *types.Manifest, root, key, arg string) (manageAction, error) 
 	}
 	if m.AcceptedFiles[key] == action.hash {
 		action.alreadyCurrent = true
-		return action, nil
+		return
 	}
 	m.AcceptedFiles[key] = action.hash
-	return action, nil
 }
 
 // planUnmanage validates one unmanage argument and records the detach on m. The
@@ -276,27 +290,42 @@ func planUnmanage(m *types.Manifest, root, key, arg string) (manageAction, error
 		return action, errors.New("root .gitignore cannot be unmanaged; use accept or edit the scbake block manually")
 	}
 
-	baseAbs, err := fileutil.SafePath(root, filepath.FromSlash(action.baseRel))
+	baseAbs, removeBase, err := inspectUnmanageBase(root, key, action.baseRel)
 	if err != nil {
-		return action, fmt.Errorf("invalid base shadow path for %q: %w", key, err)
+		return action, err
 	}
-	if info, statErr := os.Lstat(baseAbs); statErr == nil {
-		if !info.Mode().IsRegular() {
-			return action, fmt.Errorf("committed base for %q is not a regular file; refusing to remove it", key)
-		}
-		action.removeBase = true
-		action.baseAbs = baseAbs
-	} else if !os.IsNotExist(statErr) {
-		return action, fmt.Errorf("failed to inspect committed base for %q: %w", key, statErr)
-	}
-
+	action.baseAbs = baseAbs
+	action.removeBase = removeBase
 	action.alreadyUnmanaged = already && !managed && !action.removeBase
+
 	if managed || !already {
 		delete(m.ManagedFiles, key)
 		delete(m.AcceptedFiles, key)
 		m.UnmanagedFiles = tasks.NormalizeUnmanagedFiles(append(m.UnmanagedFiles, key))
 	}
 	return action, nil
+}
+
+// inspectUnmanageBase resolves and inspects the committed base for key. It
+// returns the absolute base path and whether it is safe to remove. A non-regular
+// base fails closed because removing it could delete a directory or follow a
+// symlink outside the root.
+func inspectUnmanageBase(root, key, baseRel string) (string, bool, error) {
+	baseAbs, err := fileutil.SafePath(root, filepath.FromSlash(baseRel))
+	if err != nil {
+		return "", false, fmt.Errorf("invalid base shadow path for %q: %w", key, err)
+	}
+	info, statErr := os.Lstat(baseAbs)
+	if statErr == nil {
+		if !info.Mode().IsRegular() {
+			return "", false, fmt.Errorf("committed base for %q is not a regular file; refusing to remove it", key)
+		}
+		return baseAbs, true, nil
+	}
+	if !os.IsNotExist(statErr) {
+		return "", false, fmt.Errorf("failed to inspect committed base for %q: %w", key, statErr)
+	}
+	return baseAbs, false, nil
 }
 
 // changed reports whether the action mutates persistent state.
@@ -333,30 +362,47 @@ func removeUnmanagedBases(tx *transaction.Manager, actions []manageAction) error
 // action as a plan, never as a completed mutation.
 func reportManageActions(actions []manageAction, accept, dryRun bool) {
 	for _, action := range actions {
-		switch {
-		case accept && action.alreadyCurrent:
-			fmt.Printf("ℹ️  %s already matches its current baseline\n", action.key)
-		case accept && dryRun && action.cleared:
-			fmt.Printf("Would clear accepted baseline for %s (file matches its recorded hash)\n", action.key)
-		case accept && dryRun:
-			fmt.Printf("Would accept %s (sha256 %s)\n", action.key, shortContentHash(action.hash))
-		case accept && action.cleared:
-			fmt.Printf("✅ Cleared accepted baseline for %s (file matches its recorded hash)\n", action.key)
-		case accept:
-			fmt.Printf("✅ Accepted %s (sha256 %s)\n", action.key, shortContentHash(action.hash))
-		case action.alreadyUnmanaged:
-			fmt.Printf("ℹ️  %s is already unmanaged\n", action.key)
-		case dryRun && action.removeBase:
-			fmt.Printf("Would unmanage %s (remove committed base %s; working file kept)\n",
-				action.key, action.baseRel)
-		case dryRun:
-			fmt.Printf("Would unmanage %s (working file kept)\n", action.key)
-		case action.removeBase:
-			fmt.Printf("✅ Unmanaged %s (removed committed base %s; working file kept)\n",
-				action.key, action.baseRel)
-		default:
-			fmt.Printf("✅ Unmanaged %s (working file kept)\n", action.key)
+		if accept {
+			fmt.Println(describeAcceptAction(action, dryRun))
+			continue
 		}
+		fmt.Println(describeUnmanageAction(action, dryRun))
+	}
+}
+
+// describeAcceptAction phrases one accept result. Dry runs phrase the action as
+// a plan, never as a completed mutation.
+func describeAcceptAction(action manageAction, dryRun bool) string {
+	switch {
+	case action.alreadyCurrent:
+		return fmt.Sprintf("ℹ️  %s already matches its current baseline", action.key)
+	case dryRun && action.cleared:
+		return fmt.Sprintf("Would clear accepted baseline for %s (file matches its recorded hash)", action.key)
+	case dryRun:
+		return fmt.Sprintf("Would accept %s (sha256 %s)", action.key, shortContentHash(action.hash))
+	case action.cleared:
+		return fmt.Sprintf("✅ Cleared accepted baseline for %s (file matches its recorded hash)", action.key)
+	default:
+		return fmt.Sprintf("✅ Accepted %s (sha256 %s)", action.key, shortContentHash(action.hash))
+	}
+}
+
+// describeUnmanageAction phrases one unmanage result, using plan wording for a
+// dry run.
+func describeUnmanageAction(action manageAction, dryRun bool) string {
+	switch {
+	case action.alreadyUnmanaged:
+		return fmt.Sprintf("ℹ️  %s is already unmanaged", action.key)
+	case dryRun && action.removeBase:
+		return fmt.Sprintf("Would unmanage %s (remove committed base %s; working file kept)",
+			action.key, action.baseRel)
+	case dryRun:
+		return fmt.Sprintf("Would unmanage %s (working file kept)", action.key)
+	case action.removeBase:
+		return fmt.Sprintf("✅ Unmanaged %s (removed committed base %s; working file kept)",
+			action.key, action.baseRel)
+	default:
+		return fmt.Sprintf("✅ Unmanaged %s (working file kept)", action.key)
 	}
 }
 

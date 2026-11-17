@@ -142,14 +142,7 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 	}
 
 	// 2. Initialize Transaction Engine
-	if rc.DryRun {
-		// A dry run opens no transaction, but it must not plan against a tree
-		// left half-written by an interrupted run.
-		if err := transaction.CheckPending(rootPath); err != nil {
-			return err
-		}
-	}
-	tx, cleanupTx, err := setupTransaction(rootPath, rc.DryRun, rc.NewProject)
+	tx, cleanupTx, err := prepareRunTransaction(rc, rootPath)
 	if err != nil {
 		return err
 	}
@@ -357,6 +350,18 @@ func filterUnmanagedTasks(plan []types.Task, m *types.Manifest, projectRel strin
 		out = append(out, t)
 	}
 	return out
+}
+
+// prepareRunTransaction initializes the transaction manager for a run. A dry
+// run opens no manager, but it must not plan against a tree left half-written
+// by an interrupted run.
+func prepareRunTransaction(rc RunContext, rootPath string) (*transaction.Manager, func(), error) {
+	if rc.DryRun {
+		if err := transaction.CheckPending(rootPath); err != nil {
+			return nil, nil, err
+		}
+	}
+	return setupTransaction(rootPath, rc.DryRun, rc.NewProject)
 }
 
 // setupTransaction initializes the transaction safety net and returns a cleanup rollback deferral.
