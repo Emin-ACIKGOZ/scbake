@@ -86,14 +86,35 @@ func setIdentity(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_EMAIL", "issue151@example.com")
 }
 
+// writeGlobalConfig replaces the fresh global config file with a [user]
+// section. useConfigOnly stops Git from guessing a missing name or email from
+// the account, host, or environment, so the identity matrix does not depend on
+// the CI machine. extra lines are written verbatim inside the section.
+func writeGlobalConfig(t *testing.T, global string, useConfigOnly bool, extra ...string) {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("[user]\n")
+	if useConfigOnly {
+		b.WriteString("\tuseConfigOnly = true\n")
+	}
+	for _, line := range extra {
+		b.WriteString("\t" + line + "\n")
+	}
+	if err := os.WriteFile(global, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestCheckGitIdentity covers the identity matrix. `git var` is authoritative;
 // these cases are the ones where checking `git config user.name/user.email`
-// would disagree with `git commit`.
+// would disagree with `git commit`. Partial identities are pinned with
+// user.useConfigOnly so Git cannot auto-fill the missing half on some hosts.
 func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy identity matrix
 	requireGit(t)
 
 	t.Run("no identity", func(t *testing.T) {
-		isolateGitEnv(t)
+		global := isolateGitEnv(t)
+		writeGlobalConfig(t, global, true)
 		err := CheckGitIdentity(t.TempDir())
 		if err == nil {
 			t.Fatal("CheckGitIdentity succeeded without an identity")
@@ -140,26 +161,39 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 
 	t.Run("email-only global config", func(t *testing.T) {
 		global := isolateGitEnv(t)
-		if err := os.WriteFile(global, []byte("[user]\n\temail = only@example.com\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := CheckGitIdentity(t.TempDir()); err != nil {
-			t.Fatalf("email-only config should let Git auto-detect a name: %v", err)
+		// useConfigOnly denies Git the account/host fallback, so an email
+		// without a name must fail just like it does on a clean CI machine.
+		writeGlobalConfig(t, global, true, "email = only@example.com")
+		if err := CheckGitIdentity(t.TempDir()); err == nil {
+			t.Fatal("CheckGitIdentity succeeded with an email but no name")
 		}
 	})
 
 	t.Run("name-only global config", func(t *testing.T) {
 		global := isolateGitEnv(t)
-		if err := os.WriteFile(global, []byte("[user]\n\tname = Only Name\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		// useConfigOnly denies Git the host-based fallback email.
+		writeGlobalConfig(t, global, true, "name = Only Name")
 		if err := CheckGitIdentity(t.TempDir()); err == nil {
 			t.Fatal("CheckGitIdentity succeeded with a name but no email")
 		}
 	})
 
+	t.Run("both global config", func(t *testing.T) {
+		global := isolateGitEnv(t)
+		writeGlobalConfig(t, global, true, "name = Both Name", "email = both@example.com")
+		if err := CheckGitIdentity(t.TempDir()); err != nil {
+			t.Fatalf("CheckGitIdentity with a complete global config: %v", err)
+		}
+	})
+
 	t.Run("env-only EMAIL is accepted", func(t *testing.T) {
-		isolateGitEnv(t)
+		global := isolateGitEnv(t)
+		// EMAIL supplies the email; the names come from the environment. The
+		// global config stays empty and auto-detection is left enabled so Git
+		// reads EMAIL rather than a host-derived address.
+		writeGlobalConfig(t, global, false)
+		t.Setenv("GIT_AUTHOR_NAME", "Issue 151")
+		t.Setenv("GIT_COMMITTER_NAME", "Issue 151")
 		t.Setenv("EMAIL", "env@example.com")
 		if err := CheckGitIdentity(t.TempDir()); err != nil {
 			t.Fatalf("EMAIL env var should supply the email: %v", err)
