@@ -797,6 +797,7 @@ func TestDriftReadOnlyWithAcceptedState(t *testing.T) {
 	frozen := freezeAcceptTree(t, project)
 
 	requireDriftClean(t)
+	assertAcceptTreeFrozen(t, project, frozen)
 	mustWrite(t, mainGo, "package main\n\nfunc main() { println(\"drifted\") }\n")
 	// The edit above is intentional, not drift-command output; freeze again.
 	frozen = freezeAcceptTree(t, project)
