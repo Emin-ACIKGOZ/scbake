@@ -371,13 +371,16 @@ equal. `repo/svc` matches only when it already is the target's canonical
 root-relative path (for example, when the manifest root is the parent of
 `repo`). It is inert when the manifest root is `repo` itself and the entry was
 written from that root's parent: the target's canonical path there is `svc`, so
-the entry names nothing. An inert entry makes `update`/`drift --repair` report
-no templates and write nothing. A legacy `"."` is **not** inert: it is
-indistinguishable from a genuine root project, so `update` or `drift --repair`
-run at the root selects it and writes the recorded templates into the
-repository root — creating root files such as `main.go`, `Makefile`,
-`.editorconfig`, and `.github/workflows/main.yml`, overwriting existing files or
-leaving `*.scbake-new` artifacts. Fix such an entry by hand, or re-apply at the
+the entry names nothing. Project and template entries are matched independently,
+so an inert entry only fails the run when it is the only entry naming the
+target: `update`/`drift --repair` then report no templates and write nothing.
+A valid `svc` entry beside an inert `./svc` still selects the target and
+updates normally. A legacy `"."` is **not** inert: it is indistinguishable
+from a genuine root project, so `update` or `drift --repair` run at the root
+selects it and writes the recorded templates into the repository root —
+creating root files such as `main.go`, `Makefile`, `.editorconfig`, and
+`.github/workflows/main.yml`, overwriting existing files or leaving
+`*.scbake-new` artifacts. Fix such an entry by hand, or re-apply at the
 intended target and remove the stale entry. Leave `"."` unchanged when it
 really is the root project.
 
