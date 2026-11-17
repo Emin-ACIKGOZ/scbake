@@ -3,6 +3,7 @@ package templateregistry
 import (
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 // ResolveCacheEntry checks the registry cache for a template file belonging to
@@ -20,12 +21,12 @@ import (
 // Names that are not safe single path segments are ignored.
 //
 // Precedence is explicit and deterministic: registries are visited in the order
-// they were added to the config, as recorded in the cache's order file. This is
-// independent of the registry name, so an alphabetically earlier registry does
-// not silently shadow a later one. Registries not present in the order file are
-// visited in lexical order after the recorded ones. If the order file is
-// missing (for example a cache written before it existed), the fallback is
-// lexical order, matching the previous behavior.
+// they appear in registries, which the caller builds from the config in
+// insertion order. This is independent of the registry name, so an
+// alphabetically earlier registry does not silently shadow a later one. The
+// cache's .registry-order.json file is deliberately ignored: it is still
+// written for older binaries, but it must not override the running process's
+// configured order.
 //
 // It only consults the verified per-template layouts
 // <registry>/<templateName>/<cleanPath> and, for an archive with a single
@@ -49,48 +50,79 @@ import (
 // file could otherwise be planted locally and rendered, defeating the manifest
 // check.
 func ResolveCacheEntry(cacheDir, templateName, tplPath string, registries []string) (cachePath, registryName string) {
-	if cacheDir == "" || templateName == "" {
-		return "", ""
-	}
-	if ValidateName(templateName) != nil {
+	if cacheDir == "" || ValidateName(templateName) != nil {
 		return "", ""
 	}
 
-	allowed := make(map[string]struct{}, len(registries))
-	for _, name := range registries {
-		if ValidateName(name) != nil {
-			continue
-		}
-		allowed[name] = struct{}{}
-	}
-	if len(allowed) == 0 {
+	order, ok := allowedRegistryOrder(registries)
+	if !ok {
 		return "", ""
 	}
 
-	entries, err := os.ReadDir(cacheDir)
+	dirs, err := eligibleRegistryDirs(cacheDir, order)
 	if err != nil {
 		return "", ""
 	}
 
-	registryDirs := make([]string, 0, len(allowed))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		if _, ok := allowed[entry.Name()]; !ok {
-			continue
-		}
-		registryDirs = append(registryDirs, entry.Name())
-	}
-
 	cleanPath := filepath.Clean(tplPath)
-	for _, registryDir := range orderRegistries(cacheDir, registryDirs) {
+	for _, registryDir := range dirs {
 		if found := resolveInRegistry(cacheDir, registryDir, templateName, cleanPath); found != "" {
 			return found, registryDir
 		}
 	}
 
 	return "", ""
+}
+
+// allowedRegistryOrder maps each valid configured registry name to its position
+// in registries. The first occurrence of a duplicated name wins, so the map
+// rank matches the caller's configured precedence. It reports false when no
+// valid name remains, which disables the registry tier (fail closed).
+func allowedRegistryOrder(registries []string) (map[string]int, bool) {
+	order := make(map[string]int, len(registries))
+	for _, name := range registries {
+		if ValidateName(name) != nil {
+			continue
+		}
+		if _, seen := order[name]; seen {
+			continue
+		}
+		order[name] = len(order)
+	}
+	return order, len(order) > 0
+}
+
+// eligibleRegistryDirs returns the cached registry directories that are
+// configured, ordered by their rank in the configured allowlist. Directories
+// that are not configured (including .evict-* staging paths) are discarded
+// before any content is read.
+func eligibleRegistryDirs(cacheDir string, order map[string]int) ([]string, error) {
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		return nil, err
+	}
+
+	dirs := make([]string, 0, len(order))
+	for _, entry := range entries {
+		if !entry.IsDir() || !registryEligible(entry.Name(), order) {
+			continue
+		}
+		dirs = append(dirs, entry.Name())
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		return order[dirs[i]] < order[dirs[j]]
+	})
+	return dirs, nil
+}
+
+// registryEligible reports whether a cached directory name may be consulted. A
+// name is eligible only when it was a valid configured registry name, so an
+// unconfigured or unsafe directory is never read.
+func registryEligible(name string, order map[string]int) bool {
+	if _, ok := order[name]; !ok {
+		return false
+	}
+	return ValidateName(name) == nil
 }
 
 // resolveInRegistry returns the verified path of cleanPath within the requested

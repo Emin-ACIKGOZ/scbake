@@ -62,28 +62,28 @@ func TestIssue138_ResolverEmptyAllowlistFailsClosed(t *testing.T) {
 	}
 }
 
-// TestIssue138_ResolverOrderFilePrecedence resolves among multiple configured
-// registries using the recorded order, and reports the supplying registry.
-func TestIssue138_ResolverOrderFilePrecedence(t *testing.T) {
+// TestIssue138_ResolverConfigOrderPrecedence resolves among multiple configured
+// registries in the configured order and reports the supplying registry. The
+// cache's order file must not override the configured order, even when the two
+// disagree.
+func TestIssue138_ResolverConfigOrderPrecedence(t *testing.T) {
 	cacheDir := t.TempDir()
 	alpha := issue138SeedEntry(t, cacheDir, "alpha", "go-api", "main.go.tpl", "from alpha")
 	zeta := issue138SeedEntry(t, cacheDir, "zeta", "go-api", "main.go.tpl", "from zeta")
 
-	// Lexical order would pick alpha; the order file must pick zeta.
+	// The order file prefers zeta, but the allowlist prefers alpha: the
+	// configured order wins.
 	issue138WriteOrder(t, cacheDir, "zeta", "alpha")
 
 	got, registry := ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", []string{"alpha", "zeta"})
-	if got != zeta || registry != "zeta" {
-		t.Errorf("order-file precedence: got (%q, %q), want (%q, %q)", got, registry, zeta, "zeta")
+	if got != alpha || registry != "alpha" {
+		t.Errorf("configured-order precedence: got (%q, %q), want (%q, %q)", got, registry, alpha, "alpha")
 	}
 
-	// Without an order file, precedence falls back to lexical order.
-	if err := os.Remove(filepath.Join(cacheDir, registryOrderFileName)); err != nil {
-		t.Fatalf("removing order file: %v", err)
-	}
+	// Reversing the allowlist reverses precedence, still ignoring the order file.
 	got, registry = ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", []string{"zeta", "alpha"})
-	if got != alpha || registry != "alpha" {
-		t.Errorf("lexical fallback precedence: got (%q, %q), want (%q, %q)", got, registry, alpha, "alpha")
+	if got != zeta || registry != "zeta" {
+		t.Errorf("reversed allowlist precedence: got (%q, %q), want (%q, %q)", got, registry, zeta, "zeta")
 	}
 }
 

@@ -371,9 +371,10 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir, templateName, registri
     │
     ├── 2. registryCacheDir (~/.cache/scbake/templates/)
     │      Second check: pulled template archives
-    │      Searches only registries listed in registries.json, in
-    │      precedence order; an unconfigured cache directory is never read
-    │      (nil/empty configured set disables this tier)
+    │      Searches only registries listed in registries.json, in the
+    │      order they are configured; a cache order file is ignored, and
+    │      an unconfigured cache directory is never read (nil/empty
+    │      configured set disables this tier)
     │      Found → return immediately
     │      Not found → fall through
     │

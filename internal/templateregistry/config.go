@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 )
@@ -309,21 +308,18 @@ func (m *Manager) save() error {
 	if err := os.WriteFile(m.configPath, data, configFilePerm); err != nil {
 		return fmt.Errorf("writing registry config: %w", err)
 	}
-	// Best effort: record the registry insertion order next to the cache so the
-	// resolver can apply an explicit, deterministic precedence. If this cannot
-	// be written, resolution falls back to a sorted order rather than failing
-	// the config change. The order file only ranks configured registries; it
-	// cannot make an unconfigured cache directory eligible. It is retained for
-	// mixed-version compatibility with binaries that predate config-derived
-	// membership.
+	// Best effort: record the registry insertion order next to the cache for
+	// older binaries that predate config-derived membership and still read it.
+	// The current resolver ignores this file and follows the running process's
+	// configured order. If writing fails, the config change still succeeds.
 	_ = m.writeRegistryOrder()
 	return nil
 }
 
 // registryOrderFileName is the file, stored at the root of the template cache,
-// that records the order in which registries were added. The resolver reads it
-// to give the first-added registry precedence when several cached registries
-// provide the same template.
+// that records the order in which registries were added. It is retained for
+// mixed-version compatibility: older binaries use it for precedence, but the
+// current resolver derives order from the configured registries slice instead.
 const registryOrderFileName = ".registry-order.json"
 
 // registryOrder is the on-disk representation of the registry precedence order.
@@ -333,7 +329,7 @@ type registryOrder struct {
 
 // writeRegistryOrder persists the current registry insertion order next to the
 // cache. It is best effort; callers ignore the error so a cache-side write
-// failure never blocks a config change.
+// failure never blocks a config change. Only older binaries read it.
 func (m *Manager) writeRegistryOrder() error {
 	if m.cacheDir == "" {
 		return nil
@@ -353,7 +349,8 @@ func (m *Manager) writeRegistryOrder() error {
 }
 
 // readRegistryOrder loads the recorded registry precedence order, or nil when it
-// is absent or unreadable.
+// is absent or unreadable. The current resolver no longer consults it; it is
+// kept for mixed-version compatibility and diagnostics.
 func readRegistryOrder(cacheDir string) []string {
 	//nolint:gosec // path is derived from the cache root, not user input
 	data, err := os.ReadFile(filepath.Join(cacheDir, registryOrderFileName))
@@ -365,40 +362,6 @@ func readRegistryOrder(cacheDir string) []string {
 		return nil
 	}
 	return o.Registries
-}
-
-// orderRegistries returns registry directory names in precedence order: the
-// order the registries were added, as recorded in the cache's order file.
-// Directories absent from the order file are appended in lexical order so the
-// result is always deterministic. When no order file exists it falls back to
-// lexical order.
-func orderRegistries(cacheDir string, dirs []string) []string {
-	order := readRegistryOrder(cacheDir)
-	if len(order) == 0 {
-		sort.Strings(dirs)
-		return dirs
-	}
-	rank := make(map[string]int, len(order))
-	for i, name := range order {
-		if _, seen := rank[name]; !seen {
-			rank[name] = i
-		}
-	}
-	sort.SliceStable(dirs, func(i, j int) bool {
-		ri, iKnown := rank[dirs[i]]
-		rj, jKnown := rank[dirs[j]]
-		switch {
-		case iKnown && jKnown:
-			return ri < rj
-		case iKnown:
-			return true
-		case jKnown:
-			return false
-		default:
-			return dirs[i] < dirs[j]
-		}
-	})
-	return dirs
 }
 
 // Add registers a new registry with optional token, version, and subdirectory.
