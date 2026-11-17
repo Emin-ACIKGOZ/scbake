@@ -54,6 +54,9 @@ jobs:
 
       # --- Conditional Build Steps per Project ---
       - name: Build and Test All Projects
+        {{- if eq (index .Metadata "runner_os" | default "ubuntu-latest") "windows-latest" }}
+        shell: bash
+        {{- end }}
         run: |
           echo "Starting monorepo build..."
           

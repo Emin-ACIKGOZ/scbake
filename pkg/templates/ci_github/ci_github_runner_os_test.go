@@ -13,11 +13,12 @@ import (
 // TestWorkflow_RunnerOSRenders covers the ci_github consumer for #140.
 func TestWorkflow_RunnerOSRenders(t *testing.T) {
 	cases := []struct {
-		name     string
-		metadata map[string]string
-		want     string
+		name      string
+		metadata  map[string]string
+		want      string
+		wantShell bool
 	}{
-		{name: "windows", metadata: map[string]string{"runner_os": "windows-latest"}, want: "\n    runs-on: windows-latest\n"},
+		{name: "windows", metadata: map[string]string{"runner_os": "windows-latest"}, want: "\n    runs-on: windows-latest\n", wantShell: true},
 		{name: "ubuntu", metadata: map[string]string{"runner_os": "ubuntu-latest"}, want: "\n    runs-on: ubuntu-latest\n"},
 		{name: "macos", metadata: map[string]string{"runner_os": "macos-latest"}, want: "\n    runs-on: macos-latest\n"},
 		{name: "nil_metadata", metadata: nil, want: "\n    runs-on: ubuntu-latest\n"},
@@ -35,6 +36,10 @@ func TestWorkflow_RunnerOSRenders(t *testing.T) {
 			}
 			if strings.Contains(out, `runs-on: "`) {
 				t.Errorf("runs-on must stay an unquoted scalar:\n%s", out)
+			}
+			wantShell := "\n        shell: bash\n        run: |"
+			if got := strings.Contains(out, wantShell); got != tc.wantShell {
+				t.Errorf("shell: bash present = %v, want %v:\n%s", got, tc.wantShell, out)
 			}
 		})
 	}

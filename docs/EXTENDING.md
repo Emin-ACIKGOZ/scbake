@@ -495,6 +495,11 @@ later `apply` unless `--set` is given again. This keeps schema defaults (which
 are persisted in `[metadata]`) from silently overriding toolchain or project
 state.
 
+**Template handlers** are different: every render re-reads the effective inputs
+from `.Metadata` (persisted explicit values plus schema defaults), so a later
+`update` rewrites the output to match the recorded values. For example, editing
+`runner_os` in `[metadata]` and running `update` rewrites `runs-on`.
+
 The Go language pack consumes `module_path` (new modules only; an existing
 module with a different path is an error, never a rewrite) and `go_version`
 (new modules and explicitly updated ones). An explicit version is also passed to
@@ -503,6 +508,8 @@ requirement fails the run instead of leaving `go.mod` and recorded metadata
 disagreeing. The comparison includes the patch component: a project or dependency
 that requires `go 1.24.0` is not satisfied by a requested `1.24`, so name the
 full version (`1.24.0`) when the requirement carries a patch.
+The `ci_github` template consumes `runner_os` at render time and emits
+`shell: bash` for the Windows runner, whose default shell is PowerShell.
 `build_tool` in the `makefile` template is the documented record-only example:
 it is validated and stored but intentionally has no consumer.
 
