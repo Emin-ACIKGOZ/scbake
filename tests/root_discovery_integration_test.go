@@ -21,7 +21,7 @@ func skipIfAncestorHasMarker(tb testing.TB, fixtureRoot string) {
 	for dir := filepath.Dir(fixtureRoot); ; {
 		for _, name := range []string{fileutil.ManifestFileName, fileutil.GitDir} {
 			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-				tb.Skipf("fixture root %q is inside a project (%s); cannot build a marker-less fixture",
+				tb.Skipf("fixture root %q is inside a project (%s); cannot build a marker-less fixture (set TMPDIR outside the repository)",
 					fixtureRoot, filepath.Join(dir, name))
 			}
 		}

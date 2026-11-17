@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"scbake/internal/util/fileutil"
 	"strconv"
 	"strings"
 	"testing"
@@ -68,6 +69,39 @@ func requireGit(t *testing.T) {
 	}
 }
 
+// skipIfAncestorHasGitMarker keeps a fresh-target fixture meaningful when
+// TMPDIR itself lives inside a Git repository (for example TMPDIR=$PWD/.tmp).
+// GitSkipReason's marker fallback walks lexically past GIT_CEILING_DIRECTORIES,
+// so such an environment cannot represent "no .git anywhere above"; skip with
+// a clear reason instead of asserting the wrong policy. It checks the ancestors
+// of fixtureRoot, not fixtureRoot itself, so a fixture may create its own .git.
+func skipIfAncestorHasGitMarker(tb testing.TB, fixtureRoot string) {
+	tb.Helper()
+	for dir := filepath.Dir(fixtureRoot); ; {
+		marker := filepath.Join(dir, fileutil.GitDir)
+		if _, err := os.Stat(marker); err == nil {
+			tb.Skipf("fixture root %q is inside a Git repository (%s); cannot build a marker-less fresh target (set TMPDIR outside the repository)", fixtureRoot, marker)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
+	}
+}
+
+// gitIdentityProbeDir returns a fresh probe directory and hides any repository
+// above it from `git var`. The ceiling must be the parent, not dir itself: Git
+// ignores a ceiling equal to the starting directory and would still read the
+// ancestor repository's user.name/user.email. isolateGitEnv clears
+// GIT_CEILING_DIRECTORIES, so call this after it.
+func gitIdentityProbeDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	return dir
+}
+
 func execGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	//nolint:gosec // fixed test helper
@@ -115,7 +149,7 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 	t.Run("no identity", func(t *testing.T) {
 		global := isolateGitEnv(t)
 		writeGlobalConfig(t, global, true)
-		err := CheckGitIdentity(t.TempDir())
+		err := CheckGitIdentity(gitIdentityProbeDir(t))
 		if err == nil {
 			t.Fatal("CheckGitIdentity succeeded without an identity")
 		}
@@ -128,7 +162,7 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 	t.Run("both env identities", func(t *testing.T) {
 		isolateGitEnv(t)
 		setIdentity(t)
-		if err := CheckGitIdentity(t.TempDir()); err != nil {
+		if err := CheckGitIdentity(gitIdentityProbeDir(t)); err != nil {
 			t.Fatalf("CheckGitIdentity with a full environment identity: %v", err)
 		}
 	})
@@ -139,7 +173,7 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 		writeGlobalConfig(t, global, true)
 		t.Setenv("GIT_AUTHOR_NAME", "Issue 151")
 		t.Setenv("GIT_AUTHOR_EMAIL", "issue151@example.com")
-		err := CheckGitIdentity(t.TempDir())
+		err := CheckGitIdentity(gitIdentityProbeDir(t))
 		if err == nil {
 			t.Fatal("CheckGitIdentity succeeded with only an author identity")
 		}
@@ -154,7 +188,7 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 		writeGlobalConfig(t, global, true)
 		t.Setenv("GIT_COMMITTER_NAME", "Issue 151")
 		t.Setenv("GIT_COMMITTER_EMAIL", "issue151@example.com")
-		err := CheckGitIdentity(t.TempDir())
+		err := CheckGitIdentity(gitIdentityProbeDir(t))
 		if err == nil {
 			t.Fatal("CheckGitIdentity succeeded with only a committer identity")
 		}
@@ -168,7 +202,7 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 		// useConfigOnly denies Git the account/host fallback, so an email
 		// without a name must fail just like it does on a clean CI machine.
 		writeGlobalConfig(t, global, true, "email = only@example.com")
-		if err := CheckGitIdentity(t.TempDir()); err == nil {
+		if err := CheckGitIdentity(gitIdentityProbeDir(t)); err == nil {
 			t.Fatal("CheckGitIdentity succeeded with an email but no name")
 		}
 	})
@@ -177,7 +211,7 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 		global := isolateGitEnv(t)
 		// useConfigOnly denies Git the host-based fallback email.
 		writeGlobalConfig(t, global, true, "name = Only Name")
-		if err := CheckGitIdentity(t.TempDir()); err == nil {
+		if err := CheckGitIdentity(gitIdentityProbeDir(t)); err == nil {
 			t.Fatal("CheckGitIdentity succeeded with a name but no email")
 		}
 	})
@@ -185,7 +219,7 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 	t.Run("both global config", func(t *testing.T) {
 		global := isolateGitEnv(t)
 		writeGlobalConfig(t, global, true, "name = Both Name", "email = both@example.com")
-		if err := CheckGitIdentity(t.TempDir()); err != nil {
+		if err := CheckGitIdentity(gitIdentityProbeDir(t)); err != nil {
 			t.Fatalf("CheckGitIdentity with a complete global config: %v", err)
 		}
 	})
@@ -199,7 +233,7 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 		t.Setenv("GIT_AUTHOR_NAME", "Issue 151")
 		t.Setenv("GIT_COMMITTER_NAME", "Issue 151")
 		t.Setenv("EMAIL", "env@example.com")
-		if err := CheckGitIdentity(t.TempDir()); err != nil {
+		if err := CheckGitIdentity(gitIdentityProbeDir(t)); err != nil {
 			t.Fatalf("EMAIL env var should supply the email: %v", err)
 		}
 	})
@@ -208,7 +242,7 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 		isolateGitEnv(t)
 		setIdentity(t)
 		t.Setenv("GIT_AUTHOR_DATE", "not-a-date")
-		err := CheckGitIdentity(t.TempDir())
+		err := CheckGitIdentity(gitIdentityProbeDir(t))
 		if err == nil {
 			t.Fatal("CheckGitIdentity succeeded with an invalid GIT_AUTHOR_DATE")
 		}
@@ -225,7 +259,7 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 		binDir := t.TempDir()
 		writeFakeGit(t, binDir, "", 0)
 		t.Setenv("PATH", binDir)
-		err := CheckGitIdentity(t.TempDir())
+		err := CheckGitIdentity(gitIdentityProbeDir(t))
 		if err == nil {
 			t.Fatal("CheckGitIdentity accepted empty stdout with exit 0")
 		}
@@ -237,7 +271,7 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 	t.Run("missing git binary", func(t *testing.T) {
 		isolateGitEnv(t)
 		t.Setenv("PATH", t.TempDir())
-		err := CheckGitIdentity(t.TempDir())
+		err := CheckGitIdentity(gitIdentityProbeDir(t))
 		if err == nil {
 			t.Fatal("CheckGitIdentity succeeded without a git binary")
 		}
@@ -294,6 +328,7 @@ func TestGitSkipReason(t *testing.T) { //nolint:cyclop // one branch per skip pr
 	t.Run("plain directory", func(t *testing.T) {
 		isolateGitEnv(t)
 		root := t.TempDir()
+		skipIfAncestorHasGitMarker(t, root)
 		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(root))
 		if reason := GitSkipReason(root); reason != "" {
 			t.Errorf("GitSkipReason(plain dir) = %q, want empty", reason)
@@ -494,6 +529,7 @@ func TestGitSkipReason(t *testing.T) { //nolint:cyclop // one branch per skip pr
 	t.Run("bare repository is a documented edge", func(t *testing.T) {
 		isolateGitEnv(t)
 		root := t.TempDir()
+		skipIfAncestorHasGitMarker(t, root)
 		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(root))
 		bare := filepath.Join(root, "bare.git")
 		execGit(t, root, "init", "--bare", "-q", bare)

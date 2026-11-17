@@ -36,6 +36,29 @@ func resetFlags() {
 	pullRegistryName = ""
 }
 
+// skipIfAncestorHasMarker keeps a marker-less fixture meaningful when TMPDIR
+// itself lives inside a project (for example TMPDIR=$PWD/.tmp). Such an
+// environment cannot represent "no .git or scbake.toml anywhere above"; skip
+// with a clear reason instead of asserting the wrong policy. It checks the
+// ancestors of fixtureRoot, not fixtureRoot itself, so a fixture may create its
+// own marker.
+func skipIfAncestorHasMarker(tb testing.TB, fixtureRoot string) {
+	tb.Helper()
+	for dir := filepath.Dir(fixtureRoot); ; {
+		for _, name := range []string{fileutil.ManifestFileName, fileutil.GitDir} {
+			marker := filepath.Join(dir, name)
+			if _, err := os.Stat(marker); err == nil {
+				tb.Skipf("fixture root %q is inside a project (%s); cannot build a marker-less fixture (set TMPDIR outside the repository)", fixtureRoot, marker)
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
+	}
+}
+
 // executeCLI simulates command invocation by setting args on the root Cobra command.
 func executeCLI(args ...string) error {
 	rootCmd.SetArgs(args)
@@ -280,6 +303,7 @@ func TestNew_EndToEnd_Success(t *testing.T) {
 	resetFlags()
 
 	tmpDir := t.TempDir()
+	skipIfAncestorHasMarker(t, tmpDir)
 	binDir := filepath.Join(tmpDir, "bin")
 	_ = os.Mkdir(binDir, fileutil.DirPerms)
 	createMockGitScript(t, binDir, false)
@@ -309,6 +333,7 @@ func TestNew_CommitFailure_CleansDirectory(t *testing.T) {
 	resetFlags()
 
 	tmpDir := t.TempDir()
+	skipIfAncestorHasMarker(t, tmpDir)
 	binDir := filepath.Join(tmpDir, "bin")
 	_ = os.Mkdir(binDir, fileutil.DirPerms)
 	createMockGitScript(t, binDir, true)

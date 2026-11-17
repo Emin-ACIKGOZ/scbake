@@ -48,6 +48,7 @@ func TestCloneMergeParity(t *testing.T) { //nolint:cyclop // assertion-heavy clo
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			work := t.TempDir()
+			skipIfAncestorHasMarker(t, work)
 			t.Chdir(work)
 
 			overrideDir := filepath.Join(work, "overrides")

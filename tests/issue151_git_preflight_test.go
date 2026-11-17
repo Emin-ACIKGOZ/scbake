@@ -144,6 +144,7 @@ func issue151FixtureRepo(t *testing.T, workDir string) string {
 // Base creates the directory, writes files, then fails at the commit.
 func TestIssue151NewFailsBeforeCreatingDirectory(t *testing.T) {
 	work := t.TempDir()
+	skipIfAncestorHasMarker(t, work)
 	env := issue151Env(t, work, false)
 
 	output, err := runIssue151(t, work, env, "new", "demo", "--with", "editorconfig,git")
@@ -180,6 +181,7 @@ func TestIssue151NewFailsBeforeCreatingDirectory(t *testing.T) {
 // exits 0 and prints "[DRY RUN] Create initial commit".
 func TestIssue151NewDryRunFailsMissingIdentity(t *testing.T) {
 	work := t.TempDir()
+	skipIfAncestorHasMarker(t, work)
 	env := issue151Env(t, work, false)
 
 	output, err := runIssue151(t, work, env, "new", "demo", "--with", "git", "--dry-run")
