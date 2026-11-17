@@ -128,6 +128,66 @@ func TestCreateTemplateTask_DryRun(t *testing.T) {
 	}
 }
 
+func TestCreateTemplateTask_DryRunNestedUnderMissingTarget(t *testing.T) {
+	root := t.TempDir()
+	// The target directory itself does not exist yet, so every parent of the
+	// output is missing too.
+	target := filepath.Join(root, "missing-target")
+
+	manifest := &types.Manifest{
+		SbakeVersion: "v1.0.0",
+		Projects:     []types.Project{{Name: "DryRunNested"}},
+	}
+	tc := types.TaskContext{
+		TargetPath: target,
+		Manifest:   manifest,
+		DryRun:     true,
+	}
+
+	task := &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/simple.tpl",
+		OutputPath:   filepath.Join("nested", "dir", "output.txt"),
+		Desc:         "Dry-run nested template",
+		TaskPrio:     100,
+	}
+
+	if err := task.Execute(tc); err != nil {
+		t.Fatalf("Execute() with DryRun failed: %v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created target directory %q", target)
+	}
+	if _, err := os.Stat(filepath.Join(target, "nested")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created nested output under %q", target)
+	}
+}
+
+func TestCreateTemplateTask_DryRunPreservesTraversalErrors(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "missing-target")
+
+	tc := types.TaskContext{
+		TargetPath: target,
+		Manifest:   &types.Manifest{SbakeVersion: "v1.0.0"},
+		DryRun:     true,
+	}
+	task := &CreateTemplateTask{
+		TemplateFS:   testTemplates,
+		TemplatePath: "testdata/simple.tpl",
+		OutputPath:   "../escaped.txt",
+		Desc:         "Dry-run traversal",
+		TaskPrio:     100,
+	}
+
+	if err := task.Execute(tc); err == nil {
+		t.Fatal("dry-run accepted an output path outside the target")
+	}
+	if _, err := os.Stat(filepath.Join(root, "escaped.txt")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created %q", filepath.Join(root, "escaped.txt"))
+	}
+}
+
 func TestCreateTemplateTask_ConflictStrategyOverwrite(t *testing.T) {
 	tmpDir := t.TempDir()
 

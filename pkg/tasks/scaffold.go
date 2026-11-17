@@ -76,7 +76,7 @@ func (t *ScaffoldTask) Priority() int { return t.TaskPrio }
 // exist yet (for example `new <project> --dry-run`), and its outcome cannot be
 // previewed without running the generator. Reporting a failure here would be a
 // false negative that the real run never hits.
-func (t *ScaffoldTask) Validate(tc types.TaskContext) error { return nil }
+func (t *ScaffoldTask) Validate(_ types.TaskContext) error { return nil }
 
 // Execute stages the scaffold, validates its sentinel, preflights every
 // destination, tracks the output, and only then moves it into the target.

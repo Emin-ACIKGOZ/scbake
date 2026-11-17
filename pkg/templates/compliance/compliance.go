@@ -139,12 +139,22 @@ func licenseRender(tc types.TaskContext) (text string, skip bool, err error) {
 	return fillLicensePlaceholders(text, year, holders), false, nil
 }
 
-// Validate checks compliance metadata, license resolution, and the
-// update-current decision without writing. It never repairs the base shadow:
-// that is a write and belongs to Execute.
+// Validate checks compliance metadata, license resolution, and the managed-file
+// reconciliation decision without writing. It shares licenseRender and
+// tasks.ValidateManagedFile with Execute, so an unmanaged or drifted LICENSE
+// fails in a dry run exactly as it does in a real run.
 func (t *LicenseTask) Validate(tc types.TaskContext) error {
-	_, _, err := licenseRender(tc)
-	return err
+	text, skip, err := licenseRender(tc)
+	if err != nil {
+		return err
+	}
+	if skip {
+		// The update path only repairs the pristine base shadow from the
+		// current bytes; that is a write and real-run-only. The skip decision
+		// itself already read the managed file successfully.
+		return nil
+	}
+	return tasks.ValidateManagedFile(tc, "LICENSE", []byte(text))
 }
 
 // Execute performs the license generation task.

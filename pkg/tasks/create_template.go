@@ -401,9 +401,31 @@ func decideManagedFile(tc types.TaskContext, absPath, outputRelPath string, cont
 	}, nil
 }
 
+// ValidateManagedFile reports whether a managed-file write would fail before
+// writing, using the same resolution and reconciliation decision as
+// WriteManagedFile. It is read-only: it never creates directories, tracks
+// paths, writes files, or repairs the pristine base shadow.
+//
+// Tasks outside this package that own a managed file (for example the
+// compliance LICENSE task) call it so their Validate matches the real run.
+func ValidateManagedFile(tc types.TaskContext, outputRelPath string, content []byte) error {
+	absPath, err := resolveTaskPath(tc.TargetPath, outputRelPath, "output")
+	if err != nil {
+		return err
+	}
+	_, err = decideManagedFile(tc, absPath, outputRelPath, content)
+	return err
+}
+
 // WriteManagedFile performs state-aware reconciliation, transaction tracking,
 // safe file writing, and manifest state updating for a generated file.
 func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte, perm os.FileMode) error {
+	// A dry run must not create the parent directory. ValidateManagedFile is
+	// the exact read-only half of this function.
+	if tc.DryRun {
+		return ValidateManagedFile(tc, outputRelPath, content)
+	}
+
 	absPath, err := checkFilePreconditions(tc, outputRelPath, tc.TargetPath)
 	if err != nil {
 		return err
@@ -417,10 +439,6 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 	writePath, override := decision.writePath, decision.override
 	if writePath == "" {
 		return nil // Skip (keep-local, unchanged, or a no-op)
-	}
-
-	if tc.DryRun {
-		return nil
 	}
 
 	// Idempotent artifact: a repeated conflict must not rewrite a side artifact
@@ -1030,18 +1048,13 @@ func (t *CreateTemplateTask) render(tc types.TaskContext) ([]byte, error) {
 
 // Validate resolves, renders, and reconciles the template without creating
 // directories, tracking, writing, or mutating the ledger. It shares render and
-// decideManagedFile with Execute, so the preview reports the real decision.
+// ValidateManagedFile with Execute, so the preview reports the real decision.
 func (t *CreateTemplateTask) Validate(tc types.TaskContext) error {
 	content, err := t.render(tc)
 	if err != nil {
 		return err
 	}
-	absPath, err := resolveTaskPath(tc.TargetPath, t.OutputPath, "output")
-	if err != nil {
-		return err
-	}
-	_, err = decideManagedFile(tc, absPath, t.OutputPath, content)
-	return err
+	return ValidateManagedFile(tc, t.OutputPath, content)
 }
 
 // Execute performs the template creation task.
