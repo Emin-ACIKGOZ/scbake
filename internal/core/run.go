@@ -95,6 +95,12 @@ type manifestChanges struct {
 
 // RunApply orchestrates the template application process.
 func RunApply(rc RunContext, reporter types.Reporter) error {
+	// Git prerequisites are checked before the root lock so a missing identity
+	// or a skip decision fails before lock acquisition creates .scbake. The
+	// check is read-only and needs only the target path.
+	if err := preflightGit(rc); err != nil {
+		return err
+	}
 	return withRootLock(rc, func() error {
 		return runApply(rc, reporter)
 	})
@@ -145,13 +151,9 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 		return fmt.Errorf("could not determine project path: %w", err)
 	}
 
-	// Git identity is an execution prerequisite, not a task. Check it before
-	// the transaction creates any state so a missing identity cannot leave a
-	// half-written project or a stray .git behind. Nested work trees are
-	// skipped instead: the git template must not initialize a repository there.
-	if err := preflightGit(rc); err != nil {
-		return err
-	}
+	// Git identity and skip preflight ran in RunApply before the root lock so
+	// acquisition cannot leave .scbake behind on a prerequisite failure.
+	// `update` only reconciles managed files and never initializes a repository.
 
 	// 2. Initialize Transaction Engine
 	tx, cleanupTx, err := prepareRunTransaction(rc, rootPath)
