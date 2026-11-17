@@ -19,6 +19,18 @@ type Manifest struct {
 	// root (e.g. "services/api/LICENSE"), so monorepo subprojects that generate
 	// the same relative filename get distinct entries instead of colliding.
 	ManagedFiles map[string]string `toml:"managed_files,omitempty"`
+	// AcceptedFiles records a user-accepted working-tree baseline for a
+	// managed path, keyed the same way as ManagedFiles. The managed_files hash
+	// stays the pristine template render so update, merge, and the committed
+	// base keep using it; only the drift comparison against the working tree
+	// uses the accepted hash. Accepted keys are a subset of ManagedFiles.
+	AcceptedFiles map[string]string `toml:"accepted_files,omitempty"`
+	// UnmanagedFiles lists root-relative paths detached from scbake. Drift
+	// ignores them (they are no longer in ManagedFiles) and update/repair must
+	// not replay a managed writer for them. The list is kept sorted and
+	// deduplicated; an explicit apply --force is the only path that re-manages
+	// a key and removes it from this list.
+	UnmanagedFiles []string `toml:"unmanaged_files,omitempty"`
 }
 
 // Project represents a distinct code unit, like a Go backend or a React frontend.
@@ -43,11 +55,13 @@ func (m *Manifest) DeepCopy() *Manifest {
 	}
 
 	result := &Manifest{
-		SbakeVersion: m.SbakeVersion,
-		Projects:     make([]Project, len(m.Projects)),
-		Templates:    make([]Template, len(m.Templates)),
-		Metadata:     make(map[string]string),
-		ManagedFiles: make(map[string]string),
+		SbakeVersion:   m.SbakeVersion,
+		Projects:       make([]Project, len(m.Projects)),
+		Templates:      make([]Template, len(m.Templates)),
+		Metadata:       make(map[string]string),
+		ManagedFiles:   make(map[string]string),
+		AcceptedFiles:  make(map[string]string),
+		UnmanagedFiles: append([]string(nil), m.UnmanagedFiles...),
 	}
 
 	// Deep copy metadata
@@ -58,6 +72,11 @@ func (m *Manifest) DeepCopy() *Manifest {
 	// Deep copy managed files
 	for k, v := range m.ManagedFiles {
 		result.ManagedFiles[k] = v
+	}
+
+	// Deep copy accepted baselines
+	for k, v := range m.AcceptedFiles {
+		result.AcceptedFiles[k] = v
 	}
 
 	// Deep copy projects

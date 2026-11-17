@@ -15,6 +15,7 @@ import (
 	"scbake/internal/merge"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
+	"sort"
 	"strings"
 	"text/template"
 )
@@ -124,6 +125,11 @@ func (t *CreateTemplateTask) Priority() int {
 // WritesManagedFile marks this task as safe to replay during update/repair: it
 // reconciles a path recorded in the managed_files ledger.
 func (t *CreateTemplateTask) WritesManagedFile() bool { return true }
+
+// ManagedOutputPath returns the target-relative path this task writes. The plan
+// filter joins it with the project's root-relative path to compare against
+// unmanaged_files before any task runs, so dry-run and the real run agree.
+func (t *CreateTemplateTask) ManagedOutputPath() string { return t.OutputPath }
 
 // HashContent calculates the SHA-256 hash of the given bytes after normalizing
 // text line endings. CRLF and LF therefore hash identically, which keeps the
@@ -235,11 +241,21 @@ func checkReconciliation(
 		return p, nil, cErr
 	}
 
+	// An accepted baseline is a local working-tree baseline for the current
+	// template render. It only suppresses a rewrite while the worktree still
+	// equals the accepted hash and the template still renders the pristine
+	// hash. A later edit (existingHash != accepted) or a template change
+	// (newContentHash != originalHash) falls through to normal conflict
+	// handling, and overwrite always writes.
+	if acceptedBaselineSuppressesWrite(tc, ledgerKey, existingHash, newContentHash, originalHash) {
+		return "", nil, nil
+	}
+
 	// The template has not changed since we recorded this file. For the merge
 	// strategy there is nothing to apply regardless of local edits, which is
 	// what makes a second `update` a no-op. Other strategies keep the historic
 	// behavior of surfacing drift.
-	if newContentHash == originalHash && tc.ConflictStrategy == types.ConflictMerge {
+	if unchangedTemplateForMerge(tc, newContentHash, originalHash) {
 		return "", nil, nil
 	}
 
@@ -263,6 +279,26 @@ func checkReconciliation(
 
 	p, cErr := handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
 	return p, nil, cErr
+}
+
+// unchangedTemplateForMerge reports whether the merge strategy can skip this
+// file because the template still renders the recorded pristine hash.
+func unchangedTemplateForMerge(tc types.TaskContext, newContentHash, originalHash string) bool {
+	return newContentHash == originalHash && tc.ConflictStrategy == types.ConflictMerge
+}
+
+// acceptedBaselineSuppressesWrite reports whether an accepted working-tree
+// baseline makes this write a no-op. Without the existingHash condition a
+// second edit after accept would be silently no-op'd.
+func acceptedBaselineSuppressesWrite(
+	tc types.TaskContext, ledgerKey, existingHash, newContentHash, originalHash string,
+) bool {
+	if tc.Manifest == nil {
+		return false
+	}
+	accepted := tc.Manifest.AcceptedFiles[ledgerKey]
+	return accepted != "" && existingHash == accepted && newContentHash == originalHash &&
+		tc.ConflictStrategy != types.ConflictOverwrite
 }
 
 // reconcileMerge performs the `merge` strategy: a clean three-way merge writes
@@ -382,6 +418,13 @@ type managedFileDecision struct {
 func decideManagedFile(tc types.TaskContext, absPath, outputRelPath string, content []byte) (managedFileDecision, error) {
 	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
 
+	// A plan-level filter normally removes unmanaged tasks, but direct and
+	// library callers still need the execution-level defense. Returning an
+	// empty write path is the same no-op signal as the other skip paths.
+	if shouldSkipUnmanaged(tc, ledgerKey) {
+		return managedFileDecision{ledgerKey: ledgerKey}, nil
+	}
+
 	// Make the ignore entry part of the managed render before hashing so the
 	// ledger and base shadow match what is actually written.
 	content = maybeAppendInternalStateIgnore(ledgerKey, content)
@@ -426,6 +469,16 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 		return ValidateManagedFile(tc, outputRelPath, content)
 	}
 
+	// Resolve the ledger key before preconditions so an unmanaged path is
+	// skipped without creating directories or walking conflict handling.
+	_, skipped, err := manageWriteKey(tc, outputRelPath)
+	if err != nil {
+		return err
+	}
+	if skipped {
+		return nil
+	}
+
 	absPath, err := checkFilePreconditions(tc, outputRelPath, tc.TargetPath)
 	if err != nil {
 		return err
@@ -443,29 +496,80 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 
 	// Idempotent artifact: a repeated conflict must not rewrite a side artifact
 	// whose content is already identical.
-	if writePath != absPath && sameFileContent(writePath, content) {
+	if isIdenticalArtifact(writePath, absPath, content) {
 		return nil
 	}
 
+	if err := writePendingContent(tc, writePath, content, override, perm); err != nil {
+		return err
+	}
+
+	if writePath == absPath {
+		return recordCanonicalWrite(tc, ledgerKey, newHash, content)
+	}
+	return nil
+}
+
+// writePendingContent writes the pending render, preferring the merge override
+// when reconciliation produced one.
+func writePendingContent(
+	tc types.TaskContext, writePath string, content, override []byte, perm os.FileMode,
+) error {
 	toWrite := content
 	if override != nil {
 		toWrite = override
 	}
-	if err := trackAndWrite(tc, writePath, toWrite, perm); err != nil {
-		return err
-	}
+	return trackAndWrite(tc, writePath, toWrite, perm)
+}
 
-	// The ledger entry (and the pristine base shadow that mirrors it) only
-	// advances when we actually wrote the canonical path. Under artifact or
-	// keep-local we write elsewhere (or nowhere), so the original file keeps its
-	// previous baseline (SCB-056). The recorded hash is always the pristine
-	// render, never the possibly-merged content, so a merged file stays
-	// recognized as locally modified.
-	if writePath == absPath {
-		recordManagedHash(tc.Manifest, ledgerKey, newHash)
-		return writeBaseShadow(tc, ledgerKey, content)
+// manageWriteKey resolves the ledger key before preconditions so an unmanaged
+// path is skipped without creating directories or walking conflict handling.
+func manageWriteKey(tc types.TaskContext, outputRelPath string) (string, bool, error) {
+	prelimAbs, err := fileutil.SafePath(tc.TargetPath, outputRelPath)
+	if err != nil {
+		return "", false, err
 	}
-	return nil
+	ledgerKey := managedFilesKey(tc, prelimAbs, outputRelPath)
+	return ledgerKey, shouldSkipUnmanaged(tc, ledgerKey), nil
+}
+
+// shouldSkipUnmanaged reports whether the path is detached and this run must not
+// re-manage it. update/repair never re-manage; a non-update run (apply) only
+// re-manages when --force is set. The plan-level filter normally removes the
+// task, so this is the execution-level defense.
+func shouldSkipUnmanaged(tc types.TaskContext, ledgerKey string) bool {
+	if !manifestListsUnmanaged(tc.Manifest, ledgerKey) || (!tc.Update && tc.Force) {
+		return false
+	}
+	if !tc.Update {
+		fmt.Fprintf(os.Stderr, "⚠️  Skipping unmanaged %s; use --force to manage it again\n", ledgerKey)
+	}
+	return true
+}
+
+// isIdenticalArtifact reports whether a non-canonical write already holds the
+// pending bytes, so a repeated conflict does not rewrite the side artifact.
+func isIdenticalArtifact(writePath, absPath string, content []byte) bool {
+	return writePath != absPath && sameFileContent(writePath, content)
+}
+
+// recordCanonicalWrite advances the ledger entry and the pristine base shadow
+// after a canonical write. Under artifact or keep-local the original file keeps
+// its previous baseline (SCB-056); the recorded hash is always the pristine
+// render, never the possibly-merged content, so a merged file stays recognized
+// as locally modified.
+func recordCanonicalWrite(tc types.TaskContext, ledgerKey, newHash string, content []byte) error {
+	recordManagedHash(tc.Manifest, ledgerKey, newHash)
+	// A canonical write advances the pristine baseline, so any accepted
+	// working-tree baseline for this key is stale and must be cleared.
+	unrecordAccepted(tc.Manifest, ledgerKey)
+	// An explicit apply --force is the documented re-manage path: the canonical
+	// write records the hash, so the key is no longer unmanaged. update/repair
+	// never reach here for an unmanaged key.
+	if !tc.Update && tc.Force {
+		unrecordUnmanaged(tc.Manifest, ledgerKey)
+	}
+	return writeBaseShadow(tc, ledgerKey, content)
 }
 
 // ManagedFileUnchanged reports whether outputRelPath exists and still matches
@@ -796,7 +900,10 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 // checkManagedGitignore warns when a managed root .gitignore no longer exists or
 // no longer ignores the internal state directory and re-includes the committed
 // base tree. It never mutates the file: the managed render owns the ledger and
-// base shadow, so the fix is a normal apply/update that regenerates it.
+// base shadow, so the fix is to re-run apply/update with overwrite enabled
+// (--force with the same apply selector, or --conflict-strategy overwrite).
+// Only a render that owns .gitignore (the language pack or a custom template)
+// can regenerate it; tooling templates do not render the root .gitignore.
 func checkManagedGitignore(root, relPath string) {
 	existing, err := readRootGitignore(root, relPath)
 	if err != nil {
@@ -815,7 +922,7 @@ func checkManagedGitignore(root, relPath string) {
 func warnManagedGitignoreStale(relPath, detail string) {
 	fmt.Fprintf(
 		os.Stderr,
-		"⚠️  Managed %s %s; regenerate it with 'scbake apply' or 'scbake update'.\n",
+		"⚠️  Managed %s %s; regenerate it with 'scbake apply' or 'scbake update' using --conflict-strategy overwrite (or --force with the same apply selector).\n",
 		relPath, detail,
 	)
 }
@@ -970,6 +1077,66 @@ func recordManagedHash(m *types.Manifest, key, hash string) {
 		m.ManagedFiles = make(map[string]string)
 	}
 	m.ManagedFiles[key] = hash
+}
+
+// manifestListsUnmanaged reports whether key is in the manifest's
+// unmanaged_files list. A nil manifest never lists anything.
+func manifestListsUnmanaged(m *types.Manifest, key string) bool {
+	if m == nil || key == "" {
+		return false
+	}
+	for _, unmanaged := range m.UnmanagedFiles {
+		if unmanaged == key {
+			return true
+		}
+	}
+	return false
+}
+
+// NormalizeUnmanagedFiles drops empty keys and returns a sorted, deduplicated
+// copy of keys. An empty result is nil so the field is omitted when saved.
+func NormalizeUnmanagedFiles(keys []string) []string {
+	seen := make(map[string]struct{}, len(keys))
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
+}
+
+// unrecordAccepted removes a key from accepted_files. The map is left non-nil
+// (an empty map is omitted by the TOML encoder).
+func unrecordAccepted(m *types.Manifest, key string) {
+	if m == nil || m.AcceptedFiles == nil {
+		return
+	}
+	delete(m.AcceptedFiles, key)
+}
+
+// unrecordUnmanaged removes a key from unmanaged_files, preserving the sorted
+// order of the remaining entries.
+func unrecordUnmanaged(m *types.Manifest, key string) {
+	if m == nil || len(m.UnmanagedFiles) == 0 {
+		return
+	}
+	remaining := make([]string, 0, len(m.UnmanagedFiles))
+	for _, unmanaged := range m.UnmanagedFiles {
+		if unmanaged != key {
+			remaining = append(remaining, unmanaged)
+		}
+	}
+	m.UnmanagedFiles = NormalizeUnmanagedFiles(remaining)
 }
 
 // managedFilesKey derives the managed_files ledger key for a file: the path

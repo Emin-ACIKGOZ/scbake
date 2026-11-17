@@ -93,6 +93,11 @@ func (t *LicenseTask) Priority() int { return t.TaskPrio }
 // reconciles LICENSE, which is recorded in the managed_files ledger.
 func (t *LicenseTask) WritesManagedFile() bool { return true }
 
+// ManagedOutputPath returns the target-relative path this task writes. The plan
+// filter joins it with the project's root-relative path to compare against
+// unmanaged_files before any task runs.
+func (t *LicenseTask) ManagedOutputPath() string { return "LICENSE" }
+
 // Compile-time guard: update/repair detect managed writers by this method.
 var _ interface{ WritesManagedFile() bool } = (*LicenseTask)(nil)
 

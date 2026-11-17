@@ -243,6 +243,15 @@ cd my-backend
 scbake update
 ```
 
+`scbake.toml` may also record two additive fields. `[accepted_files]` stores a
+user-accepted working-tree baseline per managed key, while `[managed_files]`
+keeps the pristine template hash; `unmanaged_files` lists paths detached from
+scbake. `update` and `drift --repair` never re-manage a detached path, and an
+accepted file is a no-op only while both its working bytes and the template
+render are unchanged; an `update --force` or `--conflict-strategy overwrite`
+still rewrites it and clears the acceptance. Use the `accept` and `unmanage`
+commands rather than editing these fields by hand.
+
 #### Committed merge base and migration
 
 `.scbake-base/` is committed with the project, so a fresh clone has the common
@@ -343,6 +352,10 @@ scbake drift [--repair] [--require-base] [--conflict-strategy <strategy>] [<path
   normalized hash changed) or `missing` (deleted), with its recorded and
   on-disk hashes. Hashes are EOL-insensitive for NUL-free content, so an
   EOL-only change is not drift.
+- **Accepted baselines.** A key with an `[accepted_files]` entry is compared
+  against that accepted hash and reported with `accepted <hash>` instead of
+  `recorded <hash>`. The committed base is still validated against the pristine
+  `[managed_files]` hash.
 - **Committed base.** For every current key, the pristine base under
   `.scbake-base/` is compared with the recorded hash. An absent base is
   `base-missing`; a base whose normalized or raw hash no longer matches is
@@ -390,11 +403,101 @@ scbake drift --repair --conflict-strategy merge
 ```
 
 
+### `accept`: Rebaseline a Managed File
+
+Records the current working-tree bytes of one or more managed files as their
+**accepted** drift baseline. The file itself is not rewritten, and the pristine
+`[managed_files]` hash and the committed base under `.scbake-base/` are left
+untouched. `drift` compares the working tree against the accepted hash, while
+base validation still uses the pristine hash.
+
+```bash
+scbake accept <path>...
+```
+
+- **One-shot rebaseline.** A later edit drifts again. Accept is not "stop
+  tracking"; use `unmanage` for that.
+- **Managed only.** Each path must already be a `[managed_files]` key. Accept
+  never adopts an untracked file, a directory, or a symlinked leaf.
+- **Base preflight.** An existing committed base must still match the pristine
+  ledger hash; an invalid base fails so accept cannot claim success while
+  `drift` remains red. A missing base only warns, because missing bases are
+  advisory unless you pass `drift --require-base`.
+- **Template changes.** If a template render changes, `update` merges or writes
+  against the pristine base and a canonical write clears the accepted entry;
+  review the result and accept again if needed.
+- **Root `.gitignore` caveat.** Accepting the root `.gitignore` while it is
+  missing scbake's internal-state block records the block-less bytes as the
+  baseline, and the accepted no-op suppresses regeneration. Later `apply` and
+  `update` then leave `.scbake/` unignored and may not re-include
+  `!.scbake-base/`, breaking the committed-base guarantee; `git status` can show
+  `.scbake/` as untracked. Plain `scbake apply` fails because it needs a
+  language or template, `scbake apply --lang <lang>` only warns, and
+  `scbake update` exits 0 silently with the block still absent. Repair it first
+  with `scbake apply --force --lang <lang>` or
+  `scbake apply --conflict-strategy overwrite --lang <lang>`, or with
+  `scbake update --conflict-strategy overwrite`; a manual edit also works.
+  Only the language pack, or a custom template that renders the root
+  `.gitignore`, can repair it: no shipped `--with` tooling template renders
+  that file, so e.g. `--with makefile` leaves it block-less. Then accept.
+- **Atomic and dry-run safe.** All paths are validated before any change, and
+  `--dry-run` validates and prints without writing or taking the project lock.
+
+```bash
+# Keep an intentional edit and make the drift gate clean.
+scbake accept main.go
+
+# Preview without writing.
+scbake accept --dry-run main.go
+```
+
+
+### `unmanage`: Detach a Managed File
+
+Detaches one or more managed files from scbake. The path is removed from
+`[managed_files]` and `[accepted_files]`, recorded in `unmanaged_files`, and its
+committed base is removed transactionally. The working file is left exactly as
+it is.
+
+```bash
+scbake unmanage <path>...
+```
+
+- **No drift, no updates.** `drift` ignores a detached path, and `update` or
+  `drift --repair` will not rewrite, recreate, or re-record it.
+- **Apply needs `--force`.** `apply` skips unmanaged paths by default. Running
+  `scbake apply --force --lang <lang>` (or `--with <template>`) re-manages one,
+  writes canonical content, and clears the unmanaged entry.
+- **Root `.gitignore` is refused.** Scbake maintains its internal-state ignore
+  block in the root `.gitignore`; use `accept` or edit that block manually. A
+  nested `.gitignore` can be unmanaged.
+- **Missing files are allowed.** The state is what is detached, so a deleted
+  working file is not recreated. Repeated `unmanage` is idempotent.
+- **Atomic and dry-run safe.** Base removal and the manifest save share one
+  transaction; `--dry-run` writes nothing and takes no lock.
+
+```bash
+# Take ownership of a generated starter file.
+scbake unmanage main.go
+
+# Preview the base removal and manifest change.
+scbake unmanage --dry-run main.go
+```
+
+> **Downgrade warning.** `[accepted_files]` and `unmanaged_files` are additive
+> and do not change the schema version. An older scbake binary ignores unknown
+> fields and may drop them on save. It will report accepted edits as drift,
+> recreate and re-record a missing detached path, and write an existing detached
+> file to a `.scbake-new` artifact instead of re-managing it. Commit before
+> running an older binary on a project that uses these fields.
+
+
 ### `recover`: Roll Back an Interrupted Transaction
 
 A crash or `SIGKILL` can leave a transaction journal under
-`.scbake/tmp/`. The next `apply`, `update`, `drift --repair`, or `drift` refuses
-to treat that tree as clean. Roll the interrupted run back with:
+`.scbake/tmp/`. The next `apply`, `update`, `accept`, `unmanage`,
+`drift --repair`, or `drift` refuses to treat that tree as clean. Roll the
+interrupted run back with:
 
 ```bash
 scbake recover [--discard] [<path>]
@@ -414,11 +517,11 @@ cleanup.
 
 ### Concurrent Runs and Exit 75
 
-Mutating commands (`new`, `apply`, `update`, `drift --repair`, `recover`, and
-`recover --discard`) take a non-blocking exclusive advisory lock on
-`<root>/.scbake/lock` before loading the manifest and hold it through commit or
-rollback. The lock is scoped to the manifest root, so parallel subproject runs
-under one root serialize on the same file. If another scbake process already
+Mutating commands (`new`, `apply`, `update`, `accept`, `unmanage`,
+`drift --repair`, `recover`, and `recover --discard`) take a non-blocking
+exclusive advisory lock on `<root>/.scbake/lock` before loading the manifest and
+hold it through commit or rollback. The lock is scoped to the manifest root, so
+parallel subproject runs under one root serialize on the same file. If another scbake process already
 holds the lock, the command fails fast with exit **75** (`EX_TEMPFAIL`) and
 makes no project changes; retry after the active run finishes. `new` is the
 exception: it creates the project directory and an empty manifest before locking,
@@ -531,9 +634,9 @@ Discovery is bounded by the nearest Git root: a manifest at or below that root w
 - **Add Projects**: Run `scbake apply <path> --lang <lang>` to add a new project in a subdirectory. `scbake` will find the root manifest and add the project to the central tracking list.
 - **Scoped Templates**: Apply templates to specific sub-directories by passing the path: `scbake apply services/api --with go_linter`.
 - **Fleet-wide Governance**: Run `scbake apply --with makefile` at the root to generate a unified build system that orchestrates all sub-projects.
-- **Non-Git Monorepos**: If the central manifest lives in a tree without a Git root, pass `--allow-ancestor-search` to `apply`, `update`, `drift`, or `list` so an ancestor manifest can be adopted. The flag never crosses a `.git` root. It is not a security boundary: a principal that can write an ancestor directory can also plant a `.git` marker there.
+- **Non-Git Monorepos**: If the central manifest lives in a tree without a Git root, pass `--allow-ancestor-search` to `apply`, `update`, `drift`, `list`, `accept`, `unmanage`, or `recover` so an ancestor manifest can be adopted. The flag never crosses a `.git` root. It is not a security boundary: a principal that can write an ancestor directory can also plant a `.git` marker there.
 
-**Note:** `--allow-ancestor-search` is an explicit opt-in for non-Git monorepos. Without it, applying to a marker-less subproject creates a nested manifest in that subproject instead of updating the central one. `update`, `drift`, and `list` also need the flag in a non-Git monorepo; without it, `drift` finds no local manifest and fails instead of evaluating the central one.
+**Note:** `--allow-ancestor-search` is an explicit opt-in for non-Git monorepos. Without it, applying to a marker-less subproject creates a nested manifest in that subproject instead of updating the central one. `update`, `drift`, `list`, `accept`, `unmanage`, and `recover` also need the flag in a non-Git monorepo; without it, `drift` finds no local manifest and fails instead of evaluating the central one.
 
 
 ## Supported Language Packs

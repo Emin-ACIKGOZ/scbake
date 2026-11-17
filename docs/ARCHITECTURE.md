@@ -146,8 +146,9 @@ is not snapshotted; a failed install can add, update, or prune packages. Treat
 such trees as disposable and reinstall from the manifest and lockfile.
 
 **Per-root locking**: Before loading the manifest, `new`, `apply`, `update`,
-`drift --repair`, and `recover` acquire a non-blocking exclusive advisory lock
-on `<root>/.scbake/lock` and hold it through commit or rollback. The lock is
+`accept`, `unmanage`, `drift --repair`, and `recover` acquire a non-blocking
+exclusive advisory lock on `<root>/.scbake/lock` and hold it through commit or
+rollback. The lock is
 scoped to the manifest root, not a subproject, so parallel runs under one root
 serialize. A second mutator fails fast with exit 75 (`EX_TEMPFAIL`) before any
 project mutation; callers should retry after the active run finishes. `new` is
@@ -344,6 +345,8 @@ scbake_version = "v0.3.0"
 | `[[templates]]` | One table per applied tooling template, recording its `name` and the `path` it was applied to. Like `[[projects]].path`, `path` is relative to the manifest root (`"."` for an apply at the root). |
 | `[metadata]` | Inputs declared by template schemas (including defaults), values passed with `--set`, and `--license`/`--copyright-holder`. Omitted when empty. |
 | `[managed_files]` | SHA-256 of every template-rendered file scbake manages, EOL-insensitive for NUL-free content, keyed by path relative to the manifest root. Drives `update` and `drift`. Omitted when empty. |
+| `[accepted_files]` | Optional map of root-relative managed key to the SHA-256 of working-tree bytes the user accepted with `scbake accept`. Drift compares the working tree against this hash; `managed_files` and the committed base stay pristine. Omitted when empty. |
+| `unmanaged_files` | Optional sorted, deduplicated list of root-relative paths detached with `scbake unmanage`. `update`/`drift --repair` filter their managed writers at plan time, and `apply` skips them unless `--force` re-manages the path. Omitted when empty. |
 
 `[[projects]].path` and `[[templates]].path` name the same directory as the
 matching `[managed_files]` key prefix: keys are root-relative, so a `"."` entry
@@ -385,9 +388,14 @@ intended target and remove the stale entry. Leave `"."` unchanged when it
 really is the root project.
 
 The hashes above are real values from the current embedded templates; they change
-whenever a rendered template changes. `[metadata]` and `[managed_files]` are omitted
-entirely when empty, so a manifest for a run with no language pack has no `[[projects]]`
-or `[metadata]` table.
+whenever a rendered template changes. `[metadata]`, `[managed_files]`,
+`[accepted_files]`, and `unmanaged_files` are omitted entirely when empty, so a
+manifest for a run with no language pack has no `[[projects]]` or `[metadata]`
+table. The accepted and unmanaged fields are additive and do not change
+`scbake_version`; an older binary ignores them and may drop them on save. It
+reports accepted edits as drift, recreates and re-records a missing detached
+path, and writes an existing detached file to a `.scbake-new` artifact instead
+of re-managing it.
 
 **Why this matters**:
 - ✅ Consistency: `scbake apply` re-reads manifest
@@ -591,6 +599,13 @@ the EOL-insensitive contract and classifies it `modified` (normalized hash
 differs), `missing` (absent), or clean. EOL-only changes to NUL-free content are
 therefore not drift.
 
+If a key has an `[accepted_files]` entry, the working-tree comparison uses that
+accepted hash (`scbake accept`) and the finding is printed with `accepted`
+instead of `recorded`. The pristine `[managed_files]` hash is still what the
+committed base is validated against, so accepting an edit cannot hide a
+`base-invalid` result. Detached paths (`unmanaged_files`) are not in
+`managed_files`, so drift ignores them entirely.
+
 For every current, non-legacy-resolved key it also reads the committed base under
 `.scbake-base` with the shared shadow-path mapping and compares it to the ledger
 with the same predicate `update` uses. An absent base is `base-missing`; a hash
@@ -608,6 +623,12 @@ touches the network, so it is safe as a CI gate; it exits non-zero when any
 blocking finding remains. `--repair` delegates to `core.RunUpdate`, so detection
 and repair share one reconciliation implementation (`internal/drift`). Detection
 does not backfill a missing base; a no-op `update` does not either.
+
+`update` and `drift --repair` derive their plan from `[[projects]]`/`[[templates]]`,
+then filter managed writers whose root-relative output path is listed in
+`unmanaged_files` before execution, so `--dry-run` does not list a task the real
+run skips. `apply` performs the same filter unless the global `--force` flag is
+set; a forced canonical write re-manages the path and clears its unmanaged entry.
 
 Detection is deliberately conservative: a locally edited file is drift even
 when `update`'s default `merge` strategy is a no-op that preserves the edit.

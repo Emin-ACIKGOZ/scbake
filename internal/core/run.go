@@ -20,6 +20,7 @@ import (
 	"scbake/pkg/lang"
 	"scbake/pkg/tasks"
 	"scbake/pkg/templates"
+	"scbake/pkg/templates/compliance"
 	"strings"
 	"time"
 )
@@ -141,14 +142,7 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 	}
 
 	// 2. Initialize Transaction Engine
-	if rc.DryRun {
-		// A dry run opens no transaction, but it must not plan against a tree
-		// left half-written by an interrupted run.
-		if err := transaction.CheckPending(rootPath); err != nil {
-			return err
-		}
-	}
-	tx, cleanupTx, err := setupTransaction(rootPath, rc.DryRun, rc.NewProject)
+	tx, cleanupTx, err := prepareRunTransaction(rc, rootPath)
 	if err != nil {
 		return err
 	}
@@ -165,8 +159,17 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 
 	// `update` reconciles managed files only. Re-running side-effecting tasks
 	// (go mod init, npm install, ...) would fail or mutate the environment.
+	// Filter unmanaged paths at plan time so `--dry-run` and the real run agree.
+	projectRel, err := repoRelativeProjectPath(rootPath, rc.TargetPath)
+	if err != nil {
+		return err
+	}
 	if rc.Update {
 		plan.Tasks = managedWriteTasks(plan.Tasks)
+		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel)
+	} else if !rc.Force {
+		// `apply` skips detached paths unless --force re-manages them.
+		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel)
 	}
 
 	// 4. Build Task Context & Validate Schemas
@@ -288,10 +291,21 @@ type managedFileWriter interface {
 	WritesManagedFile() bool
 }
 
-// Compile-time guards: a managed writer that loses its marker would otherwise be
-// silently dropped from update/repair.
+// managedPathWriter is a managed writer whose target-relative output path is
+// known before execution. The plan filter joins it with the project's
+// root-relative path to match unmanaged_files, so an update/apply dry-run and
+// the real run agree on which tasks are skipped.
+type managedPathWriter interface {
+	ManagedOutputPath() string
+}
+
+// Compile-time guards: a managed writer that loses its output path would
+// otherwise stop being excluded from update/repair for unmanaged keys.
 var (
 	_ managedFileWriter = (*tasks.CreateTemplateTask)(nil)
+	_ managedPathWriter = (*tasks.CreateTemplateTask)(nil)
+	_ managedFileWriter = (*compliance.LicenseTask)(nil)
+	_ managedPathWriter = (*compliance.LicenseTask)(nil)
 )
 
 // managedWriteTasks keeps only file-reconciling tasks. `update` must not re-run
@@ -304,6 +318,50 @@ func managedWriteTasks(plan []types.Task) []types.Task {
 		}
 	}
 	return out
+}
+
+// filterUnmanagedTasks removes managed writers whose root-relative output path
+// is listed in unmanaged_files. Filtering happens at plan time so `--dry-run`
+// does not list a task the real run skips. Tasks without a known managed output
+// path are kept; the write path performs its own execution-level guard.
+// projectRel is the project's slash-separated path relative to the manifest
+// root ("." for the root project).
+func filterUnmanagedTasks(plan []types.Task, m *types.Manifest, projectRel string) []types.Task {
+	if m == nil || len(m.UnmanagedFiles) == 0 {
+		return plan
+	}
+	unmanaged := make(map[string]struct{}, len(m.UnmanagedFiles))
+	for _, key := range m.UnmanagedFiles {
+		unmanaged[key] = struct{}{}
+	}
+
+	out := make([]types.Task, 0, len(plan))
+	for _, t := range plan {
+		w, ok := t.(managedPathWriter)
+		if !ok {
+			out = append(out, t)
+			continue
+		}
+		key := filepath.ToSlash(filepath.Clean(path.Join(projectRel, w.ManagedOutputPath())))
+		if _, skipped := unmanaged[key]; skipped {
+			fmt.Fprintf(os.Stderr, "⚠️  Skipping unmanaged %s; use --force to manage it again\n", key)
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// prepareRunTransaction initializes the transaction manager for a run. A dry
+// run opens no manager, but it must not plan against a tree left half-written
+// by an interrupted run.
+func prepareRunTransaction(rc RunContext, rootPath string) (*transaction.Manager, func(), error) {
+	if rc.DryRun {
+		if err := transaction.CheckPending(rootPath); err != nil {
+			return nil, nil, err
+		}
+	}
+	return setupTransaction(rootPath, rc.DryRun, rc.NewProject)
 }
 
 // setupTransaction initializes the transaction safety net and returns a cleanup rollback deferral.
@@ -470,6 +528,8 @@ func persistManifestState(
 
 	persistManifestMetadata(m, tc)
 	persistManagedFiles(m, tc)
+	persistAcceptedFiles(m, tc)
+	persistUnmanagedFiles(m, tc)
 
 	// We track the manifest file itself before saving.
 	// This ensures that if the Save succeeds but a subsequent step crashes (unlikely),
@@ -512,6 +572,34 @@ func persistManagedFiles(m *types.Manifest, tc types.TaskContext) {
 	for k, v := range tc.Manifest.ManagedFiles {
 		m.ManagedFiles[k] = v
 	}
+}
+
+// persistAcceptedFiles replaces the manifest's accepted_files map with the
+// context state instead of merging. Replace semantics matter because a
+// canonical write clears acceptance; a merge would resurrect the old entry.
+func persistAcceptedFiles(m *types.Manifest, tc types.TaskContext) {
+	if tc.Manifest == nil {
+		return
+	}
+	if len(tc.Manifest.AcceptedFiles) == 0 {
+		m.AcceptedFiles = nil
+		return
+	}
+	accepted := make(map[string]string, len(tc.Manifest.AcceptedFiles))
+	for k, v := range tc.Manifest.AcceptedFiles {
+		accepted[k] = v
+	}
+	m.AcceptedFiles = accepted
+}
+
+// persistUnmanagedFiles replaces the manifest's unmanaged_files list with the
+// sorted, deduplicated context state. Replace semantics let an apply --force
+// that re-manages a key remove it from the list durably.
+func persistUnmanagedFiles(m *types.Manifest, tc types.TaskContext) {
+	if tc.Manifest == nil {
+		return
+	}
+	m.UnmanagedFiles = tasks.NormalizeUnmanagedFiles(tc.Manifest.UnmanagedFiles)
 }
 
 // snapshotManifestContent records a newly created manifest's bytes so rollback
