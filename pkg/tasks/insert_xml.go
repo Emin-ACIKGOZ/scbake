@@ -42,16 +42,96 @@ func (t *InsertXMLTask) Priority() int {
 	return t.TaskPrio
 }
 
-// Execute performs the XML insertion with safety checks and transaction tracking.
-func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
-	// Validate the target file path and the element path before any mode-specific
-	// handling, so dry-run and real runs reject invalid input identically.
+// xmlInsertPlan is the read-only outcome of preparing an insertion. It is what
+// Execute would do, computed without tracking or writing.
+type xmlInsertPlan struct {
+	// absPath is the resolved insertion target.
+	absPath string
+	// spliced is the file content with the fragment inserted. It is empty when
+	// the fragment is already present or insertion is deferred.
+	spliced string
+	// alreadyInserted reports that the fragment is present, so writing is a
+	// no-op.
+	alreadyInserted bool
+	// deferred reports that the target does not exist yet but an earlier task
+	// in the same plan is expected to create it. It is only true in a dry run.
+	deferred bool
+}
+
+// errXMLFileNotFound marks a missing insertion target so prepareInsert can tell
+// a plain missing file from one a preceding task is expected to create. The
+// wrapped message keeps the historic "XML file not found: <path>" text.
+var errXMLFileNotFound = errors.New("XML file not found")
+
+// prepareInsert performs every read-only check an insertion makes: target path
+// safety, element path syntax, XML well-formedness of the file and the snippet,
+// and whether the snippet is already present or the insertion point exists. It
+// returns the plan and never tracks or writes; it is shared by Validate and
+// Execute so the preview reports the real decision.
+func (t *InsertXMLTask) prepareInsert(tc types.TaskContext) (xmlInsertPlan, error) {
 	absPath, err := t.validatePath(tc.TargetPath)
 	if err != nil {
-		return err
+		plan, handled, deferredErr := t.deferredInsertPlan(tc, absPath, err)
+		if handled {
+			return plan, deferredErr
+		}
+		return xmlInsertPlan{}, err
 	}
 
 	if _, err := parseElementPath(t.ElementPath); err != nil {
+		return xmlInsertPlan{}, err
+	}
+
+	contentStr, err := t.readAndValidateXML(tc.TargetPath)
+	if err != nil {
+		return xmlInsertPlan{}, err
+	}
+
+	if t.isAlreadyInserted(contentStr) {
+		return xmlInsertPlan{absPath: absPath, alreadyInserted: true}, nil
+	}
+
+	// Validate the insertion point in memory. Nothing is written, but a missing
+	// or self-closing target fails exactly as the apply path would. The spliced
+	// content is carried into Execute so the real run does not parse again.
+	spliced, err := insertXMLElement(contentStr, t.ElementPath, t.XMLContent)
+	if err != nil {
+		return xmlInsertPlan{}, fmt.Errorf("failed to insert XML into %s: %w", t.FilePath, err)
+	}
+
+	return xmlInsertPlan{absPath: absPath, spliced: spliced}, nil
+}
+
+// deferredInsertPlan handles a target that does not exist yet. When a preceding
+// task in the same plan declared it, a dry run validates the parts that do not
+// depend on the file and defers the rest; handled is false when the path error
+// must stand (a plain missing file, or a non-dry run).
+func (t *InsertXMLTask) deferredInsertPlan(
+	tc types.TaskContext, absPath string, pathErr error,
+) (plan xmlInsertPlan, handled bool, err error) {
+	if !tc.DryRun || !errors.Is(pathErr, errXMLFileNotFound) || !tc.PathPlanned(absPath) {
+		return xmlInsertPlan{}, false, nil
+	}
+	if _, err := parseElementPath(t.ElementPath); err != nil {
+		return xmlInsertPlan{}, true, err
+	}
+	if err := t.validateSnippet(); err != nil {
+		return xmlInsertPlan{}, true, err
+	}
+	return xmlInsertPlan{absPath: absPath, deferred: true}, true, nil
+}
+
+// Validate checks the target path, element path, file content, and insertion
+// point without tracking or writing.
+func (t *InsertXMLTask) Validate(tc types.TaskContext) error {
+	_, err := t.prepareInsert(tc)
+	return err
+}
+
+// Execute performs the XML insertion with safety checks and transaction tracking.
+func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
+	plan, err := t.prepareInsert(tc)
+	if err != nil {
 		return err
 	}
 
@@ -59,30 +139,26 @@ func (t *InsertXMLTask) Execute(tc types.TaskContext) error {
 		return nil
 	}
 
-	contentStr, err := t.readAndValidateXML(tc.TargetPath)
-	if err != nil {
+	if plan.deferred {
+		// prepareInsert only defers in a dry run; a real run must still fail
+		// when the target was never created.
+		return fmt.Errorf("%w: %s", errXMLFileNotFound, t.FilePath)
+	}
+
+	if err := t.trackFile(tc, plan.absPath); err != nil {
 		return err
 	}
 
-	if err := t.trackFile(tc, absPath); err != nil {
-		return err
-	}
-
-	if t.isAlreadyInserted(contentStr) {
+	if plan.alreadyInserted {
 		return nil
 	}
 
-	return t.insertAndWrite(tc, absPath, contentStr)
+	return t.insertAndWrite(tc, plan.absPath, plan.spliced)
 }
 
-// insertAndWrite splices the XML fragment into the existing content, records
-// the intended bytes for rollback, and writes the result.
-func (t *InsertXMLTask) insertAndWrite(tc types.TaskContext, absPath, contentStr string) error {
-	newContent, err := insertXMLElement(contentStr, t.ElementPath, t.XMLContent)
-	if err != nil {
-		return fmt.Errorf("failed to insert XML into %s: %w", t.FilePath, err)
-	}
-
+// insertAndWrite records the intended bytes for rollback and writes the content
+// prepared by prepareInsert.
+func (t *InsertXMLTask) insertAndWrite(tc types.TaskContext, absPath, newContent string) error {
 	// If the file vanished between Track and this write, record the intended
 	// bytes so rollback can verify and remove only exactly what was written.
 	if err := trackXMLWrite(tc, absPath, t.FilePath, []byte(newContent)); err != nil {
@@ -120,7 +196,9 @@ func (t *InsertXMLTask) validatePath(targetPath string) (string, error) {
 	// through a link.
 	if info, err := os.Lstat(absPath); err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("XML file not found: %s", t.FilePath)
+			// Return the resolved path so the caller can check whether an
+			// earlier task is expected to create it.
+			return absPath, fmt.Errorf("%w: %s", errXMLFileNotFound, t.FilePath)
 		}
 		return "", fmt.Errorf("failed to stat XML file %s: %w", t.FilePath, err)
 	} else if info.Mode()&os.ModeSymlink != 0 {
@@ -143,11 +221,20 @@ func (t *InsertXMLTask) readAndValidateXML(targetPath string) (string, error) {
 		return "", fmt.Errorf("XML file %s is malformed: %w", t.FilePath, err)
 	}
 
-	if err := validateXML(t.XMLContent); err != nil {
-		return "", fmt.Errorf("XML content to insert is malformed: %w", err)
+	if err := t.validateSnippet(); err != nil {
+		return "", err
 	}
 
 	return contentStr, nil
+}
+
+// validateSnippet checks that the fragment to insert is well-formed XML. It
+// needs no existing file, so a deferred insertion can still run it.
+func (t *InsertXMLTask) validateSnippet() error {
+	if err := validateXML(t.XMLContent); err != nil {
+		return fmt.Errorf("XML content to insert is malformed: %w", err)
+	}
+	return nil
 }
 
 func (t *InsertXMLTask) trackFile(tc types.TaskContext, absPath string) error {

@@ -6,7 +6,9 @@ package core
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"scbake/internal/types"
+	"slices"
 	"sort"
 )
 
@@ -43,6 +45,12 @@ func executePlan(
 		if err := runTask(plan, i, task, tc, reporter); err != nil {
 			return err
 		}
+
+		// A later task's Validate may need to know that an artifact does not
+		// exist yet only because an earlier task is expected to create it.
+		if tc.DryRun {
+			tc = carryPlannedPaths(tc, task)
+		}
 	}
 
 	if !betweenRun {
@@ -70,7 +78,12 @@ func runTask(plan *types.Plan, index int, task types.Task, tc types.TaskContext,
 	reporter.TaskStart(desc, index+1, len(plan.Tasks))
 
 	var err error
-	if !tc.DryRun {
+	if tc.DryRun {
+		// A dry run reports what the real run would decide, without
+		// performing any of it. Validate is the read-only half of a task,
+		// so this path can never write.
+		err = task.Validate(tc)
+	} else {
 		err = task.Execute(tc)
 	}
 
@@ -80,6 +93,33 @@ func runTask(plan *types.Plan, index int, task types.Task, tc types.TaskContext,
 		return fmt.Errorf("task failed (%s): %w", task.Description(), err)
 	}
 	return nil
+}
+
+// carryPlannedPaths records the paths task declared it will create, so a later
+// task's read-only validation can treat them as "not yet created". Declared
+// paths are absolute (see types.CreatedPathProvider).
+func carryPlannedPaths(tc types.TaskContext, task types.Task) types.TaskContext {
+	provider, ok := task.(types.CreatedPathProvider)
+	if !ok {
+		return tc
+	}
+	declared := provider.CreatedPaths(tc)
+	if len(declared) == 0 {
+		return tc
+	}
+	paths := slices.Clone(tc.PlannedPaths)
+	for _, path := range declared {
+		if path == "" {
+			continue
+		}
+		path = filepath.Clean(path)
+		if slices.Contains(paths, path) {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	tc.PlannedPaths = paths
+	return tc
 }
 
 // contextError reports a canceled context, tolerating the zero TaskContext used

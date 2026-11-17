@@ -105,6 +105,34 @@ func (t *ExecCommandTask) Priority() int {
 	return t.TaskPrio
 }
 
+// Validate is a documented no-op: an external command's outcome, and whether
+// its binary even exists, cannot be previewed without running it. Executing
+// commands in a dry run would violate the no-side-effects contract, so command
+// failures remain a real-run-only signal (see issue #151 for environment
+// preflight).
+func (t *ExecCommandTask) Validate(_ types.TaskContext) error { return nil }
+
+// CreatedPaths implements types.CreatedPathProvider. It resolves the declared
+// predictions against the command's working directory exactly as
+// trackPredictedPaths does, without tracking or running anything.
+func (t *ExecCommandTask) CreatedPaths(tc types.TaskContext) []string {
+	if len(t.PredictedCreated) == 0 {
+		return nil
+	}
+	dir, err := commandWorkingDir(tc, t.RunInTarget)
+	if err != nil {
+		return nil
+	}
+	paths := make([]string, 0, len(t.PredictedCreated))
+	for _, pred := range t.PredictedCreated {
+		if !filepath.IsAbs(pred) {
+			pred = filepath.Join(dir, pred)
+		}
+		paths = append(paths, filepath.Clean(pred))
+	}
+	return paths
+}
+
 // Execute performs the command execution task.
 func (t *ExecCommandTask) Execute(tc types.TaskContext) error {
 	if tc.DryRun {

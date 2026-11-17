@@ -40,6 +40,8 @@ func (t *issue138SourceTask) Execute(tc types.TaskContext) error {
 	return nil
 }
 
+func (t *issue138SourceTask) Validate(types.TaskContext) error { return nil }
+
 func (t *issue138SourceTask) DescriptionWithSource(tc types.TaskContext) string {
 	t.sourceCalls++
 	return t.desc + " [registry: " + tc.RegistryNames[0] + "]"

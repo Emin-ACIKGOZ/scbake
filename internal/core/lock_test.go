@@ -28,6 +28,8 @@ func (t *lockFailureTask) Description() string { return "injected lock failure t
 
 func (t *lockFailureTask) Priority() int { return int(types.PrioConfigUniversal) }
 
+func (t *lockFailureTask) Validate(types.TaskContext) error { return nil }
+
 func (t *lockFailureTask) Execute(tc types.TaskContext) error {
 	const content = "partial"
 	if tc.Tx != nil {

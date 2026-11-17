@@ -96,17 +96,20 @@ func (t *LicenseTask) WritesManagedFile() bool { return true }
 // Compile-time guard: update/repair detect managed writers by this method.
 var _ interface{ WritesManagedFile() bool } = (*LicenseTask)(nil)
 
-// Execute performs the license generation task.
-func (t *LicenseTask) Execute(tc types.TaskContext) error {
+// licenseRender validates the compliance metadata and resolves the license
+// text. skip is true when an update's LICENSE is already current; the apply
+// path then only repairs the pristine base shadow. It is read-only and shared
+// by Validate and Execute so the preview reports the real decision.
+func licenseRender(tc types.TaskContext) (text string, skip bool, err error) {
 	if tc.Manifest.Metadata == nil {
-		return errors.New("missing compliance metadata (license and copyright_holder) in manifest")
+		return "", false, errors.New("missing compliance metadata (license and copyright_holder) in manifest")
 	}
 
 	licenseID := tc.Manifest.Metadata["license"]
 	holders := tc.Manifest.Metadata["copyright_holder"]
 
 	if licenseID == "" || holders == "" {
-		return errors.New("explicit license and copyright_holder are required for the compliance template")
+		return "", false, errors.New("explicit license and copyright_holder are required for the compliance template")
 	}
 
 	// During update/repair, a clean managed LICENSE is already reconciled. Skip
@@ -117,28 +120,57 @@ func (t *LicenseTask) Execute(tc types.TaskContext) error {
 	if tc.Update {
 		unchanged, err := tasks.ManagedFileUnchanged(tc, "LICENSE")
 		if err != nil {
-			return err
+			return "", false, err
 		}
 		if unchanged {
-			// Repair a missing or stale pristine base from the current bytes
-			// without loading the license text again.
-			if _, err := tasks.EnsureManagedFileBase(tc, "LICENSE"); err != nil {
-				return err
-			}
-			return nil
+			return "", true, nil
 		}
 	}
 
 	// 1. Look up the license text in the embedded SPDX snapshot.
-	text, err := spdx.Text(licenseID)
+	text, err = spdx.Text(licenseID)
 	if err != nil {
-		return fmt.Errorf("failed to load license %q: %w", licenseID, err)
+		return "", false, fmt.Errorf("failed to load license %q: %w", licenseID, err)
 	}
 
 	year := strconv.Itoa(time.Now().Year())
 
 	// 2. Replace common SPDX placeholders.
-	text = fillLicensePlaceholders(text, year, holders)
+	return fillLicensePlaceholders(text, year, holders), false, nil
+}
+
+// Validate checks compliance metadata, license resolution, and the managed-file
+// reconciliation decision without writing. It shares licenseRender and
+// tasks.ValidateManagedFile with Execute, so an unmanaged or drifted LICENSE
+// fails in a dry run exactly as it does in a real run.
+func (t *LicenseTask) Validate(tc types.TaskContext) error {
+	text, skip, err := licenseRender(tc)
+	if err != nil {
+		return err
+	}
+	if skip {
+		// The update path only repairs the pristine base shadow from the
+		// current bytes; that is a write and real-run-only. The skip decision
+		// itself already read the managed file successfully.
+		return nil
+	}
+	return tasks.ValidateManagedFile(tc, "LICENSE", []byte(text))
+}
+
+// Execute performs the license generation task.
+func (t *LicenseTask) Execute(tc types.TaskContext) error {
+	text, skip, err := licenseRender(tc)
+	if err != nil {
+		return err
+	}
+	if skip {
+		// Repair a missing or stale pristine base from the current bytes
+		// without loading the license text again.
+		if _, err := tasks.EnsureManagedFileBase(tc, "LICENSE"); err != nil {
+			return err
+		}
+		return nil
+	}
 
 	// 3. Write license file with state-aware reconciliation and transaction tracking
 	return tasks.WriteManagedFile(tc, "LICENSE", []byte(text), fileutil.FilePerms)

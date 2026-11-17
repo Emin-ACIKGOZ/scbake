@@ -5,7 +5,9 @@ package types
 
 import (
 	"context"
+	"path/filepath"
 	"scbake/internal/filesystem/transaction"
+	"strings"
 )
 
 // Conflict resolution strategies accepted by --conflict-strategy.
@@ -26,6 +28,12 @@ type TaskContext struct {
 
 	// TargetPath is the path the task should operate in (e.g., "./backend").
 	TargetPath string
+
+	// Root is the absolute manifest/project root. It anchors root-relative
+	// decisions (managed_files keys, owning project, base shadow) when no
+	// transaction is active, as in a dry run. A transaction root, when present,
+	// remains authoritative.
+	Root string
 
 	// Manifest is the *current* state of the manifest, read-only.
 	Manifest *Manifest
@@ -58,6 +66,41 @@ type TaskContext struct {
 	// Tx is the active filesystem transaction manager.
 	// If nil, tasks perform operations without safety tracking (legacy/testing mode).
 	Tx *transaction.Manager
+
+	// PlannedPaths lists absolute paths that earlier tasks in the current plan
+	// declared they may create (see CreatedPathProvider). The executor fills it
+	// between tasks; read-only validation uses it to distinguish an artifact
+	// that is not there yet from one that is genuinely missing.
+	PlannedPaths []string
+}
+
+// PathPlanned reports whether absPath, or an ancestor of it, was declared by an
+// earlier task in the current plan. It is read-only and makes no filesystem
+// calls.
+func (tc TaskContext) PathPlanned(absPath string) bool {
+	if absPath == "" {
+		return false
+	}
+	absPath = filepath.Clean(absPath)
+	for _, planned := range tc.PlannedPaths {
+		if planned == "" {
+			continue
+		}
+		planned = filepath.Clean(planned)
+		if absPath == planned || strings.HasPrefix(absPath, planned+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// CreatedPathProvider is an optional capability for tasks that can declare the
+// paths they create. Declarations must be absolute and computed without side
+// effects. The executor carries them into TaskContext.PlannedPaths so a later
+// task's Validate does not fail in a dry run on an artifact an earlier task is
+// expected to produce.
+type CreatedPathProvider interface {
+	CreatedPaths(tc TaskContext) []string
 }
 
 // Task is the interface for all atomic operations (e.g., create file, exec command).
@@ -68,7 +111,20 @@ type Task interface {
 	// Priority returns the execution order; lower values run first within a band.
 	Priority() int
 
-	// Execute performs the task under the supplied context and transaction.
+	// Validate performs every read-only check Execute makes before its first
+	// write: path safety, preconditions, conflict decisions, and up-front
+	// parsing. It must not create, modify, or delete anything, and must return
+	// the same error Execute would return for the same starting state.
+	//
+	// The executor calls Validate instead of Execute in a dry run, so a task
+	// without an honest Validate silently reintroduces false-success previews.
+	// Implementations must share their decision logic with Execute (for example
+	// a single render/decide helper) so the two cannot drift.
+	Validate(tc TaskContext) error
+
+	// Execute performs the task under the supplied context and transaction. It
+	// must remain consistent with Validate: the checks Validate performs come
+	// first, then the writes.
 	Execute(tc TaskContext) error
 }
 

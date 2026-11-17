@@ -17,6 +17,13 @@ type CreateDirTask struct {
 	TaskPrio int
 }
 
+// Validate resolves and contains the directory path without tracking or
+// creating it.
+func (t *CreateDirTask) Validate(tc types.TaskContext) error {
+	_, err := resolveTaskPath(tc.TargetPath, t.Path, "directory")
+	return err
+}
+
 // Execute performs the task of creating the directory.
 func (t *CreateDirTask) Execute(tc types.TaskContext) error {
 	// Resolve the path against the target directory and verify it stays inside
@@ -25,6 +32,12 @@ func (t *CreateDirTask) Execute(tc types.TaskContext) error {
 	absPath, err := resolveTaskPath(tc.TargetPath, t.Path, "directory")
 	if err != nil {
 		return err
+	}
+
+	// The executor calls Validate instead of Execute in a dry run; this guard
+	// protects direct and library callers from creating the directory.
+	if tc.DryRun {
+		return nil
 	}
 
 	// Safety Tracking: If a transaction manager is present, register this path.

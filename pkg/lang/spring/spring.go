@@ -120,7 +120,12 @@ func initializationTasks(targetPath string, langSeq *types.PrioritySequence) ([]
 		Desc:        "Extract project files",
 		TaskPrio:    int(p), // Now 101
 		ArchivePath: zipFile,
-		RunInTarget: true,
+		// Archive entries are only readable once the zip exists, so declare the
+		// artifact later tasks target explicitly. This also lets a dry run
+		// treat a missing pom.xml as "not yet extracted" rather than as an
+		// error.
+		PredictedCreated: []string{"pom.xml"},
+		RunInTarget:      true,
 	})
 
 	// Task 3: Remove the zip file after extraction.
