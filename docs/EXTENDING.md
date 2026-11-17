@@ -46,7 +46,7 @@ var templates embed.FS
 
 type Handler struct{}
 
-func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string, _ map[string]string) ([]types.Task, error) {
 	seq, _ := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
 	var plan []types.Task
 
@@ -83,7 +83,7 @@ func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 ```
 
 That's it. Your handler is a single Go struct that implements two methods:
-- `GetTasks(targetPath string, templateDir string, registryCacheDir string) ([]types.Task, error)` - Returns the tasks to execute
+- `GetTasks(targetPath string, templateDir string, registryCacheDir string, vars map[string]string) ([]types.Task, error)` - Returns the tasks to execute. `vars` carries only the explicit `--set` values (see [Consuming variables](#consuming-variables)).
 
 ### Step 4: Register Your Handler
 
@@ -317,7 +317,7 @@ var templates embed.FS
 
 type Handler struct{}
 
-func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string, _ map[string]string) ([]types.Task, error) {
 	seq, err := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
@@ -475,6 +475,73 @@ schema validation failed with 1 error(s):
   - variable "oncall_alias": required variable "oncall_alias" is missing
 ```
 
+### Consuming variables
+
+Declaring a variable in `schema.json` makes it validatable and documents it; it
+does not by itself change generated output or record a value. Only a supplied
+value (`--set`, or `--license`/`--copyright-holder`) or a schema `default` is
+written to `[metadata]`. A variable only affects output when the handler that
+owns it reads it:
+
+- **Language handlers** receive the explicit `--set` values as the `vars`
+  argument of `GetTasks`. `vars` never contains schema defaults, may be `nil`,
+  and a missing or empty value means "no override". A handler's *variable
+  handling* must be a no-op when `vars` is empty, because `update` and ordinary
+  `new`/`apply` runs pass no values; it still performs its normal setup, and it
+  must ignore `--set` keys owned by other selected handlers.
+- **Template handlers** read inputs from `.Metadata` while rendering, where both
+  explicit values and schema defaults are available.
+
+For **language handlers**, values are consumed only when passed on the current
+invocation: a value already recorded in `scbake.toml` is not re-applied by a
+later `apply` unless `--set` is given again. This keeps schema defaults (which
+are persisted in `[metadata]`) from silently overriding toolchain or project
+state.
+
+**Template handlers** are different: every render re-reads the effective inputs
+from `.Metadata` (persisted explicit values plus schema defaults), so a later
+`update` rewrites the output to match the recorded values for a managed file
+with no local edits. With the default `merge` strategy, local edits are kept or
+merged into the new render without an artifact; an artifact appears only when
+the local file cannot be reconciled safely (a conflicting local edit, a
+missing or stale merge base, or a file scbake did not previously manage) or when
+`--conflict-strategy artifact` is used. For example, editing
+`runner_os` in `[metadata]` and running `update` rewrites `runs-on`.
+
+The Go language pack consumes `module_path` (new modules only; an existing
+module path is never rewritten — a differing explicit value is an error) and
+`go_version` (new modules and explicitly updated ones). Existing `go.mod`
+tokens are compared after unquoting a double-quoted path; a backtick-quoted
+directive is invalid `go.mod` and is rejected. An explicit version is also
+passed to `go mod tidy -go=<version>`, so on that run a request lower than a
+dependency's effective Go requirement fails the run instead of leaving `go.mod`
+and the metadata recorded by that run disagreeing. Only a run that passes
+`--set go_version` is fail-closed: a later `apply` without `--set` runs plain
+`go mod tidy`, which can raise the directive and leave the recorded version
+stale. The comparison includes the patch component: a dependency that requires
+`go 1.24.0` is not satisfied by a requested `1.24`, so name the full version
+(`1.24.0`) when the requirement carries a patch. (The project's own `go`
+directive is not a blocker; `tidy -go=1.24` lowers a main-module `go 1.24.0` to
+`1.24`.)
+The `ci_github` template consumes `runner_os` at render time and emits
+`shell: bash` for the Windows runner, whose default shell is PowerShell.
+`build_tool` in the `makefile` template is the documented record-only example:
+it is validated and stored but intentionally has no consumer.
+
+On a failed `apply --lang go` against a project without `go.mod`, the first
+content snapshot of the created `go.mod` is authoritative, so a later command
+write (for example a version edit before a failing tidy) makes rollback keep the
+file with a warning rather than delete bytes it cannot prove it wrote. The
+residue is a new `go.mod`; `new` normally avoids it because a failed `new`
+removes the whole project directory, though a lock-busy failure leaves the
+bootstrap residue. To recover, repair the leftover directive and rerun `apply`:
+use `GOTOOLCHAIN=local go mod edit -go=<valid version>`, edit the `go` line in
+`go.mod` by hand, or delete and recreate `go.mod`. `GOTOOLCHAIN=local` is needed
+because under the default `GOTOOLCHAIN=auto`, a residue such as `go 1.999` makes
+even `go mod edit` fail while it tries to download that toolchain. Plain
+`go mod tidy` only works once the directive is satisfiable. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for the transaction rule.
+
 ### Schema Reference
 
 | Field        | Values                     | Description                          |
@@ -531,7 +598,7 @@ import (
 
 func TestHandler_GetTasks(t *testing.T) {
 	h := &Handler{}
-	tasks, err := h.GetTasks("/tmp/test", "", "")
+	tasks, err := h.GetTasks("/tmp/test", "", "", nil)
 	if err != nil {
 		t.Fatalf("GetTasks failed: %v", err)
 	}
@@ -630,7 +697,7 @@ If your handler requires a binary (like `cargo` or `npm`), check for it:
 ```go
 import "scbake/internal/preflight"
 
-func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string, _ map[string]string) ([]types.Task, error) {
 	if err := preflight.CheckBinaries("cargo"); err != nil {
 		return nil, fmt.Errorf("cargo not found: %w", err)
 	}

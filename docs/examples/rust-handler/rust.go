@@ -24,7 +24,7 @@ var templates embed.FS
 type Handler struct{}
 
 // GetTasks returns the list of tasks to set up a Rust project.
-func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
+func (h *Handler) GetTasks(_ string, _ string, _ string, _ map[string]string) ([]types.Task, error) {
 	// Create a priority sequence for language setup tasks
 	seq, err := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
 	if err != nil {

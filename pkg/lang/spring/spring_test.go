@@ -30,7 +30,7 @@ func TestGetTasks_NewSpringProject(t *testing.T) {
 
 func getPlanOrFail(t *testing.T, h *Handler, path string) []types.Task {
 	t.Helper()
-	plan, err := h.GetTasks(path, "", "")
+	plan, err := h.GetTasks(path, "", "", nil)
 	if err != nil {
 		t.Fatalf("Failed to get tasks: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestGetTasks_ExistingSpringProject(t *testing.T) {
 // TestSpringPriorityBands ensures the sequence respects the priority architecture.
 func TestSpringPriorityBands(t *testing.T) {
 	handler := &Handler{}
-	plan, err := handler.GetTasks(filepath.Join(t.TempDir(), "app"), "", "")
+	plan, err := handler.GetTasks(filepath.Join(t.TempDir(), "app"), "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
