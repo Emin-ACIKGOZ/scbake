@@ -185,7 +185,7 @@ const fileutilInternalDir = ".scbake"
 
 // requireConsumers checks the generated Makefile and GitHub workflow cd to rel
 // from the manifest root, never to the root, a traversal, or an absolute path.
-func requireConsumers(t *testing.T, manifestRoot, rel, repoAbs string) {
+func requireConsumers(t *testing.T, manifestRoot, rel, repoAbs string) { //nolint:cyclop // assertion helper with per-consumer guards
 	t.Helper()
 	targetDir := filepath.Join(manifestRoot, filepath.FromSlash(rel))
 
@@ -265,7 +265,7 @@ func requireManifestUnchanged(t *testing.T, path string, before manifestSnapshot
 // bug — the root update must refuse and write nothing, updates at the target
 // and from every alternate spelling must succeed idempotently, and the recorded
 // entries must stay root-relative and unduplicated.
-func TestManifestRecordsRootRelativePaths(t *testing.T) {
+func TestManifestRecordsRootRelativePaths(t *testing.T) { //nolint:cyclop // assertion-heavy spelling matrix
 	spellings := []struct {
 		name   string
 		ownGit bool
@@ -303,7 +303,6 @@ func TestManifestRecordsRootRelativePaths(t *testing.T) {
 
 	signatures := make(map[string]string, len(spellings))
 	for _, tc := range spellings {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			work, repo := manifestPathRepo(t, tc.ownGit)
 			manifestRoot := repo
@@ -433,6 +432,24 @@ func TestManifestRecordsRootRelativePaths(t *testing.T) {
 				t.Errorf("signature for %q differs from root-relative:\nwant:\n%s\ngot:\n%s", tc.name, want, got)
 			}
 		}
+	})
+
+	// `..` from a subdirectory resolves to the manifest root, so the project
+	// records "." and takes its name from the resolved root rather than the
+	// literal parent spelling.
+	t.Run("subdir-parent-dotdot", func(t *testing.T) {
+		_, repo := manifestPathRepo(t, false)
+		output, err := runManifestCLI(t, filepath.Join(repo, "svc"),
+			"apply", "--lang", "go", "--with", manifestPathTemplates, "..")
+		if err != nil {
+			t.Fatalf("apply .. from the subproject failed: %v\n%s", err, output)
+		}
+
+		m := decodeManifest(t, repo)
+		requireSingleProject(t, m, ".", "repo", "go")
+		requireTemplatesAt(t, m, ".", "makefile", "editorconfig", "ci_github")
+		requireConsumers(t, repo, ".", repo)
+		requireNoScbakeNewFiles(t, repo)
 	})
 }
 

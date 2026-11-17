@@ -188,7 +188,7 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 	// A real run has already changed into the new project, so "." is its
 	// context. A dry run has not created or entered the directory, so plan
 	// against the relative project name instead of the parent directory; core
-	// resolves it to an absolute root only for consistency checks.
+	// resolves it against the working directory when it needs a canonical path.
 	targetPath := newTargetPath(projectName)
 	reporter.Step("🚀", "Applying templates...")
 	cacheDir, registryNames := registryPolicy()

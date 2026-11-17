@@ -365,16 +365,21 @@ relative project updates normally and that template entry is left unchanged,
 though a later `apply` may add a relative template entry beside it.
 
 Relative paths written by older builds are not rewritten, because the working
-directory that authored them cannot be recovered. `./svc` and `repo/svc` are
-inert: they match no target, so `update`/`drift --repair` report no templates
-and write nothing. A legacy `"."` is **not** inert: it is indistinguishable from
-a genuine root project, so `update` or `drift --repair` run at the root selects
-it and writes the recorded templates into the repository root — creating root
-files such as `main.go`, `Makefile`, `.editorconfig`, and
-`.github/workflows/main.yml`, overwriting existing files or leaving
-`*.scbake-new` artifacts. Fix such an entry by hand, or re-apply at the intended
-target and remove the stale entry. Leave `"."` unchanged when it really is the
-root project.
+directory that authored them cannot be recovered. A recorded `./svc` never
+matches: canonical paths are cleaned, so only the cleaned spelling can compare
+equal. `repo/svc` matches only when it already is the target's canonical
+root-relative path (for example, when the manifest root is the parent of
+`repo`). It is inert when the manifest root is `repo` itself and the entry was
+written from that root's parent: the target's canonical path there is `svc`, so
+the entry names nothing. An inert entry makes `update`/`drift --repair` report
+no templates and write nothing. A legacy `"."` is **not** inert: it is
+indistinguishable from a genuine root project, so `update` or `drift --repair`
+run at the root selects it and writes the recorded templates into the
+repository root — creating root files such as `main.go`, `Makefile`,
+`.editorconfig`, and `.github/workflows/main.yml`, overwriting existing files or
+leaving `*.scbake-new` artifacts. Fix such an entry by hand, or re-apply at the
+intended target and remove the stale entry. Leave `"."` unchanged when it
+really is the root project.
 
 The hashes above are real values from the current embedded templates; they change
 whenever a rendered template changes. `[metadata]` and `[managed_files]` are omitted
