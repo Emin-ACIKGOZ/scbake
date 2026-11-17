@@ -134,7 +134,9 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 	})
 
 	t.Run("author only", func(t *testing.T) {
-		isolateGitEnv(t)
+		global := isolateGitEnv(t)
+		// useConfigOnly keeps Git from guessing a committer identity.
+		writeGlobalConfig(t, global, true)
 		t.Setenv("GIT_AUTHOR_NAME", "Issue 151")
 		t.Setenv("GIT_AUTHOR_EMAIL", "issue151@example.com")
 		err := CheckGitIdentity(t.TempDir())
@@ -147,7 +149,9 @@ func TestCheckGitIdentity(t *testing.T) { //nolint:cyclop // assertion-heavy ide
 	})
 
 	t.Run("committer only", func(t *testing.T) {
-		isolateGitEnv(t)
+		global := isolateGitEnv(t)
+		// useConfigOnly keeps Git from guessing an author identity.
+		writeGlobalConfig(t, global, true)
 		t.Setenv("GIT_COMMITTER_NAME", "Issue 151")
 		t.Setenv("GIT_COMMITTER_EMAIL", "issue151@example.com")
 		err := CheckGitIdentity(t.TempDir())

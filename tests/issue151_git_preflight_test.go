@@ -43,11 +43,18 @@ var issue151BlockedEnv = map[string]bool{
 // issue151Env returns a filtered environment with a fresh HOME. workDir is the
 // top of the fixture; GIT_CEILING_DIRECTORIES names its parent so a repository
 // above the fixture (including one at the parent itself) can never be
-// discovered. identity adds only the four env-var identity values.
+// discovered. identity adds only the four env-var identity values. The fresh
+// global config disables identity auto-detection, so a run without those
+// variables fails on every platform instead of borrowing an account or host
+// name.
 func issue151Env(t *testing.T, workDir string, identity bool) []string {
 	t.Helper()
 
 	home := t.TempDir()
+	global := filepath.Join(home, "gitconfig")
+	if err := os.WriteFile(global, []byte("[user]\n\tuseConfigOnly = true\n"), 0o600); err != nil {
+		t.Fatalf("write global git config: %v", err)
+	}
 	env := make([]string, 0, len(os.Environ())+8)
 	for _, entry := range os.Environ() {
 		key, _, ok := strings.Cut(entry, "=")
@@ -61,7 +68,7 @@ func issue151Env(t *testing.T, workDir string, identity bool) []string {
 		"XDG_CONFIG_HOME="+filepath.Join(home, "config"),
 		"XDG_CACHE_HOME="+filepath.Join(home, "cache"),
 		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_GLOBAL="+global,
 		"GIT_CEILING_DIRECTORIES="+filepath.Dir(workDir),
 	)
 	if identity {
