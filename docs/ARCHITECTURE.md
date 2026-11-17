@@ -392,23 +392,27 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir, templateName, registri
 5. Token auth supported via stored config or `SCBAKE_REGISTRY_TOKEN_<NAME>` env var
 
 **Lifecycle and membership:**
-- A cached tree is eligible only while its registry is configured. Deleting or
-  hand-editing `registries.json` makes the cache inert rather than letting stale
-  content shadow an embedded template; the failure mode is closed.
+- A cached tree is eligible only while its registry is configured. Deleting
+  `registries.json` or removing (or renaming) a registry entry makes that cache
+  inert rather than letting stale content shadow an embedded template; a
+  malformed or unreadable config disables the registry tier. Changing only the
+  URL, version, or token does not evict or invalidate existing cached content:
+  it keeps resolving until `template pull` refreshes it or `remove` deletes it.
 - `scbake template registry remove <name>` renames `<cacheDir>/<registry>` to a
   sibling `.evict-<key>-<random>` staging path inside the cache root, saves the
   config change, then deletes the staging path. The key is an implementation
   detail derived from the registry name, URL, version, and subdirectory (the
   token is excluded so a token rotation does not invalidate recovery); it makes
   the staged tree attributable to exactly one configured registry.
-  - If staging or saving fails, both the in-memory config and the cache path are
-    restored and the combined error is returned. A combined save-and-restore
-    failure is still an error, but its attributable residue is repaired by the
-    next sweep.
+  - If staging fails, nothing is changed. If saving fails, the in-memory config
+    and the staged cache path are restored and the save error is returned. If
+    that restore also fails, a combined error is returned and the attributable
+    residue is repaired by the next sweep.
   - Once the save succeeds the removal is durable: if only the final cleanup
     fails, `remove` prints a warning to stderr, still reports success, and exits
     zero. The next sweep retries the cleanup.
-  - Every `add`, `remove`, and `set-token` starts by sweeping the cache root,
+  - Every `add` and `remove` (and the internal `Manager.SetToken` API) starts by
+    sweeping the cache root,
     before it mutates anything. A staged root is restored only when its key still
     matches a configured, validly named registry and that registry's live path is
     absent; every other keyed root is deleted. Roots younger than 60 seconds,
@@ -418,10 +422,11 @@ ReadTemplate(efs, tplPath, overrideDir, registryCacheDir, templateName, registri
     and the cache root are untouched. A symlink at the registry path is renamed
     as a link and never followed, and the sweep uses `Lstat` plus lexical
     containment only.
-- `--dry-run` appends the resolved tier to each file task: `[template-dir]`,
-  `[registry: <name>]`, or `[built-in]`. Normal runs and their output are unchanged.
-  The label is a plan-time snapshot, and the `maven_linter` snippet injected into
-  `pom.xml` is not disclosed.
+- `--dry-run` appends the resolved tier to each template-rendered
+  (`CreateTemplateTask`) file: `[template-dir]`, `[registry: <name>]`, or
+  `[built-in]`. Normal runs and their output are unchanged. The label is resolved
+  at dry-run time with the same resolver, and the `maven_linter` snippet injected
+  into `pom.xml` is not disclosed.
 
 ### 4. Optimistic Locking (Fallback)
 

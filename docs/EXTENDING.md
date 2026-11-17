@@ -86,8 +86,10 @@ That's it. Your handler is a single Go struct that implements two methods:
 - `GetTasks(targetPath string, templateDir string, registryCacheDir string, vars map[string]string) ([]types.Task, error)` - Returns the tasks to execute. `vars` carries only the explicit `--set` values (see [Consuming variables](#consuming-variables)).
 
 If your handler reads template files **while building the plan** (instead of
-creating `CreateTemplateTask`, which resolves at execution time), it must also
-implement the optional `types.RegistryAwareHandler` interface:
+creating `CreateTemplateTask`, which resolves at execution time), implement the
+optional `types.RegistryAwareHandler` interface so those lookups honor registry
+overrides; without it, core falls back to `GetTasks` and the registry tier is
+disabled for that lookup:
 
 ```go
 func (h *Handler) GetTasksWithRegistries(targetPath, templateDir, registryCacheDir string, registries []string) ([]types.Task, error) {
