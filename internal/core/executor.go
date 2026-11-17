@@ -40,35 +40,44 @@ func executePlan(
 			betweenRun = true
 		}
 
-		// File tasks do not block on the context, so check between tasks as
-		// well. A signal that arrives during one task still stops the plan
-		// before the next task and lets the deferred rollback run.
-		if err := contextError(tc.Ctx); err != nil {
-			return fmt.Errorf("execution interrupted before %q: %w", task.Description(), err)
-		}
-
-		desc := task.Description()
-		if tc.DryRun {
-			if sd, ok := task.(types.SourceDescriber); ok {
-				desc = sd.DescriptionWithSource(tc)
-			}
-		}
-		reporter.TaskStart(desc, i+1, len(plan.Tasks))
-
-		var err error
-		if !tc.DryRun {
-			err = task.Execute(tc)
-		}
-
-		reporter.TaskEnd(err)
-
-		if err != nil {
-			return fmt.Errorf("task failed (%s): %w", task.Description(), err)
+		if err := runTask(plan, i, task, tc, reporter); err != nil {
+			return err
 		}
 	}
 
 	if !betweenRun {
 		return between()
+	}
+	return nil
+}
+
+// runTask checks for cancellation, emits start/end progress, and executes a
+// single task. It returns a task-scoped error on failure.
+func runTask(plan *types.Plan, index int, task types.Task, tc types.TaskContext, reporter types.Reporter) error {
+	// File tasks do not block on the context, so check between tasks as
+	// well. A signal that arrives during one task still stops the plan
+	// before the next task and lets the deferred rollback run.
+	if err := contextError(tc.Ctx); err != nil {
+		return fmt.Errorf("execution interrupted before %q: %w", task.Description(), err)
+	}
+
+	desc := task.Description()
+	if tc.DryRun {
+		if sd, ok := task.(types.SourceDescriber); ok {
+			desc = sd.DescriptionWithSource(tc)
+		}
+	}
+	reporter.TaskStart(desc, index+1, len(plan.Tasks))
+
+	var err error
+	if !tc.DryRun {
+		err = task.Execute(tc)
+	}
+
+	reporter.TaskEnd(err)
+
+	if err != nil {
+		return fmt.Errorf("task failed (%s): %w", task.Description(), err)
 	}
 	return nil
 }

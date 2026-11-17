@@ -48,6 +48,8 @@ func (t *issue138SourceTask) DescriptionWithSource(tc types.TaskContext) string 
 // TestIssue138_ExecutorSourceDisclosureIsDryRunOnly pins that the executor
 // consults SourceDescriber for previews only; normal runs keep the plain
 // description and still execute the task.
+//
+//nolint:cyclop // assertion-heavy test with one branch per subtest assertion
 func TestIssue138_ExecutorSourceDisclosureIsDryRunOnly(t *testing.T) {
 	t.Run("dry run discloses source", func(t *testing.T) {
 		task := &issue138SourceTask{desc: "Create file"}
