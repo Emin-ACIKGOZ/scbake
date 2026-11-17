@@ -64,8 +64,8 @@ var applyCmd = &cobra.Command{
 		rc := core.RunContext{
 			LangFlag:            langFlag,
 			WithFlag:            withFlag,
-			TargetPath:          absPath,         // Pass absolute path for execution stability.
-			ManifestPathArg:     manifestPathArg, // Pass Arg for manifest portability.
+			TargetPath:          absPath,         // Resolved here for stable execution; relative values resolve against cwd.
+			ManifestPathArg:     manifestPathArg, // Raw argument for commit text only.
 			DryRun:              dryRun,          // dryRun is the global flag.
 			Force:               force,           // force is the global flag.
 			ConflictStrategy:    conflictStrategyFlag,

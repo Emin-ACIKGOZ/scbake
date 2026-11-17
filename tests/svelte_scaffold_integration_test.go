@@ -96,7 +96,11 @@ func TestSvelteApplyStandaloneEmptyTarget(t *testing.T) {
 		t.Fatalf("apply --lang svelte empty failed: %v\n%s", err, output)
 	}
 
-	assertScaffoldedSvelteProject(t, target, "empty", "empty")
+	// The target is its own discovered manifest root, so the documented
+	// root-relative path is "." (docs/ARCHITECTURE.md: [[projects]].path is
+	// relative to the manifest root). The old verbatim CLI argument "empty"
+	// was the issue #134 defect.
+	assertScaffoldedSvelteProject(t, target, "empty", ".")
 	if _, err := os.Stat(filepath.Join(work, "scbake.toml")); !os.IsNotExist(err) {
 		t.Errorf("standalone apply wrote a repository-root manifest: %v", err)
 	}
