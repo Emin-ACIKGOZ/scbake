@@ -152,7 +152,7 @@ func TestGetTasks_GoVersionOrderedBeforeTidy(t *testing.T) {
 	initIdx := findGoModVerb(t, plan, "init")
 	editIdx := findGoModVerb(t, plan, "edit")
 	tidyIdx := findGoModVerb(t, plan, "tidy")
-	if !(initIdx < editIdx && editIdx < tidyIdx) {
+	if initIdx >= editIdx || editIdx >= tidyIdx {
 		t.Fatalf("order init=%d edit=%d tidy=%d, want init < edit < tidy", initIdx, editIdx, tidyIdx)
 	}
 

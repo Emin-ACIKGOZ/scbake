@@ -25,18 +25,20 @@ func findGoDirectiveEditTask(plan []types.Task) *tasks.ExecCommandTask {
 	return nil
 }
 
+type varsPlanCase struct {
+	name      string
+	vars      map[string]string
+	seedGoMod string
+	count     int
+	initSet   []string
+	editSet   []string
+	tidySet   []string
+}
+
 // TestGetTasks_VarsPredictedPaths pins task counts and declared outputs when
 // explicit variables add a `go mod edit` task.
 func TestGetTasks_VarsPredictedPaths(t *testing.T) {
-	cases := []struct {
-		name      string
-		vars      map[string]string
-		seedGoMod string
-		count     int
-		initSet   []string
-		editSet   []string
-		tidySet   []string
-	}{
+	cases := []varsPlanCase{
 		{
 			name:    "new project no vars",
 			count:   4,
@@ -77,37 +79,40 @@ func TestGetTasks_VarsPredictedPaths(t *testing.T) {
 			}
 
 			plan := getPlanWithVarsOrFail(t, &Handler{}, dir, tt.vars)
-			assertPlanLength(t, plan, tt.count)
-
-			initTask, tidyTask := findGoModuleTasks(plan)
-			editTask := findGoDirectiveEditTask(plan)
-
-			if tt.initSet == nil {
-				if initTask != nil {
-					t.Fatalf("unexpected go mod init task: %v", initTask.Args)
-				}
-			} else {
-				if initTask == nil {
-					t.Fatal("missing go mod init task")
-				}
-				assertStringSet(t, "go mod init", initTask.PredictedCreated, tt.initSet)
-			}
-
-			if tt.editSet == nil {
-				if editTask != nil {
-					t.Fatalf("unexpected go mod edit task: %v", editTask.Args)
-				}
-			} else {
-				if editTask == nil {
-					t.Fatal("missing go mod edit task")
-				}
-				assertStringSet(t, "go mod edit", editTask.PredictedCreated, tt.editSet)
-			}
-
-			if tidyTask == nil {
-				t.Fatal("missing go mod tidy task")
-			}
-			assertStringSet(t, "go mod tidy", tidyTask.PredictedCreated, tt.tidySet)
+			assertVarsPlan(t, plan, tt)
 		})
 	}
+}
+
+func assertVarsPlan(t *testing.T, plan []types.Task, tt varsPlanCase) {
+	t.Helper()
+	assertPlanLength(t, plan, tt.count)
+
+	initTask, tidyTask := findGoModuleTasks(plan)
+	editTask := findGoDirectiveEditTask(plan)
+
+	if tt.initSet == nil {
+		if initTask != nil {
+			t.Fatalf("unexpected go mod init task: %v", initTask.Args)
+		}
+	} else if initTask == nil {
+		t.Fatal("missing go mod init task")
+	} else {
+		assertStringSet(t, "go mod init", initTask.PredictedCreated, tt.initSet)
+	}
+
+	if tt.editSet == nil {
+		if editTask != nil {
+			t.Fatalf("unexpected go mod edit task: %v", editTask.Args)
+		}
+	} else if editTask == nil {
+		t.Fatal("missing go mod edit task")
+	} else {
+		assertStringSet(t, "go mod edit", editTask.PredictedCreated, tt.editSet)
+	}
+
+	if tidyTask == nil {
+		t.Fatal("missing go mod tidy task")
+	}
+	assertStringSet(t, "go mod tidy", tidyTask.PredictedCreated, tt.tidySet)
 }

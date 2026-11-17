@@ -39,16 +39,32 @@ func (h *Handler) SchemaPath() string { return "schema.json" }
 // explicit --set values for this invocation; schema defaults are never included
 // and an empty value means "no override".
 func (h *Handler) GetTasks(targetPath string, _ string, _ string, vars map[string]string) ([]types.Task, error) {
-	var plan []types.Task
-
 	// Use a single sequence for all language setup tasks (100-999)
 	langSeq, err := types.NewPrioritySequence(types.PrioLangSetup, types.MaxLangSetup)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create priority sequence: %w", err)
 	}
 
-	// Task 1: Create .gitignore
-	p, err := langSeq.Next()
+	plan, err := appendBaseTasks(nil, langSeq)
+	if err != nil {
+		return nil, err
+	}
+
+	goModPath := filepath.Join(targetPath, goModFile)
+	_, checkErr := os.Stat(goModPath)
+
+	if os.IsNotExist(checkErr) {
+		return appendInitTasks(plan, langSeq, targetPath, vars)
+	}
+	if checkErr == nil {
+		return appendMaintenanceTasks(plan, langSeq, targetPath, vars)
+	}
+	return nil, fmt.Errorf("could not check for go.mod: %w", checkErr)
+}
+
+// appendBaseTasks appends the templates every Go project receives.
+func appendBaseTasks(plan []types.Task, seq *types.PrioritySequence) ([]types.Task, error) {
+	p, err := seq.Next()
 	if err != nil {
 		return nil, err
 	}
@@ -60,8 +76,7 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string, vars map[strin
 		TaskPrio:     int(p),
 	})
 
-	// Task 2: Create main.go
-	p, err = langSeq.Next()
+	p, err = seq.Next()
 	if err != nil {
 		return nil, err
 	}
@@ -73,83 +88,71 @@ func (h *Handler) GetTasks(targetPath string, _ string, _ string, vars map[strin
 		TaskPrio:     int(p),
 	})
 
-	// Idempotency Check
-	goModPath := filepath.Join(targetPath, goModFile)
-	_, checkErr := os.Stat(goModPath)
+	return plan, nil
+}
 
-	if os.IsNotExist(checkErr) {
-		// --- Path 1: go.mod does NOT exist (Initialization) ---
-		moduleName, err := moduleNameFor(targetPath, vars)
-		if err != nil {
-			return nil, fmt.Errorf("could not determine module name: %w", err)
-		}
-
-		// Task 3: Run 'go mod init'
-		p, err = langSeq.Next()
-		if err != nil {
-			return nil, err
-		}
-		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd:              "go",
-			Args:             []string{goModSubcommand, "init", moduleName},
-			Desc:             "Run go mod init " + moduleName,
-			TaskPrio:         int(p),
-			RunInTarget:      true,
-			PredictedCreated: []string{goModFile},
-		})
-
-		// Task 4 (optional): Run 'go mod edit -go=<version>'
-		plan, err = appendGoDirectiveTask(plan, langSeq, vars)
-		if err != nil {
-			return nil, err
-		}
-
-		// Task 5: Run 'go mod tidy'
-		p, err = langSeq.Next()
-		if err != nil {
-			return nil, err
-		}
-		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd:              "go",
-			Args:             []string{goModSubcommand, "tidy"},
-			Desc:             "Run go mod tidy",
-			TaskPrio:         int(p),
-			RunInTarget:      true,
-			PredictedCreated: []string{goModFile, goSumFile},
-		})
-	} else if checkErr == nil {
-		// --- Path 2: go.mod *does* exist (Maintenance) ---
-		// scbake never rewrites an existing module path; a differing explicit
-		// value is an error so it is never recorded without being honoured.
-		if requested := vars["module_path"]; requested != "" {
-			if err := ensureModulePathUnchanged(targetPath, requested); err != nil {
-				return nil, err
-			}
-		}
-
-		// Task 3 (optional): Run 'go mod edit -go=<version>'
-		plan, err = appendGoDirectiveTask(plan, langSeq, vars)
-		if err != nil {
-			return nil, err
-		}
-
-		// Task 4: Run 'go mod tidy' to update dependencies if files were modified.
-		p, err = langSeq.Next()
-		if err != nil {
-			return nil, err
-		}
-		plan = append(plan, &tasks.ExecCommandTask{
-			Cmd:              "go",
-			Args:             []string{goModSubcommand, "tidy"},
-			Desc:             "Run go mod tidy (project exists)",
-			TaskPrio:         int(p),
-			RunInTarget:      true,
-			PredictedCreated: []string{goModFile, goSumFile},
-		})
-	} else {
-		// --- Path 3: Some other error ---
-		return nil, fmt.Errorf("could not check for go.mod: %w", checkErr)
+// appendInitTasks adds module initialization for a project without go.mod.
+func appendInitTasks(plan []types.Task, seq *types.PrioritySequence, targetPath string, vars map[string]string) ([]types.Task, error) {
+	moduleName, err := moduleNameFor(targetPath, vars)
+	if err != nil {
+		return nil, fmt.Errorf("could not determine module name: %w", err)
 	}
+
+	p, err := seq.Next()
+	if err != nil {
+		return nil, err
+	}
+	plan = append(plan, &tasks.ExecCommandTask{
+		Cmd:              "go",
+		Args:             []string{goModSubcommand, "init", moduleName},
+		Desc:             "Run go mod init " + moduleName,
+		TaskPrio:         int(p),
+		RunInTarget:      true,
+		PredictedCreated: []string{goModFile},
+	})
+
+	plan, err = appendGoDirectiveTask(plan, seq, vars)
+	if err != nil {
+		return nil, err
+	}
+
+	return appendTidyTask(plan, seq, "Run go mod tidy")
+}
+
+// appendMaintenanceTasks adds jobs for a project that already has go.mod.
+func appendMaintenanceTasks(plan []types.Task, seq *types.PrioritySequence, targetPath string, vars map[string]string) ([]types.Task, error) {
+	// scbake never rewrites an existing module path; a differing explicit
+	// value is an error so it is never recorded without being honored.
+	if requested := vars["module_path"]; requested != "" {
+		if err := ensureModulePathUnchanged(targetPath, requested); err != nil {
+			return nil, err
+		}
+	}
+
+	plan, err := appendGoDirectiveTask(plan, seq, vars)
+	if err != nil {
+		return nil, err
+	}
+
+	return appendTidyTask(plan, seq, "Run go mod tidy (project exists)")
+}
+
+// appendTidyTask appends `go mod tidy`.
+func appendTidyTask(plan []types.Task, seq *types.PrioritySequence, desc string) ([]types.Task, error) {
+	args := []string{goModSubcommand, "tidy"}
+
+	p, err := seq.Next()
+	if err != nil {
+		return nil, err
+	}
+	plan = append(plan, &tasks.ExecCommandTask{
+		Cmd:              "go",
+		Args:             args,
+		Desc:             desc,
+		TaskPrio:         int(p),
+		RunInTarget:      true,
+		PredictedCreated: []string{goModFile, goSumFile},
+	})
 
 	return plan, nil
 }
