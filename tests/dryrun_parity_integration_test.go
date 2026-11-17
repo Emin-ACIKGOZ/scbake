@@ -230,7 +230,11 @@ func TestDryRunParityMavenTargetErrors(t *testing.T) {
 			prepare(dryDir)
 			before := dryRunTakeSnapshot(t, dryDir)
 			dryOut, dryErr := dryRunRunIn(t, dryDir, "apply", "--with", "maven_linter", "--dry-run", "--conflict-strategy=fail")
-			dryRunAssertSnapshotsEqual(t, before, dryRunTakeSnapshot(t, dryDir))
+			after := dryRunTakeSnapshot(t, dryDir)
+			dryRunAssertSnapshotsEqual(t, before, after)
+			// No earlier task produces pom.xml, so the failing dry run must not
+			// leave transaction state or an artifact behind either.
+			dryRunAssertNoResidue(t, after)
 
 			realDir := t.TempDir()
 			prepare(realDir)

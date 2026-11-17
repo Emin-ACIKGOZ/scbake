@@ -151,35 +151,3 @@ func TestDryRunSpringMavenParity(t *testing.T) {
 		})
 	}
 }
-
-// TestDryRunMavenWithoutProducerStillFails pins the other side of the deferral:
-// with no earlier task declaring pom.xml, the planned-path mechanism must not
-// hide the missing target. Dry-run and real-run must fail identically.
-func TestDryRunMavenWithoutProducerStillFails(t *testing.T) {
-	prepare := func(root string) string {
-		t.Helper()
-		out, err := runScbake(t, root, t.TempDir(), "new", "app", "--with", "makefile")
-		if err != nil {
-			t.Fatalf("preparing project fixture: %v\n%s", err, out)
-		}
-		return filepath.Join(root, "app")
-	}
-
-	dryRoot := t.TempDir()
-	dryProject := prepare(dryRoot)
-	before := dryRunTakeSnapshot(t, dryRoot)
-	dryOut, dryErr := dryRunRunIn(t, dryProject,
-		"apply", "--with", "maven_linter", "--dry-run", "--conflict-strategy=fail")
-	dryRunAssertSnapshotsEqual(t, before, dryRunTakeSnapshot(t, dryRoot))
-	dryRunAssertNoResidue(t, dryRunTakeSnapshot(t, dryRoot))
-
-	realRoot := t.TempDir()
-	realProject := prepare(realRoot)
-	realOut, realErr := dryRunRunIn(t, realProject,
-		"apply", "--with", "maven_linter", "--conflict-strategy=fail")
-
-	dryRunAssertSameFailure(t, dryOut, dryErr, realOut, realErr, "Inject Maven Checkstyle plugin into pom.xml")
-	if line := dryRunErrorLine(dryOut); !strings.Contains(line, "XML file not found: pom.xml") {
-		t.Errorf("dry-run error = %q, want %q", line, "XML file not found: pom.xml")
-	}
-}
