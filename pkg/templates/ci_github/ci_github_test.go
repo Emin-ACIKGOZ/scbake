@@ -59,7 +59,8 @@ func TestGetTasks_TemplateBinding(t *testing.T) {
 }
 
 // renderWorkflow renders the embedded CI workflow for the given manifest and
-// returns its contents.
+// returns its contents with line endings normalized to LF, so assertions do
+// not depend on the host platform's EOL convention.
 func renderWorkflow(t *testing.T, m *types.Manifest) string {
 	t.Helper()
 
@@ -80,7 +81,7 @@ func renderWorkflow(t *testing.T, m *types.Manifest) string {
 	if err != nil {
 		t.Fatalf("read generated workflow: %v", err)
 	}
-	return string(out)
+	return strings.ReplaceAll(string(out), "\r\n", "\n")
 }
 
 // TestWorkflow_BenignProjectRendersUnchanged pins the benign rendering so the
