@@ -66,8 +66,11 @@ func TestIssue138_ResolverEmptyAllowlistFailsClosed(t *testing.T) {
 // registries in the configured order and reports the supplying registry. The
 // cache's order file must not override the configured order, even when the two
 // disagree.
+//
+//nolint:cyclop // assertion-heavy: explicit and manager-derived precedence in both directions
 func TestIssue138_ResolverConfigOrderPrecedence(t *testing.T) {
-	cacheDir := t.TempDir()
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
 	alpha := issue138SeedEntry(t, cacheDir, "alpha", "go-api", "main.go.tpl", "from alpha")
 	zeta := issue138SeedEntry(t, cacheDir, "zeta", "go-api", "main.go.tpl", "from zeta")
 
@@ -84,6 +87,35 @@ func TestIssue138_ResolverConfigOrderPrecedence(t *testing.T) {
 	got, registry = ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", []string{"zeta", "alpha"})
 	if got != zeta || registry != "zeta" {
 		t.Errorf("reversed allowlist precedence: got (%q, %q), want (%q, %q)", got, registry, zeta, "zeta")
+	}
+
+	// The allowlist derived from the manager's List() follows the configured
+	// insertion order, and that order wins even when the order file disagrees.
+	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
+	for _, name := range []string{"zeta", "alpha"} {
+		if err := m.Add(name, "https://"+name+".example/v1", "", "", ""); err != nil {
+			t.Fatalf("Add %s: %v", name, err)
+		}
+	}
+	names := make([]string, 0, 2)
+	for _, r := range m.List() {
+		names = append(names, r.Name)
+	}
+	if len(names) != 2 || names[0] != "zeta" || names[1] != "alpha" {
+		t.Fatalf("manager allowlist = %v, want [zeta alpha]", names)
+	}
+
+	// The order file claims alpha first; the configured order (zeta, alpha) wins.
+	issue138WriteOrder(t, cacheDir, "alpha", "zeta")
+	if got, reg := ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", names); got != zeta || reg != "zeta" {
+		t.Errorf("manager-order precedence: got (%q, %q), want (%q, %q)", got, reg, zeta, "zeta")
+	}
+
+	// Reversing the manager-derived allowlist reverses precedence, still
+	// ignoring the order file.
+	reversed := []string{names[1], names[0]}
+	if got, reg := ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", reversed); got != alpha || reg != "alpha" {
+		t.Errorf("reversed manager order: got (%q, %q), want (%q, %q)", got, reg, alpha, "alpha")
 	}
 }
 

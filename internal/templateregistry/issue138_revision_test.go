@@ -186,45 +186,6 @@ func TestIssue138Revision_RemoveInvalidNameIsNoOp(t *testing.T) {
 	assertNoEvictionStaging(t, cacheDir)
 }
 
-// TestIssue138Revision_ManagerOrderBeatsOrderFile drives precedence through the
-// manager's own config order and disagrees the order file in both directions.
-func TestIssue138Revision_ManagerOrderBeatsOrderFile(t *testing.T) {
-	dir := t.TempDir()
-	cacheDir := filepath.Join(dir, "cache")
-	m := NewManagerWithPaths(filepath.Join(dir, "registries.json"), cacheDir)
-	// Add zeta first: zeta is configured precedence over alpha.
-	if err := m.Add("zeta", "https://zeta.example/v1", "", "", ""); err != nil {
-		t.Fatalf("Add zeta: %v", err)
-	}
-	if err := m.Add("alpha", "https://alpha.example/v1", "", "", ""); err != nil {
-		t.Fatalf("Add alpha: %v", err)
-	}
-	alpha := issue138SeedEntry(t, cacheDir, "alpha", "go-api", "main.go.tpl", "from alpha")
-	zeta := issue138SeedEntry(t, cacheDir, "zeta", "go-api", "main.go.tpl", "from zeta")
-
-	names := func() []string {
-		list := m.List()
-		out := make([]string, 0, len(list))
-		for _, r := range list {
-			out = append(out, r.Name)
-		}
-		return out
-	}()
-
-	// The order file claims alpha first; the configured order (zeta, alpha) wins.
-	issue138WriteOrder(t, cacheDir, "alpha", "zeta")
-	if got, reg := ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", names); got != zeta || reg != "zeta" {
-		t.Errorf("configured order: got (%q, %q), want (%q, %q)", got, reg, zeta, "zeta")
-	}
-
-	// Reversing the configured allowlist reverses precedence, still ignoring the
-	// order file.
-	reversed := []string{names[1], names[0]}
-	if got, reg := ResolveCacheEntry(cacheDir, "go-api", "main.go.tpl", reversed); got != alpha || reg != "alpha" {
-		t.Errorf("reversed configured order: got (%q, %q), want (%q, %q)", got, reg, alpha, "alpha")
-	}
-}
-
 // TestIssue138Revision_OrderFileCannotAdmitUnconfigured proves the order file
 // cannot make a cached, unconfigured registry eligible.
 func TestIssue138Revision_OrderFileCannotAdmitUnconfigured(t *testing.T) {

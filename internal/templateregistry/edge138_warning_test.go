@@ -85,6 +85,17 @@ func TestEdge138PostSaveDiscardIsWarning(t *testing.T) {
 	if got := reloaded.List(); len(got) != 1 || got[0].Name != "other" {
 		t.Errorf("persisted config after warning = %v, want [other]", got)
 	}
+	// The raw config file itself no longer lists team and still lists other.
+	data, readErr := os.ReadFile(filepath.Clean(configPath))
+	if readErr != nil {
+		t.Fatalf("reading persisted config: %v", readErr)
+	}
+	if strings.Contains(string(data), `"team"`) {
+		t.Errorf("persisted config still lists team:\n%s", data)
+	}
+	if !strings.Contains(string(data), `"other"`) {
+		t.Errorf("persisted config lost other:\n%s", data)
+	}
 	if _, statErr := os.Lstat(live); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Errorf("read-only live cache survived durable removal: %v", statErr)
 	}
@@ -106,34 +117,6 @@ func TestEdge138PostSaveDiscardIsWarning(t *testing.T) {
 	}
 	if roots := edgeRoots(t, cacheDir); len(roots) != 0 {
 		t.Errorf("Add did not reclaim aged residue: %v", roots)
-	}
-}
-
-// TestEdge138ReadOnlyLiveDirRemovalIsDurable isolates the durable-success
-// invariant: the registry is gone from the persisted config and the live cache
-// path is absent even though the directory was read-only.
-func TestEdge138ReadOnlyLiveDirRemovalIsDurable(t *testing.T) {
-	edge138RequireWritableChmod(t)
-	configPath, _, m, live := edge138ReadOnlyLiveCacheFixture(t)
-
-	err := m.Remove("team")
-	var warning *EvictionWarning
-	if !errors.As(err, &warning) {
-		t.Fatalf("Remove error = %T %v, want *EvictionWarning", err, err)
-	}
-
-	data, readErr := os.ReadFile(filepath.Clean(configPath))
-	if readErr != nil {
-		t.Fatalf("reading persisted config: %v", readErr)
-	}
-	if strings.Contains(string(data), `"team"`) {
-		t.Errorf("persisted config still lists team:\n%s", data)
-	}
-	if !strings.Contains(string(data), `"other"`) {
-		t.Errorf("persisted config lost other:\n%s", data)
-	}
-	if _, statErr := os.Lstat(live); !errors.Is(statErr, fs.ErrNotExist) {
-		t.Errorf("live cache path still exists: %v", statErr)
 	}
 }
 
