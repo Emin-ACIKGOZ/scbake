@@ -481,8 +481,9 @@ scbake unmanage --dry-run main.go
 ### `recover`: Roll Back an Interrupted Transaction
 
 A crash or `SIGKILL` can leave a transaction journal under
-`.scbake/tmp/`. The next `apply`, `update`, `drift --repair`, or `drift` refuses
-to treat that tree as clean. Roll the interrupted run back with:
+`.scbake/tmp/`. The next `apply`, `update`, `accept`, `unmanage`,
+`drift --repair`, or `drift` refuses to treat that tree as clean. Roll the
+interrupted run back with:
 
 ```bash
 scbake recover [--discard] [<path>]

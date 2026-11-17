@@ -67,21 +67,47 @@ func runManage(rc RunContext, paths []string, accept bool) error {
 		return err
 	}
 
-	if rc.DryRun {
+	// Validate and plan against a copy. The real manifest is only replaced by
+	// the copy when every argument succeeded.
+	updated, actions, err := planManage(rc, root, paths, accept, m.DeepCopy())
+	if err != nil {
+		return err
+	}
+	changed := manageActionsChanged(actions)
+
+	if rc.DryRun || !changed {
+		// A dry run opens no transaction, but it must not plan against a tree
+		// left half-written by an interrupted run. A real no-op is checked too,
+		// so it agrees with --dry-run and drift instead of reporting success on
+		// a project that needs recovery. Mutating runs are checked by
+		// setupTransaction.
 		if err := transaction.CheckPending(root); err != nil {
 			return err
 		}
+		reportManageActions(actions, accept, rc.DryRun)
+		reportManageWarnings(actions)
+		return nil
 	}
 
-	// Validate and plan against a copy. The real manifest is only replaced by
-	// the copy when every argument succeeded.
-	updated := m.DeepCopy()
+	if err := applyManage(root, updated, actions); err != nil {
+		return err
+	}
+	reportManageActions(actions, accept, false)
+	reportManageWarnings(actions)
+	return nil
+}
+
+// planManage validates every argument against a deep copy of the manifest and
+// returns the updated copy plus one action per argument. Planning reads files
+// and mutates only the copy, so a failure leaves the real manifest untouched.
+func planManage(
+	rc RunContext, root string, paths []string, accept bool, updated *types.Manifest,
+) (*types.Manifest, []manageAction, error) {
 	actions := make([]manageAction, 0, len(paths))
-	changed := false
 	for _, arg := range paths {
 		key, err := resolveManagedKey(root, rc.TargetPath, arg)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 
 		var action manageAction
@@ -91,18 +117,27 @@ func runManage(rc RunContext, paths []string, accept bool) error {
 			action, err = planUnmanage(updated, root, key, arg)
 		}
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		actions = append(actions, action)
-		changed = changed || action.changed()
 	}
+	return updated, actions, nil
+}
 
-	if rc.DryRun || !changed {
-		reportManageActions(actions, accept, rc.DryRun)
-		reportManageWarnings(actions)
-		return nil
+// manageActionsChanged reports whether any planned action mutates persistent
+// state.
+func manageActionsChanged(actions []manageAction) bool {
+	for _, action := range actions {
+		if action.changed() {
+			return true
+		}
 	}
+	return false
+}
 
+// applyManage applies all planned actions in one transaction and one manifest
+// save.
+func applyManage(root string, updated *types.Manifest, actions []manageAction) error {
 	tx, cleanup, err := setupTransaction(root, false, false)
 	if err != nil {
 		return err
@@ -127,13 +162,10 @@ func runManage(rc RunContext, paths []string, accept bool) error {
 	if err := tx.Commit(); err != nil {
 		if errors.Is(err, transaction.ErrCommitted) {
 			fmt.Fprintf(os.Stderr, "⚠️  Transaction committed with warning: %v\n", err)
-		} else {
-			return fmt.Errorf("failed to commit transaction: %w", err)
+			return nil
 		}
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-
-	reportManageActions(actions, accept, false)
-	reportManageWarnings(actions)
 	return nil
 }
 

@@ -252,6 +252,64 @@ func TestRunAcceptDryRunWritesNothing(t *testing.T) {
 	}
 }
 
+// TestRunManageNoOpChecksPending: a real no-op must not report success on a
+// project with an interrupted transaction, matching --dry-run and drift.
+func TestRunManageNoOpChecksPending(t *testing.T) {
+	t.Run("accept no-op", func(t *testing.T) {
+		root := t.TempDir()
+		pristine := []byte("pristine a.txt\n")
+		writeManageFixture(t, root, map[string]string{"a.txt": string(pristine)})
+		if err := os.WriteFile(filepath.Join(root, "a.txt"), pristine, 0o600); err != nil {
+			t.Fatalf("write pristine: %v", err)
+		}
+		writeDeadJournal(t, root)
+		before := mustManageRead(t, filepath.Join(root, fileutil.ManifestFileName))
+
+		err := RunAccept(manageRunContext(root), []string{"a.txt"})
+		if !errors.Is(err, transaction.ErrIncompleteTransaction) {
+			t.Fatalf("accept no-op error = %v, want ErrIncompleteTransaction", err)
+		}
+		if got := mustManageRead(t, filepath.Join(root, fileutil.ManifestFileName)); got != before {
+			t.Errorf("no-op accept rewrote the manifest")
+		}
+	})
+
+	t.Run("unmanage no-op", func(t *testing.T) {
+		root := t.TempDir()
+		m := &types.Manifest{
+			SbakeVersion:   manifest.DefaultSbakeVersion,
+			UnmanagedFiles: []string{"a.txt"},
+		}
+		if err := manifest.Save(m, root); err != nil {
+			t.Fatalf("save manifest: %v", err)
+		}
+		writeDeadJournal(t, root)
+		before := mustManageRead(t, filepath.Join(root, fileutil.ManifestFileName))
+
+		err := RunUnmanage(manageRunContext(root), []string{"a.txt"})
+		if !errors.Is(err, transaction.ErrIncompleteTransaction) {
+			t.Fatalf("unmanage no-op error = %v, want ErrIncompleteTransaction", err)
+		}
+		if got := mustManageRead(t, filepath.Join(root, fileutil.ManifestFileName)); got != before {
+			t.Errorf("no-op unmanage rewrote the manifest")
+		}
+	})
+}
+
+// writeDeadJournal installs an uncommitted journal owned by a PID that cannot
+// be running, so the project is in the needs-recovery state.
+func writeDeadJournal(t *testing.T, root string) {
+	t.Helper()
+	dir := filepath.Join(root, fileutil.InternalDir, fileutil.TmpDir, "tx-999999")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("mkdir pending transaction: %v", err)
+	}
+	header := []byte(`{"version":2,"pid":1073741824}` + "\n")
+	if err := os.WriteFile(filepath.Join(dir, "journal.jsonl"), header, 0o600); err != nil {
+		t.Fatalf("write pending journal: %v", err)
+	}
+}
+
 // TestRunAcceptBaseInvalidFails: a corrupt base blocks acceptance.
 func TestRunAcceptBaseInvalidFails(t *testing.T) {
 	root := t.TempDir()
