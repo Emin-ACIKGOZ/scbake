@@ -98,14 +98,19 @@ cd my-docs
 git log  # Already has initial commit!
 ```
 
-Run this outside an existing Git work tree. The `git` template needs a
-configured author and committer identity; if either is missing, `new` fails
-before creating the project directory (a `--dry-run` fails the same way). When
-the target already contains `.git`, has a `.git` marker in its nearest existing
-ancestors, or is inside a work tree, the template is skipped with a notice, so
-no nested repository is created there. The ancestor check still applies when Git
-cannot inspect the repository (`GIT_CEILING_DIRECTORIES`, an empty or corrupt
-`.git`, or dubious ownership); bare repositories are not detected.
+Run this outside an existing Git work tree. The `git` template needs both a
+configured author and committer identity (`user.name`/`user.email`, or both the
+`GIT_AUTHOR_*` and `GIT_COMMITTER_*` pairs); when the template is not skipped, a
+missing identity makes `new` fail before creating the project directory (a
+`--dry-run` fails the same way). When the target already contains `.git`, has a
+`.git` marker in its nearest existing ancestors, or is inside a work tree, the
+template is skipped with a notice — no identity is needed and no nested
+repository is created there. The ancestor check still applies when Git cannot
+inspect the repository (`GIT_CEILING_DIRECTORIES`, an empty or corrupt `.git`,
+or dubious ownership); bare repositories are not detected. Unset `GIT_DIR` and
+`GIT_WORK_TREE` when using `--with git`: `GIT_DIR` alone can cause a skip, while
+`GIT_DIR` with `GIT_WORK_TREE` naming another repository is not detected and
+can commit into that repository.
 
 ## Available Languages
 
@@ -121,7 +126,7 @@ cannot inspect the repository (`GIT_CEILING_DIRECTORIES`, an empty or corrupt
 
 | Template | What it does |
 |----------|--|
-| **git** | Initialize repo, first commit (skipped inside an existing work tree, below a `.git` marker, or when `.git` exists; requires Git identity) |
+| **git** | Initialize repo, first commit (skipped inside an existing work tree, below a `.git` marker, or when `.git` exists; when it actually initializes, requires a Git identity) |
 | **editorconfig** | Standard editor formatting |
 | **ci_github** | GitHub Actions workflows |
 | **makefile** | Universal build scripts |
