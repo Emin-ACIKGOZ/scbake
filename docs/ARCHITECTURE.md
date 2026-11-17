@@ -346,13 +346,35 @@ scbake_version = "v0.3.0"
 | `[managed_files]` | SHA-256 of every template-rendered file scbake manages, EOL-insensitive for NUL-free content, keyed by path relative to the manifest root. Drives `update` and `drift`. Omitted when empty. |
 
 `[[projects]].path` and `[[templates]].path` name the same directory as the
-matching `[managed_files]` key prefix. Older manifests may contain absolute
-paths: those are rebased against the discovered root in memory when the manifest
-is loaded, and the next mutating command (`apply`, `update`, `drift --repair`)
-persists the relative form. Relative paths written by older builds (`.`, `./svc`,
-`repo/svc`) are not rewritten, because the working directory that authored them
-cannot be recovered; correct them by hand or re-apply at the canonical spelling
-and remove the stale entry.
+matching `[managed_files]` key prefix: keys are root-relative, so a `"."` entry
+(the root project) has no prefix, while `svc` yields keys such as `svc/main.go`.
+Manifests written before keys were scoped may also contain flat,
+project-relative keys. Older manifests may contain absolute paths: those that
+resolve inside the discovered root are rebased against it in memory when the
+manifest is loaded, and the next mutating command (`apply`, `update`,
+`drift --repair`) persists the relative form. Absolute paths outside the root —
+a moved or copied checkout, or a symlink alias of the root — are left unchanged
+and must be fixed by hand: `apply` rejects absolute project paths as
+non-relative, and `update`/`drift --repair` cannot rely on such entries. An
+outside-root absolute **project** path fails the run with `project "svc" has an
+invalid path …: path must be relative to the repository root` when a relative
+template entry still matches the target, and reports no recorded templates when
+nothing matches (for example, when both entries are outside the root). An
+outside-root absolute **template** path on its own does not fail anything: a
+relative project updates normally and that template entry is left unchanged,
+though a later `apply` may add a relative template entry beside it.
+
+Relative paths written by older builds are not rewritten, because the working
+directory that authored them cannot be recovered. `./svc` and `repo/svc` are
+inert: they match no target, so `update`/`drift --repair` report no templates
+and write nothing. A legacy `"."` is **not** inert: it is indistinguishable from
+a genuine root project, so `update` or `drift --repair` run at the root selects
+it and writes the recorded templates into the repository root — creating root
+files such as `main.go`, `Makefile`, `.editorconfig`, and
+`.github/workflows/main.yml`, overwriting existing files or leaving
+`*.scbake-new` artifacts. Fix such an entry by hand, or re-apply at the intended
+target and remove the stale entry. Leave `"."` unchanged when it really is the
+root project.
 
 The hashes above are real values from the current embedded templates; they change
 whenever a rendered template changes. `[metadata]` and `[managed_files]` are omitted
