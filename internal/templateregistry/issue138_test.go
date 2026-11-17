@@ -6,6 +6,7 @@ package templateregistry
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -275,10 +276,18 @@ func TestIssue138_RemoveEscapingSymlinkUnlinksOnly(t *testing.T) {
 //
 //nolint:cyclop // assertion-heavy test with one branch per checked invariant
 func TestIssue138_EvictionFailureKeepsConfigConsistent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows reports a path below a regular file as not-found instead of
+		// ENOTDIR, so the fixture is treated as "nothing cached" and eviction
+		// succeeds. The other POSIX failure-injection tests cover the same
+		// invariant on Linux and macOS.
+		t.Skip("synthetic non-directory cache failure is POSIX-specific")
+	}
+
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "registries.json")
 	// A regular file where the cache directory should be makes every
-	// <cache>/<name> lookup fail with ENOTDIR on all platforms.
+	// <cache>/<name> lookup fail with ENOTDIR on POSIX systems.
 	cachePath := filepath.Join(dir, "cache-is-a-file")
 	if err := os.WriteFile(cachePath, []byte("not a directory"), 0o600); err != nil {
 		t.Fatalf("seeding cache file: %v", err)
