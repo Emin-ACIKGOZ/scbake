@@ -21,6 +21,7 @@ import (
 	"sort"
 
 	"scbake/internal/types"
+	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
 )
@@ -170,7 +171,12 @@ func inspect(m *types.Manifest, root, key, recorded, baseline string, accepted b
 	case errors.Is(readErr, fs.ErrNotExist):
 		return inspectLegacy(m, root, key, recorded, baseline, accepted)
 	default:
-		return Finding{}, false, false, fmt.Errorf("inspecting managed file %q: %w", key, readErr)
+		// readErr is a *fs.PathError carrying the manifest-derived key, so it
+		// can hold raw terminal controls. The error is already known not to be
+		// ENOENT here; wrap a sanitized view so the control bytes cannot reach
+		// stderr while errors.Is/errors.As can still inspect the original.
+		return Finding{}, false, false, fmt.Errorf("inspecting managed file %q: %w",
+			key, util.SanitizeError(readErr))
 	}
 }
 
@@ -250,6 +256,10 @@ func inspectBase(root, key, recorded string) (Finding, bool, error) {
 			BasePath: filepath.ToSlash(relPath),
 		}, true, nil
 	default:
-		return Finding{}, false, fmt.Errorf("inspecting committed base for %q: %w", key, err)
+		// As in inspect, the PathError embeds the key that a cloned manifest
+		// controls. Classify it first, then wrap a sanitized view that keeps the
+		// original error available to errors.Is/errors.As.
+		return Finding{}, false, fmt.Errorf("inspecting committed base for %q: %w",
+			key, util.SanitizeError(err))
 	}
 }

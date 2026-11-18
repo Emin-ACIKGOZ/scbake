@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -643,6 +644,109 @@ func TestRemoveUnmanagedBasesRollbackRestoresBase(t *testing.T) {
 	}
 	if string(got) != pristine {
 		t.Fatalf("rollback restored %q, want %q", got, pristine)
+	}
+}
+
+// TestRemoveUnmanagedBasesTrackFailure pins the track-failure branch: a base
+// that the transaction refuses to track (a hard-linked inode) is never removed,
+// and the failure identifies the base-shadow tracking step.
+func TestRemoveUnmanagedBasesTrackFailure(t *testing.T) {
+	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
+		t.Skip("hard-link tracking refusal is Unix-only")
+	}
+	root := t.TempDir()
+	basePath := filepath.Join(root, tasks.BaseShadowRelPath("a.txt"))
+	if err := os.MkdirAll(filepath.Dir(basePath), fileutil.DirPerms); err != nil {
+		t.Fatalf("mkdir base: %v", err)
+	}
+	if err := os.WriteFile(basePath, []byte("pristine\n"), 0o600); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+	if err := os.Link(basePath, filepath.Join(root, "other-link.txt")); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+
+	tx, cleanup, err := setupTransaction(root, false, false)
+	if err != nil {
+		t.Fatalf("setupTransaction: %v", err)
+	}
+	defer cleanup()
+
+	err = removeUnmanagedBases(tx, []manageAction{{key: "a.txt", baseAbs: basePath, removeBase: true}})
+	if err == nil || !strings.Contains(err.Error(), "failed to track base shadow") {
+		t.Fatalf("removeUnmanagedBases error = %v, want a base-shadow track failure", err)
+	}
+	if _, statErr := os.Lstat(basePath); statErr != nil {
+		t.Errorf("track failure removed the base: %v", statErr)
+	}
+}
+
+// TestRemoveUnmanagedBasesRemoveFailurePreservesChain pins the remove-failure
+// branch: the base is tracked, os.Remove fails, and the returned display text is
+// escaped while errors.As can still reach the underlying *os.PathError.
+func TestRemoveUnmanagedBasesRemoveFailurePreservesChain(t *testing.T) { //nolint:cyclop // assertion-heavy failure-path regression test
+	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
+		t.Skip("read-only directory removal is Unix-only")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove files from a read-only directory")
+	}
+	root := t.TempDir()
+	basePath := filepath.Join(root, tasks.BaseShadowRelPath("a.txt"))
+	baseDir := filepath.Dir(basePath)
+	if err := os.MkdirAll(baseDir, fileutil.DirPerms); err != nil {
+		t.Fatalf("mkdir base: %v", err)
+	}
+	if err := os.WriteFile(basePath, []byte("pristine\n"), 0o600); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+
+	tx, cleanup, err := setupTransaction(root, false, false)
+	if err != nil {
+		t.Fatalf("setupTransaction: %v", err)
+	}
+	defer cleanup()
+
+	//nolint:gosec // G302: a read-only directory needs owner-write cleared.
+	if err := os.Chmod(baseDir, 0o550); err != nil {
+		t.Fatalf("making base directory read-only: %v", err)
+	}
+	// Restore write access before cleanup rolls the tracked base back.
+	defer func() { _ = os.Chmod(baseDir, fileutil.DirPerms) }()
+
+	err = removeUnmanagedBases(tx, []manageAction{{key: "a.txt", baseAbs: basePath, removeBase: true}})
+	if err == nil || !strings.Contains(err.Error(), "failed to remove base shadow") {
+		t.Fatalf("removeUnmanagedBases error = %v, want a base-shadow remove failure", err)
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		t.Errorf("error %v does not retain the underlying *os.PathError", err)
+	}
+	if _, statErr := os.Lstat(basePath); statErr != nil {
+		t.Errorf("failed remove lost the base: %v", statErr)
+	}
+}
+
+// TestInspectUnmanageBaseStatErrorIsRaceOnly documents why the post-SafePath
+// Lstat non-ENOENT branch has no fixture test: SafePath performs the same Lstat
+// through canonicalize, so a static error aborts SafePath first. The realistic
+// corruption below (a regular file where .scbake-base belongs) surfaces as
+// ENOTDIR from SafePath, not from the later inspection. Reaching the later
+// branch would require mutating the tree between validation and inspection,
+// which inspectUnmanageBase provides no seam for.
+func TestInspectUnmanageBaseStatErrorIsRaceOnly(t *testing.T) {
+	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
+		t.Skip("SafePath ENOTDIR behavior is Unix-specific")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, fileutil.CommittedBaseDir),
+		[]byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write base-directory blocker: %v", err)
+	}
+
+	_, _, err := inspectUnmanageBase(root, "a.txt", tasks.BaseShadowRelPath("a.txt"))
+	if err == nil || !strings.Contains(err.Error(), "invalid base shadow path") {
+		t.Fatalf("inspectUnmanageBase error = %v, want the SafePath failure branch", err)
 	}
 }
 
