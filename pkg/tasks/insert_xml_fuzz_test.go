@@ -54,6 +54,13 @@ func FuzzInsertXMLElement(f *testing.F) {
 	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<x:foo/>`)
 	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<?xml version="1.0"?>`)
 	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<!DOCTYPE project>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin xmlns:x=""/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin xmlns:xml="urn:x"/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin xmlns:y="http://www.w3.org/XML/1998/namespace"/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin xmlns="http://www.w3.org/2000/xmlns/"/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin :id="1"/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin id:="1"/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<:plugin/>`)
 
 	f.Fuzz(func(t *testing.T, fileContent, path, insert string) {
 		result, err := insertXMLElement(fileContent, path, insert)
@@ -77,8 +84,10 @@ func FuzzInsertXMLElement(f *testing.F) {
 		if verifyErr := validateXMLFragment(insert, xmlNamespaceDeclarations(fileContent)); verifyErr != nil {
 			if errors.Is(verifyErr, errXMLDeclarationInContent) ||
 				errors.Is(verifyErr, errXMLDirectiveInContent) ||
-				errors.Is(verifyErr, errXMLUnboundPrefix) {
-				t.Fatalf("insertXMLElement() accepted document-level snippet: %v (file=%q path=%q insert=%q)",
+				errors.Is(verifyErr, errXMLUnboundPrefix) ||
+				errors.Is(verifyErr, errXMLInvalidNamespaceDecl) ||
+				errors.Is(verifyErr, errXMLInvalidQName) {
+				t.Fatalf("insertXMLElement() accepted invalid element content: %v (file=%q path=%q insert=%q)",
 					verifyErr, fileContent, path, insert)
 			}
 		}

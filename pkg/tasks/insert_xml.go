@@ -328,6 +328,9 @@ const (
 	// xmlnsPrefix is the pseudo-prefix the decoder reports for namespace
 	// declaration attributes such as xmlns:name="uri".
 	xmlnsPrefix = "xmlns"
+	// xmlnsNamespaceURI is the reserved namespace of xmlns declarations. No
+	// prefix may be bound to it.
+	xmlnsNamespaceURI = "http://www.w3.org/2000/xmlns/"
 )
 
 // errXMLDeclarationInContent marks an XML declaration found where only element
@@ -341,6 +344,14 @@ var errXMLDirectiveInContent = errors.New("XML directive is not allowed in eleme
 // errXMLUnboundPrefix marks a prefixed name whose prefix is declared nowhere in
 // scope.
 var errXMLUnboundPrefix = errors.New("unbound namespace prefix")
+
+// errXMLInvalidNamespaceDecl marks an xmlns declaration that binds a reserved
+// name or an invalid URI.
+var errXMLInvalidNamespaceDecl = errors.New("invalid XML namespace declaration")
+
+// errXMLInvalidQName marks a raw element or attribute name that is not a valid
+// XML qualified name.
+var errXMLInvalidQName = errors.New("invalid XML qualified name")
 
 // validateXMLFragment checks that content is well-formed XML *element content*:
 // text, comments, CDATA, processing instructions, and one or more sibling
@@ -434,8 +445,14 @@ func walkXMLDeclarations(content string, base map[string]string, document bool) 
 			for _, a := range e.Attr {
 				switch {
 				case a.Name.Space == xmlnsPrefix:
+					if err := checkXMLNamespaceDeclaration(a.Name.Local, a.Value); err != nil {
+						return err
+					}
 					scope[a.Name.Local] = a.Value
 				case a.Name.Space == "" && a.Name.Local == xmlnsPrefix:
+					if err := checkXMLNamespaceDeclaration("", a.Value); err != nil {
+						return err
+					}
 					scope[""] = a.Value
 				}
 			}
@@ -486,15 +503,27 @@ func walkXMLPrefixes(content string, base map[string]string) error {
 		case xml.StartElement:
 			scope := copyXMLPrefixSet(scopes[len(scopes)-1])
 			for _, a := range e.Attr {
+				if err := checkXMLQName("attribute", a.Name); err != nil {
+					return err
+				}
 				switch {
 				case a.Name.Space == xmlnsPrefix:
+					if err := checkXMLNamespaceDeclaration(a.Name.Local, a.Value); err != nil {
+						return err
+					}
 					scope[a.Name.Local] = struct{}{}
 				case a.Name.Space == "" && a.Name.Local == xmlnsPrefix:
+					if err := checkXMLNamespaceDeclaration("", a.Value); err != nil {
+						return err
+					}
 					scope[""] = struct{}{}
 				}
 			}
 			scopes = append(scopes, scope)
 
+			if err := checkXMLQName("element", e.Name); err != nil {
+				return err
+			}
 			if err := checkXMLPrefix("element", e.Name, scope); err != nil {
 				return err
 			}
@@ -524,6 +553,52 @@ func checkXMLPrefix(kind string, name xml.Name, scope map[string]struct{}) error
 		return nil
 	}
 	return fmt.Errorf("%w %q used by %s %q", errXMLUnboundPrefix, name.Space, kind, name.Local)
+}
+
+// checkXMLNamespaceDeclaration rejects declarations that XML Namespaces forbids.
+// prefix is empty for the default namespace. An empty default namespace is a
+// legal undeclaration; an empty prefixed namespace is not. The xml prefix is
+// reserved and must always denote xmlNamespaceURI, no other prefix may denote
+// it, and nothing may bind the xmlns namespace.
+func checkXMLNamespaceDeclaration(prefix, uri string) error {
+	switch {
+	case prefix == xmlPrefix:
+		if uri != xmlNamespaceURI {
+			return fmt.Errorf("%w: prefix %q must be bound to %q", errXMLInvalidNamespaceDecl, prefix, xmlNamespaceURI)
+		}
+	case uri == xmlNamespaceURI:
+		return fmt.Errorf("%w: prefix %q must not be bound to the reserved XML namespace", errXMLInvalidNamespaceDecl, prefix)
+	case uri == xmlnsNamespaceURI:
+		return fmt.Errorf("%w: prefix %q must not be bound to the reserved xmlns namespace", errXMLInvalidNamespaceDecl, prefix)
+	case prefix == xmlnsPrefix:
+		return fmt.Errorf("%w: the %q prefix must not be declared", errXMLInvalidNamespaceDecl, xmlnsPrefix)
+	case prefix != "" && uri == "":
+		return fmt.Errorf("%w: prefix %q must not be bound to an empty URI", errXMLInvalidNamespaceDecl, prefix)
+	}
+	return nil
+}
+
+// checkXMLQName rejects malformed raw qualified names. RawToken leaves the raw
+// prefix in Space and the raw local part in Local, so a leading colon survives
+// in Local, a trailing colon leaves Local empty, and extra colons survive inside
+// one of the parts. A QName is an optional non-empty prefix, a colon, and a
+// non-empty local part, and neither part may contain a colon.
+func checkXMLQName(kind string, name xml.Name) error {
+	if name.Local == "" || strings.ContainsRune(name.Local, ':') {
+		return fmt.Errorf("%w: %s name %q", errXMLInvalidQName, kind, rawXMLName(name))
+	}
+	if name.Space != "" && strings.ContainsRune(name.Space, ':') {
+		return fmt.Errorf("%w: %s name %q", errXMLInvalidQName, kind, rawXMLName(name))
+	}
+	return nil
+}
+
+// rawXMLName reassembles a name from its raw prefix and local part for errors.
+func rawXMLName(name xml.Name) string {
+	if name.Space == "" {
+		return name.Local
+	}
+	return name.Space + ":" + name.Local
 }
 
 // xmlPrefixSet collects the prefixes declared by the base scope.

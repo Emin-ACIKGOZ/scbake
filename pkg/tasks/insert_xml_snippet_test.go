@@ -25,6 +25,12 @@ func TestValidateXMLFragment(t *testing.T) {
 		{name: "ordinary processing instruction", snippet: `<?scbake note?>`},
 		{name: "bound prefix", snippet: `<x:plugin xmlns:x="urn:x"><x:id>1</x:id></x:plugin>`},
 		{name: "default namespace", snippet: `<plugin xmlns="urn:plugin"><id>1</id></plugin>`},
+		{name: "default namespace undeclaration", snippet: `<plugin xmlns=""/>`},
+		{name: "prefix rebinding", snippet: `<plugin xmlns:x="urn:a"><child xmlns:x="urn:b"><x:id>1</x:id></child></plugin>`},
+		{
+			name:    "reserved xml prefix correctly bound",
+			snippet: `<plugin xmlns:xml="http://www.w3.org/XML/1998/namespace"/>`,
+		},
 		{
 			name:      "prefix bound by the enclosing document",
 			snippet:   `<x:plugin/>`,
@@ -55,6 +61,63 @@ func TestValidateXMLFragment(t *testing.T) {
 			snippet: `<z xmlns:y="x"><x:plugin/></z>`,
 			want:    errXMLUnboundPrefix,
 		},
+		{
+			name:    "empty prefixed namespace URI",
+			snippet: `<plugin xmlns:x=""/>`,
+			want:    errXMLInvalidNamespaceDecl,
+		},
+		{
+			name:    "xml prefix bound to another URI",
+			snippet: `<plugin xmlns:xml="urn:x"/>`,
+			want:    errXMLInvalidNamespaceDecl,
+		},
+		{
+			name:    "xml prefix bound to an empty URI",
+			snippet: `<plugin xmlns:xml=""/>`,
+			want:    errXMLInvalidNamespaceDecl,
+		},
+		{
+			name:    "xml namespace bound to another prefix",
+			snippet: `<plugin xmlns:y="http://www.w3.org/XML/1998/namespace"/>`,
+			want:    errXMLInvalidNamespaceDecl,
+		},
+		{
+			name:    "xml namespace bound to the default namespace",
+			snippet: `<plugin xmlns="http://www.w3.org/XML/1998/namespace"/>`,
+			want:    errXMLInvalidNamespaceDecl,
+		},
+		{
+			name:    "xmlns namespace bound to the default namespace",
+			snippet: `<plugin xmlns="http://www.w3.org/2000/xmlns/"/>`,
+			want:    errXMLInvalidNamespaceDecl,
+		},
+		{
+			name:    "xmlns namespace bound to a prefix",
+			snippet: `<plugin xmlns:y="http://www.w3.org/2000/xmlns/"/>`,
+			want:    errXMLInvalidNamespaceDecl,
+		},
+		{
+			name:    "xmlns prefix declared",
+			snippet: `<plugin xmlns:xmlns="urn:x"/>`,
+			want:    errXMLInvalidNamespaceDecl,
+		},
+		{
+			name:    "attribute name with leading colon",
+			snippet: `<plugin :id="1"/>`,
+			want:    errXMLInvalidQName,
+		},
+		{
+			name:    "attribute name with trailing colon",
+			snippet: `<plugin id:="1"/>`,
+			want:    errXMLInvalidQName,
+		},
+		{
+			name:    "element name with leading colon",
+			snippet: `<:plugin/>`,
+			want:    errXMLInvalidQName,
+		},
+		{"element name with two colons", `<a:b:c/>`, nil},
+		{"attribute name with two colons", `<plugin a:b:c="1"/>`, nil},
 		{"malformed", `<plugin><id></plugin>`, nil},
 		{"stray closing tag", `</plugin>`, nil},
 	}
@@ -85,6 +148,13 @@ func TestInsertXMLTask_DocumentLevelSnippetRejected(t *testing.T) {
 		{"doctype with name", `<!DOCTYPE project SYSTEM "project.dtd">`},
 		{"unbound element prefix", `<x:plugin/>`},
 		{"unbound attribute prefix", `<plugin x:id="1"/>`},
+		{"empty prefixed namespace URI", `<plugin xmlns:x=""/>`},
+		{"xml prefix rebound", `<plugin xmlns:xml="urn:x"/>`},
+		{"xml namespace on another prefix", `<plugin xmlns:y="http://www.w3.org/XML/1998/namespace"/>`},
+		{"default bound to the xmlns namespace", `<plugin xmlns="http://www.w3.org/2000/xmlns/"/>`},
+		{"attribute name with leading colon", `<plugin :id="1"/>`},
+		{"attribute name with trailing colon", `<plugin id:="1"/>`},
+		{"element name with leading colon", `<:plugin/>`},
 	}
 
 	for _, tc := range cases {
@@ -233,6 +303,13 @@ func TestInsertXMLElement_RejectsDocumentLevelOutput(t *testing.T) {
 		`<!DOCTYPE project>`,
 		`<x:plugin/>`,
 		`<plugin x:id="1"/>`,
+		`<plugin xmlns:x=""/>`,
+		`<plugin xmlns:xml="urn:x"/>`,
+		`<plugin xmlns:y="http://www.w3.org/XML/1998/namespace"/>`,
+		`<plugin xmlns="http://www.w3.org/2000/xmlns/"/>`,
+		`<plugin :id="1"/>`,
+		`<plugin id:="1"/>`,
+		`<:plugin/>`,
 	}
 
 	for _, snippet := range bad {
