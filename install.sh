@@ -17,14 +17,14 @@ GITHUB_REPO="Emin-ACIKGOZ/scbake"
 GITHUB_API_URL="https://api.github.com/repos/${GITHUB_REPO}"
 RELEASE_URL="https://github.com/${GITHUB_REPO}/releases/download"
 
-# Parse arguments - simple positional
-VERSION="${1:-latest}"
-INSTALL_DIR="${2:-}"
+# Quiet mode may come from the environment (QUIET=1) or from a --quiet/-q
+# argument. Detect the flag up front so the color setup below can honor it; the
+# positional arguments are parsed after the helpers, where die() exists.
 QUIET="${QUIET:-0}"
-
-# Check for --quiet flag anywhere in args
 for arg in "$@"; do
-    [[ "$arg" == "--quiet" || "$arg" == "-q" ]] && QUIET=1
+    case "$arg" in
+        --quiet|-q) QUIET=1 ;;
+    esac
 done
 
 # Color codes for output (disabled in quiet mode)
@@ -46,15 +46,21 @@ NC='\033[0m' # No Color
 # =============================================================================
 
 log_info() {
-    [ "$QUIET" -eq 0 ] && echo -e "${BLUE}ℹ${NC} $*"
+    if [ "$QUIET" -eq 0 ]; then
+        echo -e "${BLUE}ℹ${NC} $*"
+    fi
 }
 
 log_success() {
-    [ "$QUIET" -eq 0 ] && echo -e "${GREEN}✓${NC} $*"
+    if [ "$QUIET" -eq 0 ]; then
+        echo -e "${GREEN}✓${NC} $*"
+    fi
 }
 
 log_warn() {
-    [ "$QUIET" -eq 0 ] && echo -e "${YELLOW}⚠${NC} $*"
+    if [ "$QUIET" -eq 0 ]; then
+        echo -e "${YELLOW}⚠${NC} $*"
+    fi
 }
 
 log_error() {
@@ -83,13 +89,37 @@ progress_step() {
     local msg=$3
     local percent=$((step * 100 / total))
 
-    [ "$QUIET" -eq 0 ] && printf "${BLUE}[%3d%%]${NC} %s\n" "$percent" "$msg"
+    if [ "$QUIET" -eq 0 ]; then
+        printf "${BLUE}[%3d%%]${NC} %s\n" "$percent" "$msg"
+    fi
 }
 
 die() {
     log_error "$*"
     exit 1
 }
+
+# Parse arguments: [version] [install-dir] [--quiet|-q]. Flags may appear
+# anywhere and are removed before assigning the positional slots, so `--quiet`
+# can never become the version or the install directory. Bash 3 (macOS)
+# compatible: no arrays, no mapfile.
+VERSION=""
+INSTALL_DIR=""
+positional=0
+for arg in "$@"; do
+    case "$arg" in
+        --quiet|-q) continue ;;
+    esac
+    positional=$((positional + 1))
+    case "$positional" in
+        1) VERSION="$arg" ;;
+        2) INSTALL_DIR="$arg" ;;
+        *) die "Too many arguments. Usage: bash install.sh [version] [install-dir] [--quiet]" ;;
+    esac
+done
+if [ -z "$VERSION" ]; then
+    VERSION="latest"
+fi
 
 # Detect OS and architecture
 detect_system() {
@@ -558,4 +588,4 @@ main() {
 # Entry Point
 # =============================================================================
 
-main "$@"
+main
