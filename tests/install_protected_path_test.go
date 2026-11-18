@@ -214,8 +214,12 @@ func TestInstallScriptMkdirFailureNoSudo(t *testing.T) {
 	sudoLog := filepath.Join(root, "sudo.log")
 	out, err := runInstallerPinned(t, stubDir, "v9.9.9", installDir, sudoLog)
 	requireExitCode(t, err, out, 1)
-	if !strings.Contains(out, "Failed to create install directory") {
-		t.Errorf("expected a clear mkdir failure message, got:\n%s", out)
+	if !strings.Contains(out, "Failed to create install directory '"+installDir+"'") {
+		t.Errorf("expected a clear mkdir failure message naming the path, got:\n%s", out)
+	}
+	// The captured mkdir diagnostic must survive, not be swallowed by 2>/dev/null.
+	if !strings.Contains(out, "File exists") {
+		t.Errorf("expected the underlying mkdir diagnostic, got:\n%s", out)
 	}
 	if strings.Contains(out, "requires elevated privileges") || strings.Contains(out, "Password prompt") {
 		t.Errorf("installer offered sudo for a non-permission failure:\n%s", out)

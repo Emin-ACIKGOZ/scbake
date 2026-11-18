@@ -463,24 +463,33 @@ main() {
     # Creating the directory needs the same privilege handling as writing into
     # it: a new path under a protected parent (e.g. /opt/scbake) cannot be
     # created unprivileged. Try it first so writable installs never prompt, and
-    # only escalate when that fails. Windows keeps failing as before.
+    # only escalate when that fails. Windows never escalates: it used to fail
+    # here, and now it fails with the captured detail.
     local use_sudo=0
-    if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+    local mkdir_err=""
+    if ! mkdir_err=$(LC_ALL=C mkdir -p "$INSTALL_DIR" 2>&1); then
         if [[ "$os_arch" == *"windows"* ]]; then
-            die "Failed to create install directory"
+            die "Failed to create install directory '$INSTALL_DIR': $mkdir_err"
         fi
 
         # Not every mkdir failure is a privilege problem: an existing regular
         # file at the path, a read-only filesystem, or an invalid name all fail
-        # the same way. Walk up to the nearest existing ancestor; if that is
-        # writable, the user has permission there and sudo cannot help, so
-        # report the real failure instead of prompting for a password.
+        # the same way. mkdir's own diagnostic (captured above under LC_ALL=C)
+        # tells those apart from a permission problem, so report it instead of
+        # prompting for a password sudo cannot use.
+        if [[ "$mkdir_err" == *"Read-only file system"* ]]; then
+            die "Failed to create install directory '$INSTALL_DIR': $mkdir_err"
+        fi
+
+        # Walk up to the nearest existing ancestor; if that is writable, the
+        # user has permission there and sudo cannot help, so report the real
+        # failure instead of prompting for a password.
         local probe="$INSTALL_DIR"
         while [ ! -d "$probe" ] && [ "$probe" != "/" ] && [ "$probe" != "." ]; do
             probe=$(dirname "$probe")
         done
         if [ -d "$probe" ] && [ -w "$probe" ]; then
-            die "Failed to create install directory '$INSTALL_DIR'"
+            die "Failed to create install directory '$INSTALL_DIR': $mkdir_err"
         fi
 
         log_warn "Directory '$INSTALL_DIR' requires elevated privileges"
@@ -490,7 +499,7 @@ main() {
             die "sudo authentication failed. Try: bash install.sh latest ~/.local/bin"
         fi
 
-        sudo mkdir -p "$INSTALL_DIR" || die "Failed to create install directory"
+        sudo mkdir -p "$INSTALL_DIR" || die "Failed to create install directory '$INSTALL_DIR': $mkdir_err"
         use_sudo=1
     fi
 
