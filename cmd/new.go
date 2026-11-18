@@ -55,6 +55,10 @@ var newCmd = &cobra.Command{
 			return err
 		}
 
+		if dryRun {
+			fmt.Println("✅ Dry run complete; no changes written.")
+			return nil
+		}
 		fmt.Printf("✅ Success! New project '%s' created.\n", projectName)
 		return nil
 	},
@@ -251,7 +255,11 @@ func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporte
 		return nil, fmt.Errorf("directory '%s' already exists", projectName)
 	}
 
-	reporter.Step("📁", "Creating directory: "+projectName)
+	step := "Creating directory: " + projectName
+	if dryRun {
+		step = "Would create directory: " + projectName
+	}
+	reporter.Step("📁", step)
 	if !dryRun {
 		if err := os.Mkdir(projectName, fileutil.DirPerms); err != nil {
 			return nil, err
