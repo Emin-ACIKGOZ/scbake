@@ -6,6 +6,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,9 +89,23 @@ func TestInstallScriptQuietModeWithVersionAndDir(t *testing.T) {
 // flag, not as the install directory, and the binary must land in the default
 // location ($HOME/.local/bin).
 func TestInstallScriptQuietModeLatestUsesDefaultDir(t *testing.T) {
-	// determine_install_dir prefers /usr/local/bin when it is writable. In that
-	// case (e.g. a root container) $HOME/.local/bin is not the documented
-	// default for this environment, so this assertion cannot hold.
+	// determine_install_dir prefers /usr/local/bin whenever it is writable, and
+	// that probe is a hard-coded absolute path, so neither HOME nor PATH can
+	// redirect it. The writable case cannot be simulated safely from this test:
+	// chmod'ing the host's /usr/local/bin is unacceptable, and it would not help
+	// anyway because access(2)/`[ -w ]` reports success for a privileged (root)
+	// process regardless of the directory mode; hiding or remounting the path
+	// would need a private mount namespace, which is Linux-only, often disabled
+	// for unprivileged processes, and unavailable on the macOS/Windows CI
+	// runners. Asserting the writable branch would therefore require writing a
+	// binary into /usr/local/bin, which this suite must never do.
+	//
+	// So skip there instead, and note the residual coverage: the non-writable
+	// branch (a normal dev box and the ubuntu-latest CI runner) is exercised
+	// here; the explicit-directory form is covered by
+	// TestInstallScriptQuietModeWithVersionAndDir; and the flag-versus-positional
+	// parsing by the plain/quiet table in
+	// TestInstallScriptRejectsExtraPositionalArgs.
 	bash := requireBash(t)
 	if err := exec.CommandContext(context.Background(), bash, "-c", "[ -w /usr/local/bin ]").Run(); err == nil { //nolint:gosec // fixed command, test probe
 		t.Skip("host has a writable /usr/local/bin; the default install dir would not be $HOME/.local/bin")
@@ -116,7 +131,10 @@ func TestInstallScriptQuietModeLatestUsesDefaultDir(t *testing.T) {
 
 // TestInstallScriptRejectsExtraPositionalArgs covers the argument limit: at most
 // a version and an install directory are accepted, so a third positional
-// argument must fail loudly before anything is installed.
+// argument must fail loudly with exit status 1 (die) before anything is
+// installed. Asserting the exact status, rather than merely non-zero, keeps the
+// contract precise: a bash-level failure (2 for a syntax error, 127 for a
+// missing command) or death by signal (ExitCode -1) would otherwise pass.
 func TestInstallScriptRejectsExtraPositionalArgs(t *testing.T) {
 	requireBash(t) // skip Windows before doing any work; runInstallArgs re-resolves bash
 
@@ -141,6 +159,13 @@ func TestInstallScriptRejectsExtraPositionalArgs(t *testing.T) {
 			stdout, stderr, err := runInstallArgs(t, stubDir, home, workDir, "success", args...)
 			if err == nil {
 				t.Fatalf("expected a non-zero exit for extra positional arguments\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+			}
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Fatalf("expected the installer to exit with a status, got %T: %v\nstdout:\n%s\nstderr:\n%s", err, err, stdout, stderr)
+			}
+			if code := exitErr.ExitCode(); code != 1 {
+				t.Errorf("expected exit code 1 (die) for extra positional arguments, got %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 			}
 			if !strings.Contains(stderr, "Too many arguments") {
 				t.Errorf("expected a 'Too many arguments' error on stderr, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
