@@ -657,11 +657,20 @@ func TestWriteManagedFile_ManagedFilesScopedByProject(t *testing.T) {
 	}
 }
 
-// TestWriteManagedFile_StaleLegacyKeyNotTrusted verifies that a legacy
-// project-relative key which does not match the file's on-disk content is not
-// used as a drift baseline. Otherwise another subproject's stale entry could
-// mask real drift or cause a silent overwrite.
+// TestWriteManagedFile_StaleLegacyKeyNotTrusted covers a legacy
+// project-relative key that does not match the file's on-disk content.
+//
+// The merge subtest is the regression guard for the stale-key trust rule:
+// without it, another subproject's stale entry could be adopted as a baseline
+// and mask real drift or cause a silent overwrite. The fail subtest only
+// documents default-fail behavior for this fixture; it would keep passing
+// without the trust rule because the on-disk bytes genuinely differ from the
+// pending render, so it is not evidence that the stale key is rejected.
 func TestWriteManagedFile_StaleLegacyKeyNotTrusted(t *testing.T) {
+	// Stale-key regression guard: a mismatched legacy key must not be trusted,
+	// so merge cannot mistake the stale pending hash for an unchanged template.
+	// It must instead preserve the local file via an artifact and must not
+	// re-scope the stale key into the ledger.
 	t.Run("merge writes artifact", func(t *testing.T) {
 		target, manifest, tc, onDisk, stale := newStaleLegacyFixture(t)
 		tc.ConflictStrategy = types.ConflictMerge
@@ -678,8 +687,11 @@ func TestWriteManagedFile_StaleLegacyKeyNotTrusted(t *testing.T) {
 		}
 	})
 
-	// The default fail strategy must still surface the drift the stale key
-	// would otherwise mask, and must not write an artifact or ledger entry.
+	// Default-fail behavior coverage, not the stale-key trust guard: the fail
+	// strategy reports drift for any mismatch between the on-disk bytes and the
+	// pending render, trusted stale key or not. The assertions below pin that
+	// observable outcome (drift error, no artifact, untouched bytes, no ledger
+	// entry) but do not prove the stale key was rejected.
 	t.Run("fail reports drift", func(t *testing.T) {
 		target, manifest, tc, onDisk, stale := newStaleLegacyFixture(t)
 		tc.ConflictStrategy = types.ConflictFail
