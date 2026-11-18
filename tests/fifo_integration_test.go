@@ -67,6 +67,28 @@ func TestManagedFIFOBaseExitsPromptly(t *testing.T) {
 	requireNonRegularFailure(t, work, "update", "p")
 }
 
+// TestManagedFIFOBaseNoOpUpdateExitsPromptly covers the reconciliation-time
+// bypass: when the template is unchanged the merge strategy returns a no-op
+// before reading the base, which used to let `update` exit 0 with a FIFO base.
+// The no-op decision must still validate that an existing base leaf is a
+// regular file, for both a real and a dry-run update.
+func TestManagedFIFOBaseNoOpUpdateExitsPromptly(t *testing.T) {
+	work := t.TempDir()
+	newFIFOProject(t, work, "p")
+
+	project := filepath.Join(work, "p")
+	replaceWithFIFO(t, filepath.Join(project, ".scbake-base", ".editorconfig"))
+
+	for _, args := range [][]string{
+		{"update", "p"},
+		{"update", "--dry-run", "p"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			requireNonRegularFailure(t, work, args...)
+		})
+	}
+}
+
 // requireNonRegularFailure runs the CLI and asserts that it exits non-zero
 // promptly with a non-regular-file diagnostic rather than being killed by the
 // test deadline.
