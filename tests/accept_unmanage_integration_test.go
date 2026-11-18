@@ -624,7 +624,7 @@ func TestUpdateDryRunOmitsUnmanagedTask(t *testing.T) {
 
 	out, err := runCLI("update", "--dry-run")
 	requireAcceptSuccess(t, out, err, "update --dry-run")
-	if !strings.Contains(out, "Create main.go") {
+	if !strings.Contains(out, "Skip main.go") {
 		t.Fatalf("control: managed main.go is missing from the dry-run plan:\n%s", out)
 	}
 
@@ -637,7 +637,7 @@ func TestUpdateDryRunOmitsUnmanagedTask(t *testing.T) {
 	if !strings.Contains(out, "Skipping unmanaged main.go") {
 		t.Errorf("dry-run did not report the skipped unmanaged task:\n%s", out)
 	}
-	if strings.Contains(out, "Create main.go") {
+	if strings.Contains(out, "Skip main.go") {
 		t.Errorf("dry-run still lists the unmanaged task:\n%s", out)
 	}
 	assertAcceptTreeFrozen(t, project, frozen)

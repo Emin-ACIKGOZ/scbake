@@ -81,6 +81,11 @@ func (h *Handler) GetTasks(_ string, _ string, _ string) ([]types.Task, error) {
 // LicenseTask is a custom task for dynamic license generation.
 type LicenseTask struct {
 	TaskPrio int
+
+	// dryRunNote is the read-only reconciliation note recorded by Validate and
+	// surfaced through DryRunNote. It stays empty for an ordinary write and for
+	// a base-only repair of an already-clean LICENSE.
+	dryRunNote string
 }
 
 // Description implements types.Task.
@@ -144,22 +149,43 @@ func licenseRender(tc types.TaskContext) (text string, skip bool, err error) {
 	return fillLicensePlaceholders(text, year, holders), false, nil
 }
 
+// DryRunNote implements types.DryRunAnnotator. It is empty for an ordinary
+// license write and for the base-only repair of an already-clean LICENSE.
+func (t *LicenseTask) DryRunNote() string { return t.dryRunNote }
+
+// DryRunVerb implements types.DryRunVerbProvider so the preview says "Skip"
+// instead of "Generate" when the reconciliation is a no-op or preserves local
+// edits, and names the artifact when a conflict diverts the write.
+func (t *LicenseTask) DryRunVerb() string { return tasks.DryRunVerbForNote(t.dryRunNote) }
+
 // Validate checks compliance metadata, license resolution, and the managed-file
 // reconciliation decision without writing. It shares licenseRender and
-// tasks.ValidateManagedFile with Execute, so an unmanaged or drifted LICENSE
-// fails in a dry run exactly as it does in a real run.
+// tasks.PlanManagedFile with Execute, so an unmanaged or drifted LICENSE fails
+// in a dry run exactly as it does in a real run and predicts the same planned
+// write.
 func (t *LicenseTask) Validate(tc types.TaskContext) error {
+	t.dryRunNote = ""
+
 	text, skip, err := licenseRender(tc)
 	if err != nil {
 		return err
 	}
 	if skip {
 		// The update path only repairs the pristine base shadow from the
-		// current bytes; that is a write and real-run-only. The skip decision
-		// itself already read the managed file successfully.
-		return nil
+		// current bytes; that is a write and real-run-only. Plan with those
+		// bytes so overwrite still predicts the canonical write (and Merge
+		// stays conservative), but leave the note empty: no license content
+		// would be written.
+		existing, err := fileutil.SafeReadFile(tc.TargetPath, "LICENSE")
+		if err != nil {
+			return err
+		}
+		_, err = tasks.PlanManagedFile(tc, "LICENSE", existing)
+		return err
 	}
-	return tasks.ValidateManagedFile(tc, "LICENSE", []byte(text))
+
+	t.dryRunNote, err = tasks.PlanManagedFile(tc, "LICENSE", []byte(text))
+	return err
 }
 
 // Execute performs the license generation task.

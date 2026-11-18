@@ -1222,11 +1222,16 @@ func (t *CreateTemplateTask) render(tc types.TaskContext) ([]byte, error) {
 // records no note, leaving the executor's description unchanged.
 func (t *CreateTemplateTask) DryRunNote() string { return t.dryRunNote }
 
+// DryRunVerb implements types.DryRunVerbProvider. A reconciliation note that
+// means no canonical write makes the preview say "Skip" instead of "Create"; a
+// diverted write names the artifact it would produce.
+func (t *CreateTemplateTask) DryRunVerb() string { return DryRunVerbForNote(t.dryRunNote) }
+
 // Validate resolves, renders, and reconciles the template without creating
 // directories, tracking, writing, or mutating the ledger. It shares render and
-// decideManagedFile with Execute, so the preview reports the real decision. It
-// also records the dry-run annotation here because this is the only place that
-// holds the shared reconciliation result.
+// PlanManagedFile with Execute, so the preview reports the real decision. The
+// note is recorded here because this is the only place that holds the shared
+// reconciliation result.
 func (t *CreateTemplateTask) Validate(tc types.TaskContext) error {
 	t.dryRunNote = ""
 
@@ -1234,15 +1239,25 @@ func (t *CreateTemplateTask) Validate(tc types.TaskContext) error {
 	if err != nil {
 		return err
 	}
-	absPath, err := resolveTaskPath(tc.TargetPath, t.OutputPath, "output")
+	t.dryRunNote, err = PlanManagedFile(tc, t.OutputPath, content)
+	return err
+}
+
+// PlanManagedFile resolves and reconciles a managed file without writing. It
+// returns the dry-run note for the decision and records a canonical planned
+// write when the decision targets the managed file itself. Tasks outside this
+// package that own a managed path (for example the compliance LICENSE task)
+// call it so their Validate reports and predicts exactly what WriteManagedFile
+// would do.
+func PlanManagedFile(tc types.TaskContext, outputRelPath string, content []byte) (string, error) {
+	absPath, err := resolveTaskPath(tc.TargetPath, outputRelPath, "output")
 	if err != nil {
-		return err
+		return "", err
 	}
-	decision, err := decideManagedFile(tc, absPath, t.OutputPath, content)
+	decision, err := decideManagedFile(tc, absPath, outputRelPath, content)
 	if err != nil {
-		return err
+		return "", err
 	}
-	t.dryRunNote = managedFileDryRunNote(absPath, decision)
 
 	// Record only canonical writes. Skip/keep-local/artifact decisions do not
 	// rewrite the managed file, so they cannot clear that path's drift. Clean
@@ -1254,7 +1269,21 @@ func (t *CreateTemplateTask) Validate(tc types.TaskContext) error {
 			Clean: decision.override == nil || bytes.Equal(decision.override, decision.content),
 		}
 	}
-	return nil
+	return managedFileDryRunNote(absPath, decision), nil
+}
+
+// DryRunVerbForNote maps a managed-file reconciliation note to the dry-run verb
+// that replaces the description's leading word. An empty note means the
+// ordinary create or update path, so the verb is empty too.
+func DryRunVerbForNote(note string) string {
+	switch note {
+	case "no change", "local edits preserved", "unchanged":
+		return "Skip"
+	case "conflict; would write artifact":
+		return "Write artifact for"
+	default:
+		return ""
+	}
 }
 
 // managedFileDryRunNote describes a reconciliation that does not perform a

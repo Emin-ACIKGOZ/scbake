@@ -500,7 +500,7 @@ func TestDryRunRootAnchorMultiProjectRender(t *testing.T) {
 		if err != nil {
 			t.Fatalf("dry run %d = %v, want nil (false conflict)\n%s", i+1, err, out)
 		}
-		if !strings.Contains(out, "Create CONTRIBUTING.md") {
+		if !strings.Contains(out, "Skip CONTRIBUTING.md") {
 			t.Errorf("dry run %d did not report the community plan:\n%s", i+1, out)
 		}
 		if strings.Contains(out, "manual modifications") {

@@ -193,6 +193,9 @@ func TestDriftRepairDryRunAnnotatesPreservedFile(t *testing.T) {
 	if !strings.Contains(out, "(no change)") && !strings.Contains(out, "(local edits preserved)") {
 		t.Errorf("dry run does not annotate the preserved main.go: %q", out)
 	}
+	if !strings.Contains(out, "[DRY RUN] Skip main.go") {
+		t.Errorf("dry run does not use the Skip verb for the preserved main.go: %q", out)
+	}
 	if strings.Contains(planAndHeader, ".gitignore (no change)") {
 		t.Errorf("restorable .gitignore should be an ordinary Create, got plan: %q", planAndHeader)
 	}
@@ -499,5 +502,164 @@ func TestDriftRepairOverwriteClearsDrift(t *testing.T) {
 	resetFlags()
 	if err := executeCLI("drift"); err != nil {
 		t.Errorf("drift after overwrite repair = %v, want nil", err)
+	}
+}
+
+const driftRepairLicenseManifest = `scbake_version = "v1.0.0"
+
+[[projects]]
+name = "demo"
+path = "."
+language = "go"
+
+[[templates]]
+name = "compliance"
+path = "."
+
+[metadata]
+license = "MIT"
+copyright_holder = "Test Holder"
+`
+
+// newDriftRepairLicenseProject seeds a Go project whose manifest also selects
+// the compliance template, so update/repair replay the managed LICENSE writer.
+func newDriftRepairLicenseProject(t *testing.T) string {
+	t.Helper()
+
+	resetFlags()
+	updateConflictStrategyFlag = types.ConflictMerge
+	driftStrategyFlag = types.ConflictMerge
+
+	root := t.TempDir()
+	t.Chdir(root)
+
+	manifestPath := filepath.Join(root, fileutil.ManifestFileName)
+	if err := os.WriteFile(manifestPath, []byte(driftRepairLicenseManifest), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("writing %s: %v", fileutil.ManifestFileName, err)
+	}
+	if err := executeCLI("update", "."); err != nil {
+		t.Fatalf("seeding license fixture with update failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "LICENSE")); err != nil {
+		t.Fatalf("fixture update did not create LICENSE: %v", err)
+	}
+	return root
+}
+
+// TestDriftRepairDryRunPredictsDeletedLicenseRestorable pins the compliance half
+// of #226: LICENSE is a managed writer too, so a dry-run repair must predict its
+// canonical write instead of listing the deleted file as residual drift.
+func TestDriftRepairDryRunPredictsDeletedLicenseRestorable(t *testing.T) {
+	root := newDriftRepairLicenseProject(t)
+	licensePath := filepath.Join(root, "LICENSE")
+	if err := os.Remove(licensePath); err != nil {
+		t.Fatalf("removing LICENSE: %v", err)
+	}
+
+	var dryRunErr error
+	out := captureStdout(t, func() {
+		dryRunErr = executeCLI("drift", "--repair", "--dry-run")
+	})
+	if dryRunErr != nil {
+		t.Fatalf("drift --repair --dry-run = %v, want nil", dryRunErr)
+	}
+	if strings.Contains(out, "may remain drifted") {
+		t.Errorf("dry run predicted residual drift for the restorable LICENSE: %q", out)
+	}
+
+	resetFlags()
+	var repairErr error
+	captureStdout(t, func() {
+		repairErr = executeCLI("drift", "--repair")
+	})
+	if repairErr != nil {
+		t.Fatalf("drift --repair = %v, want nil", repairErr)
+	}
+	content, err := os.ReadFile(licensePath) // #nosec G304 -- test path
+	if err != nil {
+		t.Fatalf("repair did not restore LICENSE: %v", err)
+	}
+	if !strings.Contains(string(content), "MIT License") {
+		t.Errorf("restored LICENSE is not MIT: %q", content)
+	}
+
+	resetFlags()
+	if err := executeCLI("drift"); err != nil {
+		t.Errorf("drift after LICENSE repair = %v, want nil", err)
+	}
+}
+
+// TestDriftRepairDryRunLicenseCorruptBasePrediction mirrors the main.go base
+// cases: overwrite plans a canonical write so the base is repaired, while merge
+// keeps its conservative prediction because it does not rewrite a clean file.
+func TestDriftRepairDryRunLicenseCorruptBasePrediction(t *testing.T) {
+	root := newDriftRepairLicenseProject(t)
+
+	basePath := filepath.Join(root, fileutil.CommittedBaseDir, "LICENSE")
+	if err := os.WriteFile(basePath, []byte("corrupt base\n"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("corrupting %s: %v", basePath, err)
+	}
+
+	var mergeErr error
+	mergeOut := captureStdout(t, func() {
+		mergeErr = executeCLI("drift", "--repair", "--dry-run")
+	})
+	if mergeErr != nil {
+		t.Fatalf("merge dry-run repair = %v, want nil", mergeErr)
+	}
+	if !strings.Contains(mergeOut, "may remain drifted") || !strings.Contains(mergeOut, "LICENSE") {
+		t.Errorf("merge corrupt-base dry run was not conservative about LICENSE: %q", mergeOut)
+	}
+
+	resetFlags()
+	var overwriteErr error
+	overwriteOut := captureStdout(t, func() {
+		overwriteErr = executeCLI("drift", "--repair", "--dry-run", "--conflict-strategy", "overwrite")
+	})
+	if overwriteErr != nil {
+		t.Fatalf("overwrite dry-run repair = %v, want nil", overwriteErr)
+	}
+	if strings.Contains(overwriteOut, "may remain drifted") {
+		t.Errorf("overwrite dry run predicted residual drift for a clean LICENSE: %q", overwriteOut)
+	}
+}
+
+// TestDriftRepairDryRunLicenseMergeSkipsModifiedLicense pins the preview for a
+// locally modified LICENSE: merge cannot apply the unchanged template, so the
+// file remains residual and the plan discloses the skip/preserve decision.
+func TestDriftRepairDryRunLicenseMergeSkipsModifiedLicense(t *testing.T) {
+	root := newDriftRepairLicenseProject(t)
+	licensePath := filepath.Join(root, "LICENSE")
+	f, err := os.OpenFile(licensePath, os.O_APPEND|os.O_WRONLY, fileutil.FilePerms) // #nosec G304 -- test path
+	if err != nil {
+		t.Fatalf("opening LICENSE: %v", err)
+	}
+	if _, err := f.WriteString("\nlocal license edit\n"); err != nil {
+		_ = f.Close()
+		t.Fatalf("appending local edit: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing LICENSE: %v", err)
+	}
+
+	var dryRunErr error
+	out := captureStdout(t, func() {
+		dryRunErr = executeCLI("drift", "--repair", "--dry-run")
+	})
+	if dryRunErr != nil {
+		t.Fatalf("drift --repair --dry-run = %v, want nil", dryRunErr)
+	}
+	_, residual, ok := strings.Cut(out, "may remain drifted")
+	if !ok {
+		t.Fatalf("modified LICENSE dry run predicted no residual: %q", out)
+	}
+	if !strings.Contains(residual, "LICENSE") {
+		t.Errorf("residual section omits the modified LICENSE: %q", residual)
+	}
+	if !strings.Contains(out, "[DRY RUN] Skip LICENSE file") {
+		t.Errorf("dry run does not use the Skip verb for the preserved LICENSE: %q", out)
+	}
+	if !strings.Contains(out, "(no change)") && !strings.Contains(out, "(local edits preserved)") {
+		t.Errorf("dry run does not annotate the preserved LICENSE: %q", out)
 	}
 }

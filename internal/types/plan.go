@@ -174,6 +174,16 @@ type DryRunAnnotator interface {
 	DryRunNote() string
 }
 
+// DryRunVerbProvider is optionally implemented by tasks that can replace the
+// leading verb of their dry-run description. The executor calls DryRunVerb after
+// Validate, only in a dry run, and substitutes it for the description's first
+// word while preserving the rest (including any source suffix). It lets a task
+// that just decided on a no-op report "Skip main.go" instead of "Create
+// main.go". An empty verb leaves the description unchanged.
+type DryRunVerbProvider interface {
+	DryRunVerb() string
+}
+
 // RegistryAwareHandler is optionally implemented by language and tooling
 // handlers that resolve registry-cached templates at plan time. Core calls it
 // with the configured registry allowlist. Handlers that only build

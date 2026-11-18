@@ -10,6 +10,7 @@ import (
 	"scbake/internal/types"
 	"slices"
 	"sort"
+	"strings"
 )
 
 // Execute runs the plan and reports progress via the provided Reporter.
@@ -82,6 +83,9 @@ func runTask(plan *types.Plan, index int, task types.Task, tc types.TaskContext,
 		// note is recorded by Validate because that is the only place that
 		// holds the shared reconciliation result (see types.DryRunAnnotator).
 		err = task.Validate(tc)
+		if verb := dryRunVerb(task); verb != "" {
+			desc = replaceLeadingWord(desc, verb)
+		}
 		if note := dryRunNote(task); note != "" {
 			desc += " (" + note + ")"
 		}
@@ -109,6 +113,26 @@ func dryRunNote(task types.Task) string {
 		return ""
 	}
 	return annotator.DryRunNote()
+}
+
+// dryRunVerb returns a task's optional leading-verb override. Tasks that do not
+// implement types.DryRunVerbProvider keep their plain description.
+func dryRunVerb(task types.Task) string {
+	provider, ok := task.(types.DryRunVerbProvider)
+	if !ok {
+		return ""
+	}
+	return provider.DryRunVerb()
+}
+
+// replaceLeadingWord substitutes verb for desc's first space-delimited word,
+// preserving the remainder (and any source suffix). A one-word description
+// becomes just the verb.
+func replaceLeadingWord(desc, verb string) string {
+	if i := strings.IndexByte(desc, ' '); i >= 0 {
+		return verb + desc[i:]
+	}
+	return verb
 }
 
 // carryPlannedPaths records the paths task declared it will create, so a later

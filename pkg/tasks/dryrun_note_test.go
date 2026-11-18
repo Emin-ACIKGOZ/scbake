@@ -65,6 +65,27 @@ func TestManagedFileDryRunNote(t *testing.T) {
 	}
 }
 
+// TestDryRunVerbForNote pins the verb vocabulary: a no-op reconciliation skips,
+// a diverted write names its artifact, and an ordinary write keeps its original
+// leading verb.
+func TestDryRunVerbForNote(t *testing.T) {
+	tests := []struct {
+		note string
+		want string
+	}{
+		{note: "", want: ""},
+		{note: "no change", want: "Skip"},
+		{note: "local edits preserved", want: "Skip"},
+		{note: "unchanged", want: "Skip"},
+		{note: "conflict; would write artifact", want: "Write artifact for"},
+	}
+	for _, tt := range tests {
+		if got := DryRunVerbForNote(tt.note); got != tt.want {
+			t.Errorf("DryRunVerbForNote(%q) = %q, want %q", tt.note, got, tt.want)
+		}
+	}
+}
+
 // TestCreateTemplateTask_ValidateRecordsDryRunNote verifies that Validate wires
 // the shared reconciliation decision into the annotation: a preserved merge and
 // an ordinary create must be distinguishable, and an ordinary write stays
@@ -97,6 +118,9 @@ func TestCreateTemplateTask_ValidateRecordsDryRunNote(t *testing.T) {
 	if note := task.DryRunNote(); note != "" {
 		t.Errorf("ordinary create note = %q, want empty", note)
 	}
+	if verb := task.DryRunVerb(); verb != "" {
+		t.Errorf("ordinary create verb = %q, want empty", verb)
+	}
 
 	// A modified file with an unchanged template is a merge skip.
 	outputPath := filepath.Join(tmpDir, "dryrun.txt")
@@ -109,5 +133,8 @@ func TestCreateTemplateTask_ValidateRecordsDryRunNote(t *testing.T) {
 	}
 	if note := task.DryRunNote(); note != "no change" {
 		t.Errorf("preserved merge note = %q, want %q", note, "no change")
+	}
+	if verb := task.DryRunVerb(); verb != "Skip" {
+		t.Errorf("preserved merge verb = %q, want %q", verb, "Skip")
 	}
 }
