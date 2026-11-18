@@ -655,6 +655,9 @@ func TestRemoveUnmanagedBasesRemoveFailurePreservesChain(t *testing.T) { //nolin
 // branch would require mutating the tree between validation and inspection,
 // which inspectUnmanageBase provides no seam for.
 func TestInspectUnmanageBaseStatErrorIsRaceOnly(t *testing.T) {
+	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
+		t.Skip("SafePath ENOTDIR behavior is Unix-specific")
+	}
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, fileutil.CommittedBaseDir),
 		[]byte("not a directory"), 0o600); err != nil {
