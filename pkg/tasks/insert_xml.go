@@ -230,15 +230,15 @@ func (t *InsertXMLTask) readAndValidateXML(targetPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	inherited := xmlNamespaceDeclarations(contentStr)
 	_, scope, locateErr := locateXMLElementWithScope(contentStr, segments)
-	if locateErr == nil {
-		inherited = scope
+	if locateErr != nil {
+		// Surface the actual target problem rather than validating the snippet
+		// against a document-wide fallback and possibly reporting a misleading
+		// namespace error first. validateXMLDocument(output) remains the
+		// authoritative check for a successfully located target.
+		return "", fmt.Errorf("failed to insert XML into %s: %w", t.FilePath, locateErr)
 	}
-	// When the target cannot be located, keep the historical document-wide
-	// fallback: the splice path reports the missing or self-closing target, and
-	// validateXMLDocument(output) remains the authoritative check.
-	if err := t.validateSnippet(inherited); err != nil {
+	if err := t.validateSnippet(scope); err != nil {
 		return "", err
 	}
 
@@ -718,11 +718,10 @@ func isXMLNSAttr(name xml.Name) bool {
 	return name.Space == xmlnsPrefix || (name.Space == "" && name.Local == xmlnsPrefix)
 }
 
-// xmlNamespaceDeclarations collects the prefix declarations made anywhere in a
-// well-formed document. It is used to let a snippet use a prefix the target
-// document binds on an ancestor. Declarations that are not in scope at the
-// insertion point are harmless here: the spliced output is validated with real
-// scoping, so an unbound prefix is still rejected before any write.
+// xmlNamespaceDeclarations collects every prefix declaration in a document.
+// It is retained for tests that demonstrate why the insertion-point scope, not
+// a document-wide map, is authoritative; production validation uses
+// locateXMLElementWithScope.
 func xmlNamespaceDeclarations(content string) map[string]string {
 	decls := make(map[string]string)
 	decoder := xml.NewDecoder(strings.NewReader(content))
