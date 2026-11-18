@@ -676,14 +676,35 @@ func TestWriteManagedFile_StaleLegacyKeyNotTrusted(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	// The legacy flat key holds a DIFFERENT project's hash. The new content
-	// equals what is already on disk, which is the case where a blindly-trusted
-	// legacy key would take the idempotency path and silently accept the file.
-	manifest := &types.Manifest{ManagedFiles: map[string]string{"LICENSE": HashContent([]byte("bob license\n"))}}
-	tc := types.TaskContext{TargetPath: target, Manifest: manifest, Tx: tx}
+	// The legacy flat key holds a DIFFERENT project's hash. The pending render
+	// equals that stale hash, so a blindly-trusted legacy key would look like
+	// an unchanged template and make the merge strategy skip the file. The
+	// stale key must instead be treated as unmanaged: the local edit stays and
+	// the new render goes to an artifact.
+	stale := []byte("bob license\n")
+	manifest := &types.Manifest{ManagedFiles: map[string]string{"LICENSE": HashContent(stale)}}
+	tc := types.TaskContext{
+		TargetPath:       target,
+		Manifest:         manifest,
+		Tx:               tx,
+		ConflictStrategy: types.ConflictMerge,
+	}
 
-	if err := WriteManagedFile(tc, "LICENSE", onDisk, 0o600); err == nil {
-		t.Fatal("expected a conflict: a mismatched legacy key must not be trusted as a baseline")
+	if err := WriteManagedFile(tc, "LICENSE", stale, 0o600); err != nil {
+		t.Fatalf("WriteManagedFile: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "LICENSE.scbake-new")); err != nil {
+		t.Errorf("stale legacy key suppressed the artifact write: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(target, "LICENSE")) //nolint:gosec // test-controlled temp path
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if string(got) != string(onDisk) {
+		t.Errorf("local edit was lost: %q", got)
+	}
+	if _, ok := manifest.ManagedFiles["services/a/LICENSE"]; ok {
+		t.Errorf("stale legacy key was re-scoped as a trusted baseline")
 	}
 }
 
