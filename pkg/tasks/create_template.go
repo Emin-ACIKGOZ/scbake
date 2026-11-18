@@ -425,6 +425,15 @@ func decideManagedFile(tc types.TaskContext, absPath, outputRelPath string, cont
 		return managedFileDecision{ledgerKey: ledgerKey}, nil
 	}
 
+	// An unchanged template can make reconciliation a no-op before any base
+	// read. Validate the committed base leaf first so an unusable base (for
+	// example a FIFO) fails the decision instead of exiting 0, for both a dry
+	// run and a real update. A missing base is allowed: the merge path treats it
+	// as unavailable and writes an artifact.
+	if err := validateBaseShadowLeaf(tc, ledgerKey); err != nil {
+		return managedFileDecision{}, err
+	}
+
 	// Make the ignore entry part of the managed render before hashing so the
 	// ledger and base shadow match what is actually written.
 	content = maybeAppendInternalStateIgnore(ledgerKey, content)
@@ -1053,8 +1062,46 @@ func writeBaseFile(absPath string, content []byte) error {
 	return nil
 }
 
+// validateBaseShadowLeaf checks that an existing committed base shadow is a
+// regular file. Reconciliation can return a no-op before reading the base, so
+// without this check a FIFO base would let `update` exit 0 even though the base
+// is unusable. A missing base is allowed: the merge path falls back to an
+// artifact when it needs pristine content.
+//
+// The Lstat is check-then-use and keeps the same documented residual race as
+// SafePath (SCB-002).
+func validateBaseShadowLeaf(tc types.TaskContext, ledgerKey string) error {
+	if ledgerKey == "" {
+		return nil
+	}
+	root := taskRoot(tc)
+	if root == "" {
+		return nil
+	}
+	absPath, err := baseShadowPath(root, ledgerKey)
+	if err != nil {
+		return fmt.Errorf("invalid base shadow path for %s: %w", ledgerKey, err)
+	}
+	info, err := os.Lstat(absPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // No committed base yet; nothing to validate.
+		}
+		return fmt.Errorf("failed to inspect pristine base for %s: %w", ledgerKey, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("pristine base for %s is not a regular file", ledgerKey)
+	}
+	return nil
+}
+
 // readBaseShadow returns the pristine base content for a managed file, if it
 // exists. The lookup uses the same sanitized mapping as the write path.
+//
+// A base that exists but cannot be read (for example because it was replaced by
+// a FIFO) is treated as missing rather than silently accepted: callers fall back
+// to the artifact/invalid-base path, and the transaction's backup of the base
+// fails fast instead of opening a non-regular file.
 func readBaseShadow(tc types.TaskContext, ledgerKey string) ([]byte, bool) {
 	if ledgerKey == "" {
 		return nil, false
@@ -1065,6 +1112,11 @@ func readBaseShadow(tc types.TaskContext, ledgerKey string) ([]byte, bool) {
 	}
 	data, err := fileutil.SafeReadFile(root, BaseShadowRelPath(ledgerKey))
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr,
+				"⚠️  Cannot read pristine base for %s: %v; treating it as missing.\n",
+				ledgerKey, err)
+		}
 		return nil, false
 	}
 	return data, true
