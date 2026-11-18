@@ -218,7 +218,9 @@ func TestInstallScriptMkdirFailureNoSudo(t *testing.T) {
 		t.Errorf("expected a clear mkdir failure message naming the path, got:\n%s", out)
 	}
 	// The captured mkdir diagnostic must survive, not be swallowed by 2>/dev/null.
-	if !strings.Contains(out, "File exists") {
+	// GNU mkdir says "File exists" on some platforms and "Already exists" on
+	// others; require the captured diagnostic, not one exact translation.
+	if !strings.Contains(strings.ToLower(out), "exist") || !strings.Contains(out, "mkdir:") {
 		t.Errorf("expected the underlying mkdir diagnostic, got:\n%s", out)
 	}
 	if strings.Contains(out, "requires elevated privileges") || strings.Contains(out, "Password prompt") {
