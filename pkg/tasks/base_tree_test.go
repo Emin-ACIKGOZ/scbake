@@ -215,3 +215,32 @@ func TestUnmanagedPathSkipsBaseValidation(t *testing.T) {
 		t.Fatalf("rejected managed write created the target (stat err: %v)", err)
 	}
 }
+
+// TestValidateManagedFileValidatesBaseWithTransaction: the exported read-only
+// preflight must reject a redirected committed base even when the TaskContext
+// carries a transaction. A dry run can have a non-nil Tx, and gating the check
+// on a nil transaction would let ValidateManagedFile accept a symlinked base
+// that the real write path rejects.
+func TestValidateManagedFileValidatesBaseWithTransaction(t *testing.T) {
+	requireSymlinks(t)
+
+	root, tx, tc := mergeTestContext(t)
+	defer func() { _ = tx.Rollback() }()
+
+	baseRoot := filepath.Join(root, fileutil.CommittedBaseDir)
+	if err := os.MkdirAll(filepath.Join(root, "src"), fileutil.DirPerms); err != nil {
+		t.Fatalf("create src: %v", err)
+	}
+	if err := os.Symlink("src", baseRoot); err != nil {
+		t.Fatalf("symlink base root: %v", err)
+	}
+
+	dryRun := tc
+	dryRun.DryRun = true
+	if dryRun.Tx == nil {
+		t.Fatal("test setup: dry-run context must carry a transaction")
+	}
+
+	managedErr := ValidateManagedFile(dryRun, "generated.txt", []byte("generated\n"))
+	requireBaseSymlinkError(t, managedErr, baseRoot)
+}

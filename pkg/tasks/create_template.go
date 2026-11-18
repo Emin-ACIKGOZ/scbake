@@ -430,13 +430,12 @@ func decideManagedFile(tc types.TaskContext, absPath, outputRelPath string, cont
 	// Fail closed before any target or base write, including in a dry run, when
 	// the committed base tree is redirected through a symlink or a non-directory
 	// component. SafePath accepts an in-root symlink, so this is the only guard
-	// that keeps the pristine base at <root>/.scbake-base. Only read-only and
-	// direct callers validate here: WriteManagedFile already ran the same
-	// preflight in prepareManagedWrite before creating parent directories.
-	if tc.Tx == nil {
-		if err := validateCommittedBaseTree(taskRoot(tc), ledgerKey); err != nil {
-			return managedFileDecision{}, err
-		}
+	// that keeps the pristine base at <root>/.scbake-base. WriteManagedFile also
+	// ran this preflight in prepareManagedWrite before creating parent
+	// directories; repeating the cheap Lstat here keeps exported read-only
+	// callers such as ValidateManagedFile safe for any TaskContext.
+	if err := validateCommittedBaseTree(taskRoot(tc), ledgerKey); err != nil {
+		return managedFileDecision{}, err
 	}
 
 	// Make the ignore entry part of the managed render before hashing so the
