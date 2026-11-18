@@ -230,11 +230,12 @@ func inspectLegacy(m *types.Manifest, root, key, recorded, baseline string, acce
 
 // inspectBase validates the committed base shadow for a current ledger key.
 // baseDrifted is false when the base matches the recorded hash. A missing base
-// is BaseMissing; any other read error is returned so detection fails closed
-// instead of hiding an I/O or containment problem as content drift.
+// is BaseMissing; any other error, including a redirected base tree (symlinked
+// or non-directory component), is returned so detection fails closed instead of
+// hiding a containment problem as content drift.
 func inspectBase(root, key, recorded string) (Finding, bool, error) {
 	relPath := tasks.BaseShadowRelPath(key)
-	base, err := fileutil.SafeReadFile(root, relPath)
+	base, err := tasks.ReadBaseShadow(root, key)
 	switch {
 	case err == nil:
 		if tasks.BaseMatchesRecordedHash(base, recorded) {

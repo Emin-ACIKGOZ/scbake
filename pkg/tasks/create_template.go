@@ -235,27 +235,23 @@ func checkReconciliation(
 	// Check state
 	originalHash := recordedHash(tc.Manifest, ledgerKey, outputRelPath, existingHash)
 
-	// If the file exists but we've never managed it (or didn't record it), it's a conflict
+	// If the file exists but we've never managed it (or didn't record it), it is
+	// normally a conflict. However, it may already hold exactly what the
+	// template renders (byte-for-byte, or equal after EOL normalization), for
+	// example when the canonical output was copied from a seed project. That is
+	// a no-op convergence, not a manual modification: return the canonical path
+	// so the file is adopted (ledger entry and pristine base) without a
+	// conflict or an artifact.
 	if originalHash == "" {
+		if existingHash == newContentHash {
+			return absFinalPath, nil, nil
+		}
 		p, cErr := handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
 		return p, nil, cErr
 	}
 
-	// An accepted baseline is a local working-tree baseline for the current
-	// template render. It only suppresses a rewrite while the worktree still
-	// equals the accepted hash and the template still renders the pristine
-	// hash. A later edit (existingHash != accepted) or a template change
-	// (newContentHash != originalHash) falls through to normal conflict
-	// handling, and overwrite always writes.
-	if acceptedBaselineSuppressesWrite(tc, ledgerKey, existingHash, newContentHash, originalHash) {
-		return "", nil, nil
-	}
-
-	// The template has not changed since we recorded this file. For the merge
-	// strategy there is nothing to apply regardless of local edits, which is
-	// what makes a second `update` a no-op. Other strategies keep the historic
-	// behavior of surfacing drift.
-	if unchangedTemplateForMerge(tc, newContentHash, originalHash) {
+	// Neither an accepted baseline nor an unchanged merge template needs a write.
+	if reconciliationNoOp(tc, ledgerKey, existingHash, originalHash, newContentHash) {
 		return "", nil, nil
 	}
 
@@ -285,6 +281,23 @@ func checkReconciliation(
 // file because the template still renders the recorded pristine hash.
 func unchangedTemplateForMerge(tc types.TaskContext, newContentHash, originalHash string) bool {
 	return newContentHash == originalHash && tc.ConflictStrategy == types.ConflictMerge
+}
+
+// reconciliationNoOp reports whether a recorded file needs no write. An
+// accepted baseline is a local working-tree baseline for the current template
+// render: it suppresses a rewrite while the worktree still equals the accepted
+// hash and the template still renders the pristine hash. A later edit
+// (existingHash != accepted) or a template change (newContentHash !=
+// originalHash) falls through to normal conflict handling, and overwrite always
+// writes. Separately, under the merge strategy an unchanged template has
+// nothing to apply regardless of local edits, which is what makes a second
+// `update` a no-op; other strategies keep the historic behavior of surfacing
+// drift.
+func reconciliationNoOp(
+	tc types.TaskContext, ledgerKey, existingHash, originalHash, newContentHash string,
+) bool {
+	return acceptedBaselineSuppressesWrite(tc, ledgerKey, existingHash, newContentHash, originalHash) ||
+		unchangedTemplateForMerge(tc, newContentHash, originalHash)
 }
 
 // acceptedBaselineSuppressesWrite reports whether an accepted working-tree
@@ -420,9 +433,32 @@ func decideManagedFile(tc types.TaskContext, absPath, outputRelPath string, cont
 
 	// A plan-level filter normally removes unmanaged tasks, but direct and
 	// library callers still need the execution-level defense. Returning an
-	// empty write path is the same no-op signal as the other skip paths.
+	// empty write path is the same no-op signal as the other skip paths, and it
+	// must happen before any base validation so an unmanaged path is a no-op in
+	// both Validate and Write.
 	if shouldSkipUnmanaged(tc, ledgerKey) {
 		return managedFileDecision{ledgerKey: ledgerKey}, nil
+	}
+
+	// Fail closed before any target or base write, including in a dry run,
+	// when the committed base tree is redirected through a symlink or a
+	// non-directory component. SafePath accepts an in-root symlink, so this is
+	// the only guard that keeps the pristine base at <root>/.scbake-base.
+	// WriteManagedFile also ran this preflight in prepareManagedWrite before
+	// creating parent directories; repeating the cheap Lstat here keeps
+	// exported read-only callers such as ValidateManagedFile safe for any
+	// TaskContext.
+	if err := validateCommittedBaseTree(taskRoot(tc), ledgerKey); err != nil {
+		return managedFileDecision{}, err
+	}
+
+	// An unchanged template can make reconciliation a no-op before any base
+	// read. Validate the committed base leaf too, so an unusable base (for
+	// example a FIFO) fails the decision instead of exiting 0, for both a dry
+	// run and a real update. A missing base is allowed: the merge path treats
+	// it as unavailable and writes an artifact.
+	if err := validateBaseShadowLeaf(tc, ledgerKey); err != nil {
+		return managedFileDecision{}, err
 	}
 
 	// Make the ignore entry part of the managed render before hashing so the
@@ -469,9 +505,7 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 		return ValidateManagedFile(tc, outputRelPath, content)
 	}
 
-	// Resolve the ledger key before preconditions so an unmanaged path is
-	// skipped without creating directories or walking conflict handling.
-	_, skipped, err := manageWriteKey(tc, outputRelPath)
+	_, absPath, skipped, err := prepareManagedWrite(tc, outputRelPath)
 	if err != nil {
 		return err
 	}
@@ -479,35 +513,85 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 		return nil
 	}
 
-	absPath, err := checkFilePreconditions(tc, outputRelPath, tc.TargetPath)
-	if err != nil {
-		return err
-	}
-
 	decision, err := decideManagedFile(tc, absPath, outputRelPath, content)
 	if err != nil {
 		return err // Conflict strategy is 'fail'
 	}
+	return applyManagedDecision(tc, absPath, decision, perm)
+}
+
+// prepareManagedWrite resolves the ledger key, applies the unmanaged skip, and
+// runs the committed-base preflight before any target parent directory is
+// created. skipped reports that the path must not be written at all.
+func prepareManagedWrite(tc types.TaskContext, outputRelPath string) (ledgerKey, absPath string, skipped bool, err error) {
+	// Resolve the ledger key before preconditions so an unmanaged path is
+	// skipped without creating directories or walking conflict handling.
+	ledgerKey, skipped, err = manageWriteKey(tc, outputRelPath)
+	if err != nil {
+		return "", "", false, err
+	}
+	if skipped {
+		return ledgerKey, "", true, nil
+	}
+
+	// Reject a redirected committed base before creating the target's parent
+	// directories; decideManagedFile repeats the check for dry-run and direct
+	// callers.
+	if err := validateCommittedBaseTree(taskRoot(tc), ledgerKey); err != nil {
+		return "", "", false, err
+	}
+
+	absPath, err = checkFilePreconditions(tc, outputRelPath, tc.TargetPath)
+	if err != nil {
+		return "", "", false, err
+	}
+	return ledgerKey, absPath, false, nil
+}
+
+// applyManagedDecision carries out a reconcile decision. An empty write path is
+// a skip; an identical canonical target is recorded without a rewrite; an
+// identical artifact is left alone; anything else is written and, when
+// canonical, recorded in the ledger and pristine base.
+func applyManagedDecision(
+	tc types.TaskContext, absPath string, decision managedFileDecision, perm os.FileMode,
+) error {
 	ledgerKey, content, newHash := decision.ledgerKey, decision.content, decision.newHash
 	writePath, override := decision.writePath, decision.override
 	if writePath == "" {
 		return nil // Skip (keep-local, unchanged, or a no-op)
 	}
 
+	// A canonical write whose target already holds exactly the pending bytes
+	// needs no rewrite. Record the ledger and pristine base anyway, so an
+	// adopted identical file becomes managed (and an unchanged managed file
+	// keeps its state) without touching the file.
+	if writePath == absPath && sameFileContent(writePath, pendingContent(content, override)) {
+		return recordCanonicalWrite(tc, ledgerKey, newHash, content)
+	}
+
 	// Idempotent artifact: a repeated conflict must not rewrite a side artifact
 	// whose content is already identical.
-	if isIdenticalArtifact(writePath, absPath, content) {
+	if isIdenticalArtifact(decision.writePath, absPath, decision.content) {
 		return nil
 	}
 
-	if err := writePendingContent(tc, writePath, content, override, perm); err != nil {
+	if err := writePendingContent(tc, decision.writePath, decision.content, decision.override, perm); err != nil {
 		return err
 	}
 
-	if writePath == absPath {
-		return recordCanonicalWrite(tc, ledgerKey, newHash, content)
+	if decision.writePath == absPath {
+		return recordCanonicalWrite(tc, decision.ledgerKey, decision.newHash, decision.content)
 	}
 	return nil
+}
+
+// pendingContent returns the bytes a canonical write would put on disk,
+// preferring the merge override when reconciliation produced one.
+func pendingContent(content, override []byte) []byte {
+	if override != nil {
+		return override
+	}
+	return content
 }
 
 // writePendingContent writes the pending render, preferring the merge override
@@ -515,11 +599,7 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 func writePendingContent(
 	tc types.TaskContext, writePath string, content, override []byte, perm os.FileMode,
 ) error {
-	toWrite := content
-	if override != nil {
-		toWrite = override
-	}
-	return trackAndWrite(tc, writePath, toWrite, perm)
+	return trackAndWrite(tc, writePath, pendingContent(content, override), perm)
 }
 
 // manageWriteKey resolves the ledger key before preconditions so an unmanaged
@@ -557,8 +637,12 @@ func isIdenticalArtifact(writePath, absPath string, content []byte) bool {
 // after a canonical write. Under artifact or keep-local the original file keeps
 // its previous baseline (SCB-056); the recorded hash is always the pristine
 // render, never the possibly-merged content, so a merged file stays recognized
-// as locally modified.
+// as locally modified. A nil manifest has no state to advance, so the write is a
+// no-op rather than a nil dereference.
 func recordCanonicalWrite(tc types.TaskContext, ledgerKey, newHash string, content []byte) error {
+	if tc.Manifest == nil {
+		return nil
+	}
 	recordManagedHash(tc.Manifest, ledgerKey, newHash)
 	// A canonical write advances the pristine baseline, so any accepted
 	// working-tree baseline for this key is stale and must be cleared.
@@ -823,6 +907,9 @@ func writeBaseShadow(tc types.TaskContext, ledgerKey string, content []byte) err
 	if root == "" {
 		return nil
 	}
+	if err := validateCommittedBaseTree(root, ledgerKey); err != nil {
+		return err
+	}
 	absPath, err := baseShadowPath(root, ledgerKey)
 	if err != nil {
 		return fmt.Errorf("invalid base shadow path for %s: %w", ledgerKey, err)
@@ -1053,8 +1140,46 @@ func writeBaseFile(absPath string, content []byte) error {
 	return nil
 }
 
+// validateBaseShadowLeaf checks that an existing committed base shadow is a
+// regular file. Reconciliation can return a no-op before reading the base, so
+// without this check a FIFO base would let `update` exit 0 even though the base
+// is unusable. A missing base is allowed: the merge path falls back to an
+// artifact when it needs pristine content.
+//
+// The Lstat is check-then-use and keeps the same documented residual race as
+// SafePath (SCB-002).
+func validateBaseShadowLeaf(tc types.TaskContext, ledgerKey string) error {
+	if ledgerKey == "" {
+		return nil
+	}
+	root := taskRoot(tc)
+	if root == "" {
+		return nil
+	}
+	absPath, err := baseShadowPath(root, ledgerKey)
+	if err != nil {
+		return fmt.Errorf("invalid base shadow path for %s: %w", ledgerKey, err)
+	}
+	info, err := os.Lstat(absPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // No committed base yet; nothing to validate.
+		}
+		return fmt.Errorf("failed to inspect pristine base for %s: %w", ledgerKey, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("pristine base for %s is not a regular file", ledgerKey)
+	}
+	return nil
+}
+
 // readBaseShadow returns the pristine base content for a managed file, if it
 // exists. The lookup uses the same sanitized mapping as the write path.
+//
+// A base that exists but cannot be read (for example because it was replaced by
+// a FIFO) is treated as missing rather than silently accepted: callers fall back
+// to the artifact/invalid-base path, and the transaction's backup of the base
+// fails fast instead of opening a non-regular file.
 func readBaseShadow(tc types.TaskContext, ledgerKey string) ([]byte, bool) {
 	if ledgerKey == "" {
 		return nil, false
@@ -1063,16 +1188,25 @@ func readBaseShadow(tc types.TaskContext, ledgerKey string) ([]byte, bool) {
 	if root == "" {
 		return nil, false
 	}
-	data, err := fileutil.SafeReadFile(root, BaseShadowRelPath(ledgerKey))
+	data, err := ReadBaseShadow(root, ledgerKey)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr,
+				"⚠️  Cannot read pristine base for %s: %v; treating it as missing.\n",
+				ledgerKey, err)
+		}
 		return nil, false
 	}
 	return data, true
 }
 
 // recordManagedHash stores the SHA-256 hash of a file scbake wrote at key in the
-// manifest's managed_files ledger, initializing the map when necessary.
+// manifest's managed_files ledger, initializing the map when necessary. A nil
+// manifest records nothing.
 func recordManagedHash(m *types.Manifest, key, hash string) {
+	if m == nil {
+		return
+	}
 	if m.ManagedFiles == nil {
 		m.ManagedFiles = make(map[string]string)
 	}
