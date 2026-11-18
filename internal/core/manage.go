@@ -290,8 +290,11 @@ func planAccept(m *types.Manifest, root, key, arg string) (manageAction, error) 
 // validateAcceptBase preflights the committed base against the pristine ledger
 // hash. An invalid base fails so accept cannot claim success while drift stays
 // red; a missing base only warns because missing bases are advisory by default.
+// A redirected base tree (symlink or non-directory component) is a hard error,
+// so accept never reads pristine bytes through a link or records a baseline from
+// them.
 func validateAcceptBase(root, key, recorded string, action *manageAction) error {
-	switch base, baseErr := fileutil.SafeReadFile(root, tasks.BaseShadowRelPath(key)); {
+	switch base, baseErr := tasks.ReadBaseShadow(root, key); {
 	case baseErr == nil:
 		if !tasks.BaseMatchesRecordedHash(base, recorded) {
 			return fmt.Errorf("committed base for %q is invalid; restore it before accepting", key)
@@ -330,7 +333,9 @@ func recordAcceptState(m *types.Manifest, key, recorded string, action *manageAc
 
 // planUnmanage validates one unmanage argument and records the detach on m. The
 // working file is not read, so a missing or symlinked leaf is allowed as long as
-// the key is lexically contained and any committed base is a regular file.
+// the key is lexically contained and the committed base tree is real and any
+// base file is a regular file. A symlinked base tree fails closed before any
+// state change.
 func planUnmanage(m *types.Manifest, root, key, arg string) (manageAction, error) {
 	action := manageAction{key: key}
 	action.baseRel = filepath.ToSlash(tasks.BaseShadowRelPath(key))
@@ -361,10 +366,15 @@ func planUnmanage(m *types.Manifest, root, key, arg string) (manageAction, error
 }
 
 // inspectUnmanageBase resolves and inspects the committed base for key. It
-// returns the absolute base path and whether it is safe to remove. A non-regular
-// base fails closed because removing it could delete a directory or follow a
-// symlink outside the root.
+// returns the absolute base path and whether it is safe to remove. The committed
+// base tree is validated first: a redirected (symlinked or non-directory) base
+// fails closed before anything is inspected or removed, while a missing base is
+// simply "nothing to remove". A non-regular base also fails closed because
+// removing it could delete a directory or follow a symlink outside the root.
 func inspectUnmanageBase(root, key, baseRel string) (string, bool, error) {
+	if err := tasks.ValidateBaseShadow(root, key); err != nil {
+		return "", false, fmt.Errorf("cannot unmanage %q: %w", key, err)
+	}
 	baseAbs, err := fileutil.SafePath(root, filepath.FromSlash(baseRel))
 	if err != nil {
 		return "", false, fmt.Errorf("invalid base shadow path for %q: %w", key, err)
