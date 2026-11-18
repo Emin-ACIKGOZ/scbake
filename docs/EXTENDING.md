@@ -547,9 +547,19 @@ stale. The comparison includes the patch component: a dependency that requires
 directive is not a blocker; `tidy -go=1.24` lowers a main-module `go 1.24.0` to
 `1.24`.)
 The `ci_github` template consumes `runner_os` at render time and emits
-`shell: bash` for the Windows runner, whose default shell is PowerShell.
-`build_tool` in the `makefile` template is the documented record-only example:
-it is validated and stored but intentionally has no consumer.
+`shell: bash` for the Windows runner, whose default shell is PowerShell. It also
+consumes `go_version` when set with `--set`, rendering that value as the CI
+pin; when absent it renders `go-version-file` for the first Go project's
+`go.mod`, so CI uses the same directive the Go pack wrote.
+
+Manifests written by older versions may still record `go_version` (it was
+formerly a schema default). That recorded value keeps rendering as an explicit
+`go-version` pin after `update`, even when it differs from `go.mod`; there is no
+automatic migration. Remove the `go_version` entry from `[metadata]` to switch
+CI to `go-version-file`, or re-apply the Go pack with `--set go_version=<version>`
+to make the explicit pin match `go.mod`. `build_tool` in the
+`makefile` template is the documented record-only example: it is validated and
+stored but intentionally has no consumer.
 
 On a failed `apply --lang go` against a project without `go.mod`, the first
 content snapshot of the created `go.mod` is authoritative, so a later command

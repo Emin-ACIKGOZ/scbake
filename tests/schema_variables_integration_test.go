@@ -5,6 +5,7 @@ package integration
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -25,6 +26,25 @@ func chdirTempWorkspace(t *testing.T) string {
 		t.Fatalf("chdir %s: %v", dir, err)
 	}
 	return dir
+}
+
+// hostGoVersion returns the version the host go toolchain writes into go.mod
+// for `go mod init`. The probe runs in its own temp directory instead of the
+// test's cwd so it cannot pick up the repository's go.mod/toolchain directive
+// or depend on when the test changes directory.
+func hostGoVersion(t *testing.T) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "go", "env", "GOVERSION")
+	cmd.Dir = t.TempDir()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go env GOVERSION: %v", err)
+	}
+	version := strings.TrimPrefix(strings.TrimSpace(string(out)), "go")
+	if version == "" {
+		t.Fatal("go env GOVERSION returned an empty version")
+	}
+	return version
 }
 
 func readProjectFile(t *testing.T, path string) string {
@@ -108,9 +128,27 @@ func TestIssue140_SchemaVariablesAreConsumed(t *testing.T) {
 	})
 }
 
+// TestIssue224_CIGitHubRejectsInvalidGoVersion verifies the ci_github schema
+// rejects a malformed pin instead of rendering an invalid workflow.
+func TestIssue224_CIGitHubRejectsInvalidGoVersion(t *testing.T) {
+	chdirTempWorkspace(t)
+
+	out, err := runCLI("new", "badci", "--with", "ci_github", "--set", "go_version=garbage")
+	if err == nil {
+		t.Fatalf("new with invalid go_version should fail:\n%s", out)
+	}
+	if !strings.Contains(out, "go_version") || !strings.Contains(out, "pattern") {
+		t.Errorf("error should identify go_version and its pattern:\n%s", out)
+	}
+	if _, statErr := os.Stat("badci"); !os.IsNotExist(statErr) {
+		t.Errorf("failed project directory should be removed, stat err: %v", statErr)
+	}
+}
+
 // TestIssue140_PlainGoProjectDoesNotApplySchemaDefault is the critical trap:
-// a project that did not ask for a version must not inherit the schema default
-// go_version=1.22, and its module name must stay directory-derived.
+// a project that did not ask for a version must not inherit a schema default
+// go_version, its module name must stay directory-derived, and go.mod must keep
+// the host toolchain version.
 func TestIssue140_PlainGoProjectDoesNotApplySchemaDefault(t *testing.T) {
 	chdirTempWorkspace(t)
 
@@ -121,13 +159,15 @@ func TestIssue140_PlainGoProjectDoesNotApplySchemaDefault(t *testing.T) {
 
 	goMod := readProjectFile(t, filepath.Join("plain", "go.mod"))
 	requireRegexp(t, "plain/go.mod", goMod, regexp.MustCompile(`(?m)^module plain$`))
+	requireRegexp(t, "plain/go.mod", goMod,
+		regexp.MustCompile(`(?m)^go `+regexp.QuoteMeta(hostGoVersion(t))+`$`))
 	requireNoRegexp(t, "plain/go.mod", goMod, regexp.MustCompile(`(?m)^go 1\.22$`))
 
-	// The schema default is still recorded as metadata; it just must not drive
-	// the generated go directive.
+	// Without a schema default the plain project records no go_version; CI
+	// reads the directive from go.mod instead of a duplicated value.
 	manifest := readProjectFile(t, filepath.Join("plain", "scbake.toml"))
-	if !strings.Contains(manifest, `go_version = "1.22"`) {
-		t.Errorf("expected the schema default to remain recorded:\n%s", manifest)
+	if strings.Contains(manifest, "go_version") {
+		t.Errorf("plain project must not record a go_version default:\n%s", manifest)
 	}
 
 	out, err = runCLI("new", "plain-dry", "--lang", "go", "--dry-run")
