@@ -6,6 +6,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -98,20 +99,19 @@ func runInstallerPinned(t *testing.T, stubDir, version, installDir, sudoLog stri
 	return out.String(), err
 }
 
-// TestInstallScriptProtectedNewPath is the regression test for #216: a new
-// install directory under a protected parent (e.g. /opt/scbake) must be created
-// with sudo instead of dying at the unprivileged mkdir. The stub sudo proves
-// both the directory creation and the move were escalated.
-func TestInstallScriptProtectedNewPath(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: chmod 0555 does not block writes, so no sudo would be needed")
-	}
-	stubDir := setupStubBinaries(t)
+// installStubSudo writes the stub sudo into the stub bin dir so install.sh's
+// privilege escalation is observable instead of touching the host.
+func installStubSudo(t *testing.T, stubDir string) {
+	t.Helper()
 	if err := os.WriteFile(filepath.Join(stubDir, "sudo"), []byte(stubSudoScript), 0o755); err != nil { //nolint:gosec // test stub
 		t.Fatalf("write stub sudo: %v", err)
 	}
+}
 
-	root := t.TempDir()
+// makeReadOnlyParent creates and protects root/opt so unprivileged writes fail,
+// and restores the mode afterwards so t.TempDir can clean up.
+func makeReadOnlyParent(t *testing.T, root string) string {
+	t.Helper()
 	parent := filepath.Join(root, "opt")
 	if err := os.Mkdir(parent, 0o750); err != nil {
 		t.Fatalf("create protected parent: %v", err)
@@ -124,7 +124,59 @@ func TestInstallScriptProtectedNewPath(t *testing.T) {
 			t.Errorf("restore parent permissions: %v", err)
 		}
 	})
+	return parent
+}
 
+// assertSudoLogged checks the stub sudo log records each expected invocation.
+func assertSudoLogged(t *testing.T, sudoLog string, wants ...string) {
+	t.Helper()
+	logData, err := os.ReadFile(sudoLog) //nolint:gosec // test artifact
+	if err != nil {
+		t.Fatalf("read stub sudo log: %v", err)
+	}
+	for _, want := range wants {
+		if !strings.Contains(string(logData), want) {
+			t.Errorf("stub sudo log is missing a %q invocation; log:\n%s", want, logData)
+		}
+	}
+}
+
+// assertSudoNotInvoked fails when the stub sudo left a log, meaning install.sh
+// offered or attempted a privileged operation.
+func assertSudoNotInvoked(t *testing.T, sudoLog string) {
+	t.Helper()
+	if logData, err := os.ReadFile(sudoLog); err == nil { //nolint:gosec // test artifact
+		t.Errorf("stub sudo was invoked unexpectedly; log:\n%s", logData)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("read stub sudo log: %v", err)
+	}
+}
+
+// requireExitCode asserts err is a process exit with the wanted status.
+func requireExitCode(t *testing.T, err error, out string, want int) {
+	t.Helper()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected exit code %d, got %v\noutput:\n%s", want, err, out)
+	}
+	if code := exitErr.ExitCode(); code != want {
+		t.Fatalf("expected exit code %d, got %d\noutput:\n%s", want, code, out)
+	}
+}
+
+// TestInstallScriptProtectedNewPath is the regression test for #216: a new
+// install directory under a protected parent (e.g. /opt/scbake) must be created
+// with sudo instead of dying at the unprivileged mkdir. The stub sudo proves
+// both the directory creation and the move were escalated.
+func TestInstallScriptProtectedNewPath(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod 0555 does not block writes, so no sudo would be needed")
+	}
+	stubDir := setupStubBinaries(t)
+	installStubSudo(t, stubDir)
+
+	root := t.TempDir()
+	parent := makeReadOnlyParent(t, root)
 	installDir := filepath.Join(parent, "scbake-bin")
 	sudoLog := filepath.Join(root, "sudo.log")
 
@@ -136,16 +188,7 @@ func TestInstallScriptProtectedNewPath(t *testing.T) {
 		t.Fatalf("installed binary missing: %v", statErr)
 	}
 
-	logData, readErr := os.ReadFile(sudoLog) //nolint:gosec // test artifact
-	if readErr != nil {
-		t.Fatalf("read stub sudo log: %v", readErr)
-	}
-	logText := string(logData)
-	for _, want := range []string{"mkdir -p", "mv"} {
-		if !strings.Contains(logText, want) {
-			t.Errorf("stub sudo log is missing a %q invocation; log:\n%s", want, logText)
-		}
-	}
+	assertSudoLogged(t, sudoLog, "mkdir -p", "mv")
 }
 
 // TestInstallScriptMkdirFailureNoSudo covers a mkdir failure that has nothing to
@@ -154,9 +197,7 @@ func TestInstallScriptProtectedNewPath(t *testing.T) {
 // prompting for sudo, which could never fix the problem.
 func TestInstallScriptMkdirFailureNoSudo(t *testing.T) {
 	stubDir := setupStubBinaries(t)
-	if err := os.WriteFile(filepath.Join(stubDir, "sudo"), []byte(stubSudoScript), 0o755); err != nil { //nolint:gosec // test stub
-		t.Fatalf("write stub sudo: %v", err)
-	}
+	installStubSudo(t, stubDir)
 
 	root := t.TempDir()
 	parent := filepath.Join(root, "bindir")
@@ -172,18 +213,12 @@ func TestInstallScriptMkdirFailureNoSudo(t *testing.T) {
 
 	sudoLog := filepath.Join(root, "sudo.log")
 	out, err := runInstallerPinned(t, stubDir, "v9.9.9", installDir, sudoLog)
-	if err == nil {
-		t.Fatalf("expected a non-zero exit when the install path is a file\noutput:\n%s", out)
-	}
+	requireExitCode(t, err, out, 1)
 	if !strings.Contains(out, "Failed to create install directory") {
 		t.Errorf("expected a clear mkdir failure message, got:\n%s", out)
 	}
 	if strings.Contains(out, "requires elevated privileges") || strings.Contains(out, "Password prompt") {
 		t.Errorf("installer offered sudo for a non-permission failure:\n%s", out)
 	}
-	if logData, readErr := os.ReadFile(sudoLog); readErr == nil { //nolint:gosec // test artifact
-		t.Errorf("stub sudo was invoked unexpectedly; log:\n%s", logData)
-	} else if !os.IsNotExist(readErr) {
-		t.Fatalf("read stub sudo log: %v", readErr)
-	}
+	assertSudoNotInvoked(t, sudoLog)
 }
