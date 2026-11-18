@@ -529,6 +529,86 @@ func TestRunUnmanageBaseDeletionSafety(t *testing.T) { //nolint:cyclop // table-
 	}
 }
 
+// TestRunUnmanageSymlinkedBaseRootFailsClosed is the B1 regression: an in-root
+// .scbake-base -> src symlink passes SafePath, so the unmanage path must validate
+// the base tree before inspecting or removing anything.
+func TestRunUnmanageSymlinkedBaseRootFailsClosed(t *testing.T) { //nolint:cyclop // assertion-heavy symlink regression test
+	root := t.TempDir()
+	writeManageFixture(t, root, map[string]string{"a.txt": "pristine\n"})
+	baseRoot := filepath.Join(root, fileutil.CommittedBaseDir)
+	if err := os.RemoveAll(baseRoot); err != nil {
+		t.Fatalf("remove committed base: %v", err)
+	}
+	srcDir := filepath.Join(root, "src")
+	if err := os.MkdirAll(srcDir, 0o750); err != nil {
+		t.Fatalf("mkdir src: %v", err)
+	}
+	local := []byte("LOCAL WORK: keep me\n")
+	if err := os.WriteFile(filepath.Join(srcDir, "a.txt"), local, 0o600); err != nil {
+		t.Fatalf("write src/a.txt: %v", err)
+	}
+	if err := os.Symlink("src", baseRoot); err != nil {
+		t.Skipf("symlink creation requires privileges: %v", err)
+	}
+	before := mustManageRead(t, filepath.Join(root, fileutil.ManifestFileName))
+
+	err := RunUnmanage(manageRunContext(root), []string{"a.txt"})
+	if err == nil || !strings.Contains(err.Error(), "symlinked base directory is not allowed") {
+		t.Fatalf("RunUnmanage error = %v, want a symlinked-base refusal", err)
+	}
+	if got := mustManageRead(t, filepath.Join(root, fileutil.ManifestFileName)); got != before {
+		t.Errorf("refused unmanage rewrote the manifest")
+	}
+	if got, readErr := os.ReadFile(filepath.Join(srcDir, "a.txt")); readErr != nil || string(got) != string(local) { //nolint:gosec // test-controlled fixture path under t.TempDir()
+		t.Fatalf("refused unmanage changed src/a.txt: %q (err %v)", got, readErr)
+	}
+	if info, statErr := os.Lstat(baseRoot); statErr != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("refused unmanage changed the base root: mode %v (err %v)", info, statErr)
+	}
+}
+
+// TestRunAcceptSymlinkedBaseRootFailsClosed is the B2 regression: accept must not
+// read pristine bytes through an in-root symlinked base and record them as an
+// accepted baseline.
+func TestRunAcceptSymlinkedBaseRootFailsClosed(t *testing.T) { //nolint:cyclop // assertion-heavy symlink regression test
+	root := t.TempDir()
+	pristine := []byte("pristine a.txt\n")
+	writeManageFixture(t, root, map[string]string{"a.txt": string(pristine)})
+	baseRoot := filepath.Join(root, fileutil.CommittedBaseDir)
+	if err := os.RemoveAll(baseRoot); err != nil {
+		t.Fatalf("remove committed base: %v", err)
+	}
+	srcDir := filepath.Join(root, "src")
+	if err := os.MkdirAll(srcDir, 0o750); err != nil {
+		t.Fatalf("mkdir src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "a.txt"), pristine, 0o600); err != nil {
+		t.Fatalf("write src/a.txt: %v", err)
+	}
+	if err := os.Symlink("src", baseRoot); err != nil {
+		t.Skipf("symlink creation requires privileges: %v", err)
+	}
+	edited := []byte("edited\n")
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), edited, 0o600); err != nil {
+		t.Fatalf("write working file: %v", err)
+	}
+	before := mustManageRead(t, filepath.Join(root, fileutil.ManifestFileName))
+
+	err := RunAccept(manageRunContext(root), []string{"a.txt"})
+	if err == nil || !strings.Contains(err.Error(), "symlinked base directory is not allowed") {
+		t.Fatalf("RunAccept error = %v, want a symlinked-base refusal", err)
+	}
+	if got := mustManageRead(t, filepath.Join(root, fileutil.ManifestFileName)); got != before {
+		t.Errorf("refused accept rewrote the manifest")
+	}
+	if m := loadManageTestManifest(t, root); len(m.AcceptedFiles) != 0 {
+		t.Errorf("refused accept recorded a baseline: %v", m.AcceptedFiles)
+	}
+	if got, readErr := os.ReadFile(filepath.Join(root, "a.txt")); readErr != nil || string(got) != string(edited) { //nolint:gosec // test-controlled fixture path under t.TempDir()
+		t.Fatalf("refused accept changed the working file: %q (err %v)", got, readErr)
+	}
+}
+
 // TestRemoveUnmanagedBasesRollbackRestoresBase injects the failure path that
 // runManage relies on: a base removal is tracked before it happens, so the
 // deferred rollback restores the pristine bytes if the manifest save fails.
