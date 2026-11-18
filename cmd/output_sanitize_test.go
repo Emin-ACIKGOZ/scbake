@@ -70,6 +70,9 @@ func TestListProjectsEscapesTerminalControls(t *testing.T) {
 
 // TestDriftEscapesTerminalControls covers a managed_files key containing BEL.
 func TestDriftEscapesTerminalControls(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("control characters are not valid Windows file names")
+	}
 	resetFlags()
 	t.Cleanup(resetFlags)
 
