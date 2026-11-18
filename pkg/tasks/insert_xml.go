@@ -221,9 +221,24 @@ func (t *InsertXMLTask) readAndValidateXML(targetPath string) (string, error) {
 		return "", fmt.Errorf("XML file %s is malformed: %w", t.FilePath, err)
 	}
 
-	// A snippet may rely on a prefix bound by the target document, so provide
-	// the document's declarations to the fragment validator.
-	if err := t.validateSnippet(xmlNamespaceDeclarations(contentStr)); err != nil {
+	// A snippet may rely on a prefix bound by the target document, so validate
+	// it against the namespace scope actually in effect at the insertion point.
+	// A prefix rebound by a non-ancestor element must not leak into that scope:
+	// the document-wide declaration map takes the last declaration anywhere in
+	// the file and can disagree with the splice result.
+	segments, err := parseElementPath(t.ElementPath)
+	if err != nil {
+		return "", err
+	}
+	inherited := xmlNamespaceDeclarations(contentStr)
+	_, scope, locateErr := locateXMLElementWithScope(contentStr, segments)
+	if locateErr == nil {
+		inherited = scope
+	}
+	// When the target cannot be located, keep the historical document-wide
+	// fallback: the splice path reports the missing or self-closing target, and
+	// validateXMLDocument(output) remains the authoritative check.
+	if err := t.validateSnippet(inherited); err != nil {
 		return "", err
 	}
 
@@ -773,9 +788,18 @@ type xmlFrame struct {
 // EndElement that does not advance the input position, so its token span is
 // zero-width. This is an observed property of the decoder and is covered by
 // TestInsertXMLElement_SelfClosingTargetOffsets.
+func locateXMLElement(content string, segments []string) (int64, error) {
+	insertAt, _, err := locateXMLElementWithScope(content, segments)
+	return insertAt, err
+}
+
+// locateXMLElementWithScope is locateXMLElement plus the prefix→URI map that is
+// in scope inside the matched target element ("" is the default namespace).
+// Snippets inserted there see exactly this scope, including declarations on the
+// target element itself; a declaration made by a non-ancestor does not apply.
 //
 //nolint:cyclop // Linear structural walk with per-token checks
-func locateXMLElement(content string, segments []string) (int64, error) {
+func locateXMLElementWithScope(content string, segments []string) (int64, map[string]string, error) {
 	dec := xml.NewDecoder(strings.NewReader(content))
 
 	var stack []xmlFrame
@@ -789,7 +813,7 @@ func locateXMLElement(content string, segments []string) (int64, error) {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return 0, fmt.Errorf("failed to parse XML: %w", err)
+			return 0, nil, fmt.Errorf("failed to parse XML: %w", err)
 		}
 
 		switch e := tok.(type) {
@@ -825,15 +849,15 @@ func locateXMLElement(content string, segments []string) (int64, error) {
 				// such as <a></a> also has closeStart == openEnd, but its end
 				// tag does advance the decoder.
 				if closeStart == closeEnd {
-					return 0, fmt.Errorf("cannot insert into self-closing element <%s>", top.name.Local)
+					return 0, nil, fmt.Errorf("cannot insert into self-closing element <%s>", top.name.Local)
 				}
-				return closeStart, nil
+				return closeStart, copyXMLNS(top.ns), nil
 			}
 			stack = stack[:len(stack)-1]
 		}
 	}
 
-	return 0, fmt.Errorf("target element path /%s not found", strings.Join(segments, "/"))
+	return 0, nil, fmt.Errorf("target element path /%s not found", strings.Join(segments, "/"))
 }
 
 // segmentMatches reports whether a path segment matches an element name under

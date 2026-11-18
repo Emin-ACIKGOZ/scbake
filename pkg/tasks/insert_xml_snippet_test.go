@@ -5,8 +5,12 @@ package tasks
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"scbake/internal/util/fileutil"
 )
 
 // TestValidateXMLFragment covers the strict element-content rules independently
@@ -38,6 +42,13 @@ func TestValidateXMLFragment(t *testing.T) {
 		{
 			name:    "unprefixed attribute alongside a namespaced one",
 			snippet: `<plugin xmlns:a="urn:a" a:id="1" id="2"/>`,
+		},
+		{
+			// The default namespace applies to elements only. If it were
+			// wrongly applied to the unprefixed attribute, "one" would collide
+			// with a:one even though both prefixes bind the same URI.
+			name:    "namespace-less unprefixed attribute under a default namespace",
+			snippet: `<plugin xmlns="urn:u" xmlns:a="urn:u" xmlns:b="urn:u" a:one="1" b:two="2" one="3"/>`,
 		},
 		{
 			name:    "reserved xml prefix correctly bound",
@@ -272,6 +283,10 @@ func TestInsertXMLTask_FragmentSnippetsAccepted(t *testing.T) {
 	}{
 		{"bound prefix", `<x:plugin xmlns:x="urn:x"><x:id>one</x:id></x:plugin>`},
 		{"default namespace", `<plugin xmlns="urn:plugin"><id>one</id></plugin>`},
+		{
+			"default namespace with duplicate-URI prefixes and a namespace-less attribute",
+			`<plugin xmlns="urn:u" xmlns:a="urn:u" xmlns:b="urn:u" a:one="1" b:two="2" one="3"/>`,
+		},
 		{"comment", `<!-- scbake snippet -->`},
 		{"cdata", `<![CDATA[raw <data> & more]]>`},
 		{"ordinary processing instruction", `<?scbake generated?>`},
@@ -336,6 +351,87 @@ func TestInsertXMLTask_FragmentSnippetsAccepted(t *testing.T) {
 				t.Error("second execution modified pom.xml (idempotency violation)")
 			}
 		})
+	}
+}
+
+// TestInsertXMLTask_FragmentValidationUsesInsertionScope is a regression for
+// validating a snippet against document-wide declarations. Here p is rebound by
+// a non-ancestor sibling to urn:B, while the insertion point still sees
+// p=urn:A. The snippet uses p:id and declares q=urn:B for q:id. A document-wide
+// map would expand both attributes to urn:B:id and reject the valid snippet;
+// the actual insertion scope keeps them in different namespaces.
+//
+//nolint:cyclop // Regression checks each stage of the validation path.
+func TestInsertXMLTask_FragmentValidationUsesInsertionScope(t *testing.T) {
+	h := newTestHelper(t)
+	doc := `<root xmlns:p="urn:A">
+	<target></target>
+	<other xmlns:p="urn:B"><p:id>sibling</p:id></other>
+</root>`
+	snippet := `<plugin p:id="one" xmlns:q="urn:B" q:id="two"/>`
+
+	// A document-wide declaration map takes the last p declaration anywhere in
+	// the file, which is the non-ancestor sibling's binding.
+	if err := validateXMLFragment(snippet, xmlNamespaceDeclarations(doc)); err == nil {
+		t.Fatal("document-wide declarations unexpectedly accepted the snippet; regression fixture is not meaningful")
+	}
+
+	segments, err := parseElementPath("/root/target")
+	if err != nil {
+		t.Fatalf("parseElementPath() failed: %v", err)
+	}
+	_, scope, err := locateXMLElementWithScope(doc, segments)
+	if err != nil {
+		t.Fatalf("locateXMLElementWithScope() failed: %v", err)
+	}
+	if scope["p"] != "urn:A" {
+		t.Fatalf("insertion scope p = %q, want %q", scope["p"], "urn:A")
+	}
+
+	targetFile := filepath.Join(h.tmpDir, "scope.xml")
+	if err := os.WriteFile(targetFile, []byte(doc), fileutil.FilePerms); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	task := &InsertXMLTask{
+		FilePath:    "scope.xml",
+		ElementPath: "/root/target",
+		XMLContent:  snippet,
+		Desc:        "validate snippet in insertion scope",
+		TaskPrio:    1201,
+	}
+	tcCtx := h.taskContext(false, false)
+
+	// Fragment validation uses the actual insertion scope, so the valid snippet
+	// is accepted; the output validator remains the authoritative check.
+	if err := task.Execute(tcCtx); err != nil {
+		t.Fatalf("Execute() = %v, want nil", err)
+	}
+
+	//nolint:gosec // Path is in t.TempDir()
+	afterBytes, err := os.ReadFile(targetFile)
+	if err != nil {
+		t.Fatalf("re-reading fixture: %v", err)
+	}
+	after := string(afterBytes)
+	if !strings.Contains(after, snippet) {
+		t.Errorf("inserted snippet %q not found in file", snippet)
+	}
+	if err := validateXMLDocument(after); err != nil {
+		t.Errorf("resulting document is invalid: %v", err)
+	}
+
+	// A second run is a no-op.
+	if err := task.Execute(tcCtx); err != nil {
+		t.Fatalf("second Execute() = %v, want nil", err)
+	}
+	//nolint:gosec // Path is in t.TempDir()
+	again, err := os.ReadFile(targetFile)
+	if err != nil {
+		t.Fatalf("re-reading fixture after second run: %v", err)
+	}
+	if string(again) != after {
+		t.Error("second execution modified the file (idempotency violation)")
 	}
 }
 
