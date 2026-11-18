@@ -459,7 +459,27 @@ main() {
     make_executable "$binary_name"
 
     log_info "Installing to system..."
-    mkdir -p "$INSTALL_DIR" || die "Failed to create install directory"
+
+    # Creating the directory needs the same privilege handling as writing into
+    # it: a new path under a protected parent (e.g. /opt/scbake) cannot be
+    # created unprivileged. Try it first so writable installs never prompt, and
+    # only escalate when that fails. Windows keeps failing as before.
+    local use_sudo=0
+    if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+        if [[ "$os_arch" == *"windows"* ]]; then
+            die "Failed to create install directory"
+        fi
+
+        log_warn "Directory '$INSTALL_DIR' requires elevated privileges"
+        log_info "Password prompt coming up (or use ~/.local/bin to avoid sudo)"
+
+        if ! sudo -v >/dev/null 2>&1; then
+            die "sudo authentication failed. Try: bash install.sh latest ~/.local/bin"
+        fi
+
+        sudo mkdir -p "$INSTALL_DIR" || die "Failed to create install directory"
+        use_sudo=1
+    fi
 
     # Use sudo if necessary, with user warning
     if [[ "$os_arch" == *"windows"* ]]; then
@@ -468,7 +488,9 @@ main() {
         fi
     fi
 
-    if [ ! -w "$INSTALL_DIR" ]; then
+    # Skip the second sudo -v when the directory was just created with sudo:
+    # credentials are already cached, and re-checking only risks another prompt.
+    if [ "$use_sudo" -eq 0 ] && [ ! -w "$INSTALL_DIR" ]; then
         log_warn "Directory '$INSTALL_DIR' requires elevated privileges"
         log_info "Password prompt coming up (or use ~/.local/bin to avoid sudo)"
 
@@ -476,6 +498,10 @@ main() {
             die "sudo authentication failed. Try: bash install.sh latest ~/.local/bin"
         fi
 
+        use_sudo=1
+    fi
+
+    if [ "$use_sudo" -eq 1 ]; then
         sudo mv "$binary_name" "$INSTALL_DIR/$binary_name" || die "Failed to install"
     else
         mv "$binary_name" "$INSTALL_DIR/$binary_name" || die "Failed to install"
