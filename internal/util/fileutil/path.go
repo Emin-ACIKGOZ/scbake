@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,9 +221,32 @@ func rejectNonRegular(path string) error {
 		return nil
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("%q is not a regular file", path)
+		return &nonRegularError{path: path}
 	}
 	return nil
+}
+
+// errNotRegular is the cause reported by nonRegularError.
+var errNotRegular = errors.New("not a regular file")
+
+// nonRegularError reports an existing path that is not a regular file. It
+// displays the path with %q so control characters cannot reach a terminal
+// unescaped, while Unwrap keeps a *fs.PathError in the chain for callers that
+// inspect the underlying filesystem failure with errors.As.
+type nonRegularError struct {
+	path string
+}
+
+// Error renders the rejected path with Go quoting, which escapes any control
+// characters the path may contain.
+func (e *nonRegularError) Error() string {
+	return fmt.Sprintf("%q is not a regular file", e.path)
+}
+
+// Unwrap exposes the filesystem error shape that the replaced open would have
+// returned.
+func (e *nonRegularError) Unwrap() error {
+	return &fs.PathError{Op: "open", Path: e.path, Err: errNotRegular}
 }
 
 // SafeReadFile validates targetPath containment inside baseDir then reads the

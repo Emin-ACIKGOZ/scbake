@@ -106,13 +106,14 @@ func TestDriftEscapesTerminalControls(t *testing.T) {
 // manifest-controlled path is escaped instead of reaching the terminal raw.
 func assertWrappedPathErrorSanitized(t *testing.T, label, stderr string) {
 	t.Helper()
-	if !strings.Contains(stderr, escapedControlDirKey) {
+	if !strings.Contains(stderr, escapedControlDirKey) &&
+		!strings.Contains(stderr, goQuotedControlDirKey) {
 		t.Errorf("%s did not escape the control-character path; stderr:\n%q", label, stderr)
 	}
 	if !strings.Contains(stderr, "\\x1b[31m") {
 		t.Errorf("%s did not escape ESC; stderr:\n%q", label, stderr)
 	}
-	if !strings.Contains(stderr, "\\x07") {
+	if !strings.Contains(stderr, "\\x07") && !strings.Contains(stderr, "\\a") {
 		t.Errorf("%s did not escape BEL; stderr:\n%q", label, stderr)
 	}
 	for _, r := range []rune{'\x1b', '\x07', '\r'} {
@@ -392,8 +393,14 @@ const controlDirKey = "bad\x1b[31m\x07dir"
 // controlDirKeyTOML is controlDirKey as a TOML basic string.
 const controlDirKeyTOML = `bad\u001b[31m\u0007dir`
 
-// escapedControlDirKey is how Sanitize must render controlDirKey.
-const escapedControlDirKey = `bad\x1b[31m\x07dir`
+// escapedControlDirKey is how Sanitize renders controlDirKey when it receives
+// the raw bytes. goQuotedControlDirKey is how Go's %q renders the same path;
+// a lower layer may quote a path before Sanitize sees it, in which case the
+// BEL appears as the short escape \a instead. Both are safe spellings.
+const (
+	escapedControlDirKey  = `bad\x1b[31m\x07dir`
+	goQuotedControlDirKey = `bad\x1b[31m\adir`
+)
 
 // runWithCapturedOutput runs fn and returns both captured stdout and stderr.
 func runWithCapturedOutput(t *testing.T, fn func()) (stdout, stderr string) {

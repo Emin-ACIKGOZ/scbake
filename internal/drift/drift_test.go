@@ -411,7 +411,8 @@ func TestDetect_BaseReadErrorEscapesControlPath(t *testing.T) {
 	if !strings.Contains(msg, "inspecting committed base") {
 		t.Errorf("error = %q, want an inspecting-committed-base error", msg)
 	}
-	if !strings.Contains(msg, `bad\x1b[31m\x07dir`) {
+	if !strings.Contains(msg, `bad\x1b[31m\x07dir`) &&
+		!strings.Contains(msg, `bad\x1b[31m\adir`) {
 		t.Errorf("error did not escape the control-character base path: %q", msg)
 	}
 	for _, r := range []rune{'\x1b', '\x07', '\r'} {
