@@ -221,18 +221,25 @@ func (t *InsertXMLTask) readAndValidateXML(targetPath string) (string, error) {
 		return "", fmt.Errorf("XML file %s is malformed: %w", t.FilePath, err)
 	}
 
-	if err := t.validateSnippet(); err != nil {
+	// A snippet may rely on a prefix bound by the target document, so provide
+	// the document's declarations to the fragment validator.
+	if err := t.validateSnippet(xmlNamespaceDeclarations(contentStr)); err != nil {
 		return "", err
 	}
 
 	return contentStr, nil
 }
 
-// validateSnippet checks that the fragment to insert is well-formed XML. It
-// needs no existing file, so a deferred insertion can still run it.
-func (t *InsertXMLTask) validateSnippet() error {
+// validateSnippet checks that the fragment to insert is well-formed XML and
+// valid element content. The optional declared map holds namespace prefixes the
+// target document declares; when it is omitted (a deferred dry run, where the
+// document is not available) the fragment must be self-contained.
+func (t *InsertXMLTask) validateSnippet(declared ...map[string]string) error {
 	if err := validateXML(t.XMLContent); err != nil {
 		return fmt.Errorf("XML content to insert is malformed: %w", err)
+	}
+	if err := validateXMLFragment(t.XMLContent, declared...); err != nil {
+		return fmt.Errorf("XML content to insert is not valid element content: %w", err)
 	}
 	return nil
 }
@@ -310,6 +317,287 @@ func validateXML(content string) error {
 	}
 }
 
+const (
+	// xmlFragmentRoot is the synthetic wrapper used to validate a fragment as
+	// element content rather than as a standalone document.
+	xmlFragmentRoot = "scbake-fragment"
+	// xmlNamespaceURI is the reserved namespace bound to the "xml" prefix.
+	xmlNamespaceURI = "http://www.w3.org/XML/1998/namespace"
+	// xmlPrefix is the reserved prefix bound to xmlNamespaceURI.
+	xmlPrefix = "xml"
+	// xmlnsPrefix is the pseudo-prefix the decoder reports for namespace
+	// declaration attributes such as xmlns:name="uri".
+	xmlnsPrefix = "xmlns"
+)
+
+// errXMLDeclarationInContent marks an XML declaration found where only element
+// content is allowed.
+var errXMLDeclarationInContent = errors.New("XML declaration is not allowed in element content")
+
+// errXMLDirectiveInContent marks a directive (DOCTYPE, entity declaration)
+// found where only element content is allowed.
+var errXMLDirectiveInContent = errors.New("XML directive is not allowed in element content")
+
+// errXMLUnboundPrefix marks a prefixed name whose prefix is declared nowhere in
+// scope.
+var errXMLUnboundPrefix = errors.New("unbound namespace prefix")
+
+// validateXMLFragment checks that content is well-formed XML *element content*:
+// text, comments, CDATA, processing instructions, and one or more sibling
+// elements, as accepted at an insertion point inside an existing element.
+//
+// The fragment is wrapped in a synthetic root so the decoder can parse sibling
+// elements. Document-level constructs are then rejected: an XML declaration is
+// not element content, and a directive (DOCTYPE, entity declaration) is not
+// either. Namespaces are checked against the declarations made in the fragment
+// plus any inherited declarations supplied by the caller, because a snippet may
+// use a prefix its target document binds on an ancestor. A name whose namespace
+// is not declared anywhere in that scope is an unbound prefix.
+func validateXMLFragment(content string, inherited ...map[string]string) error {
+	wrapped := "<" + xmlFragmentRoot + ">" + content + "</" + xmlFragmentRoot + ">"
+
+	scope := map[string]string{xmlPrefix: xmlNamespaceURI}
+	for _, decls := range inherited {
+		for prefix, uri := range decls {
+			if _, exists := scope[prefix]; !exists {
+				scope[prefix] = uri
+			}
+		}
+	}
+
+	return walkXMLNamespaces(wrapped, scope, false)
+}
+
+// validateXMLDocument applies the fragment-level rules to a complete document.
+// Unlike a fragment, a document may carry an XML declaration and directives,
+// but only before its root element; anything document-level after an element
+// has started would be content injected into the tree and is rejected.
+func validateXMLDocument(content string) error {
+	return walkXMLNamespaces(content, map[string]string{xmlPrefix: xmlNamespaceURI}, true)
+}
+
+// walkXMLNamespaces token-walks content and enforces the declaration and
+// namespace rules described on validateXMLFragment. When document is true the
+// prolog may contain an XML declaration and directives before the root element.
+func walkXMLNamespaces(content string, base map[string]string, document bool) error {
+	if err := walkXMLDeclarations(content, base, document); err != nil {
+		return err
+	}
+	// The decoder resolves a bound prefix to its namespace URI and reports an
+	// unbound prefix as the literal prefix. A separate raw walk checks prefix
+	// declarations exactly, so a URI that happens to equal an undeclared prefix
+	// cannot make an unbound prefix look bound.
+	return walkXMLPrefixes(content, base)
+}
+
+// walkXMLDeclarations rejects document-level constructs in element content and
+// checks that every resolved namespace URI is declared in scope.
+//
+//nolint:cyclop // One linear token walk with one case per token type
+func walkXMLDeclarations(content string, base map[string]string, document bool) error {
+	decoder := xml.NewDecoder(strings.NewReader(content))
+	decoder.Strict = true
+
+	scopes := []map[string]string{base}
+	rootStarted := false
+
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+
+		switch e := tok.(type) {
+		case xml.ProcInst:
+			if !strings.EqualFold(e.Target, xmlPrefix) {
+				// Ordinary processing instructions are element content.
+				continue
+			}
+			if document && !rootStarted {
+				// The document's own XML declaration.
+				continue
+			}
+			return errXMLDeclarationInContent
+
+		case xml.Directive:
+			if document && !rootStarted {
+				// A document type declaration belongs in the prolog.
+				continue
+			}
+			return fmt.Errorf("%w: %q", errXMLDirectiveInContent, string(e))
+
+		case xml.StartElement:
+			scope := copyXMLNS(scopes[len(scopes)-1])
+			for _, a := range e.Attr {
+				switch {
+				case a.Name.Space == xmlnsPrefix:
+					scope[a.Name.Local] = a.Value
+				case a.Name.Space == "" && a.Name.Local == xmlnsPrefix:
+					scope[""] = a.Value
+				}
+			}
+			scopes = append(scopes, scope)
+			rootStarted = true
+
+			if err := checkXMLNamespace("element", e.Name, scope); err != nil {
+				return err
+			}
+			for _, a := range e.Attr {
+				if isXMLNSAttr(a.Name) {
+					continue
+				}
+				if err := checkXMLNamespace("attribute", a.Name, scope); err != nil {
+					return err
+				}
+			}
+
+		case xml.EndElement:
+			if len(scopes) > 1 {
+				scopes = scopes[:len(scopes)-1]
+			}
+		}
+	}
+}
+
+// walkXMLPrefixes verifies that every prefixed element and attribute name uses
+// a prefix declared in scope. RawToken is used because Token has already
+// resolved real declarations to URIs, which makes an undeclared prefix
+// indistinguishable from a URI in some contrived documents.
+//
+//nolint:cyclop // linear raw-token namespace walk
+func walkXMLPrefixes(content string, base map[string]string) error {
+	decoder := xml.NewDecoder(strings.NewReader(content))
+	decoder.Strict = true
+
+	scopes := []map[string]struct{}{xmlPrefixSet(base)}
+	for {
+		tok, err := decoder.RawToken()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+
+		switch e := tok.(type) {
+		case xml.StartElement:
+			scope := copyXMLPrefixSet(scopes[len(scopes)-1])
+			for _, a := range e.Attr {
+				switch {
+				case a.Name.Space == xmlnsPrefix:
+					scope[a.Name.Local] = struct{}{}
+				case a.Name.Space == "" && a.Name.Local == xmlnsPrefix:
+					scope[""] = struct{}{}
+				}
+			}
+			scopes = append(scopes, scope)
+
+			if err := checkXMLPrefix("element", e.Name, scope); err != nil {
+				return err
+			}
+			for _, a := range e.Attr {
+				if isXMLNSAttr(a.Name) {
+					continue
+				}
+				if err := checkXMLPrefix("attribute", a.Name, scope); err != nil {
+					return err
+				}
+			}
+
+		case xml.EndElement:
+			if len(scopes) > 1 {
+				scopes = scopes[:len(scopes)-1]
+			}
+		}
+	}
+}
+
+// checkXMLPrefix rejects a raw name whose prefix was not declared in scope.
+func checkXMLPrefix(kind string, name xml.Name, scope map[string]struct{}) error {
+	if name.Space == "" || name.Space == xmlPrefix {
+		return nil
+	}
+	if _, declared := scope[name.Space]; declared {
+		return nil
+	}
+	return fmt.Errorf("%w %q used by %s %q", errXMLUnboundPrefix, name.Space, kind, name.Local)
+}
+
+// xmlPrefixSet collects the prefixes declared by the base scope.
+func xmlPrefixSet(base map[string]string) map[string]struct{} {
+	set := make(map[string]struct{}, len(base))
+	for prefix := range base {
+		set[prefix] = struct{}{}
+	}
+	return set
+}
+
+func copyXMLPrefixSet(src map[string]struct{}) map[string]struct{} {
+	dst := make(map[string]struct{}, len(src))
+	for prefix := range src {
+		dst[prefix] = struct{}{}
+	}
+	return dst
+}
+
+// checkXMLNamespace rejects a name whose namespace is not declared in scope.
+// The decoder resolves a bound prefix to its namespace URI and reports an
+// unbound prefix literally, so a non-empty Space must either be a URI declared
+// by an xmlns attribute or a prefix the caller inherited from the enclosing
+// document. The reserved "xml" prefix is always in scope. The empty namespace
+// (unprefixed names, including the default namespace) is accepted.
+func checkXMLNamespace(kind string, name xml.Name, scope map[string]string) error {
+	if name.Space == "" || name.Space == xmlPrefix || name.Space == xmlNamespaceURI {
+		return nil
+	}
+	if uri, declared := scope[name.Space]; declared && uri != "" {
+		return nil
+	}
+	for _, uri := range scope {
+		if uri == name.Space {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w %q used by %s %q", errXMLUnboundPrefix, name.Space, kind, name.Local)
+}
+
+// isXMLNSAttr reports whether a name is a namespace declaration attribute.
+func isXMLNSAttr(name xml.Name) bool {
+	return name.Space == xmlnsPrefix || (name.Space == "" && name.Local == xmlnsPrefix)
+}
+
+// xmlNamespaceDeclarations collects the prefix declarations made anywhere in a
+// well-formed document. It is used to let a snippet use a prefix the target
+// document binds on an ancestor. Declarations that are not in scope at the
+// insertion point are harmless here: the spliced output is validated with real
+// scoping, so an unbound prefix is still rejected before any write.
+func xmlNamespaceDeclarations(content string) map[string]string {
+	decls := make(map[string]string)
+	decoder := xml.NewDecoder(strings.NewReader(content))
+	decoder.Strict = true
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			return decls
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		for _, a := range start.Attr {
+			switch {
+			case a.Name.Space == xmlnsPrefix:
+				decls[a.Name.Local] = a.Value
+			case a.Name.Space == "" && a.Name.Local == xmlnsPrefix:
+				decls[""] = a.Value
+			}
+		}
+	}
+}
+
 // parseElementPath splits a simplified element path (e.g. "/project/build/plugins")
 // into its segments. Empty segments (from repeated slashes) are ignored; a path
 // with no segments at all is rejected.
@@ -380,9 +668,9 @@ func locateXMLElement(content string, segments []string) (int64, error) {
 			}
 			for _, a := range e.Attr {
 				switch {
-				case a.Name.Space == "xmlns":
+				case a.Name.Space == xmlnsPrefix:
 					frame.ns[a.Name.Local] = a.Value
-				case a.Name.Space == "" && a.Name.Local == "xmlns":
+				case a.Name.Space == "" && a.Name.Local == xmlnsPrefix:
 					frame.ns[""] = a.Value
 				}
 			}
@@ -480,5 +768,18 @@ func insertXMLElement(fileContent, elementPath, xmlToInsert string) (string, err
 	result.WriteString("\n")
 	result.WriteString(after)
 
-	return result.String(), nil
+	output := result.String()
+
+	// Validate the spliced document before returning it. The fragment checks in
+	// the task catch bad snippets early, but insertXMLElement is also a direct
+	// entry point; re-validating the output guarantees a caller can never write
+	// an XML declaration, directive, or unbound prefix into an element.
+	if err := validateXML(output); err != nil {
+		return "", fmt.Errorf("insertion would produce malformed XML: %w", err)
+	}
+	if err := validateXMLDocument(output); err != nil {
+		return "", fmt.Errorf("insertion would produce invalid element content: %w", err)
+	}
+
+	return output, nil
 }

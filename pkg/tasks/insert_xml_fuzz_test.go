@@ -6,6 +6,7 @@
 package tasks
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -43,14 +44,44 @@ line3`, `line2`)
 	})
 }
 
-// FuzzInsertXMLElement tests insertion with random inputs
+// FuzzInsertXMLElement tests insertion with random inputs. Whatever it accepts
+// must be a well-formed document that obeys the element-content declaration and
+// namespace rules (#219), and document-level snippets must always be rejected.
 func FuzzInsertXMLElement(f *testing.F) {
 	f.Add(`<root><target/></root>`, `/root/target`, `<new/>`)
 	f.Add(`<a><b><c/></b></a>`, `/a/b`, `<d/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin><id>ok</id></plugin>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<x:foo/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<?xml version="1.0"?>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<!DOCTYPE project>`)
 
-	f.Fuzz(func(_ *testing.T, fileContent, path, insert string) {
-		// Invalid paths should error, not panic
-		_, _ = insertXMLElement(fileContent, path, insert)
+	f.Fuzz(func(t *testing.T, fileContent, path, insert string) {
+		result, err := insertXMLElement(fileContent, path, insert)
+		if err != nil {
+			return
+		}
+
+		if verifyErr := validateXML(result); verifyErr != nil {
+			t.Fatalf("insertXMLElement() returned success for malformed output: %v (file=%q path=%q insert=%q)",
+				verifyErr, fileContent, path, insert)
+		}
+		if verifyErr := validateXMLDocument(result); verifyErr != nil {
+			t.Fatalf("insertXMLElement() returned success for invalid element content: %v (file=%q path=%q insert=%q)",
+				verifyErr, fileContent, path, insert)
+		}
+
+		// A declaration, directive, or prefix unbound both in the snippet and
+		// in the target document is document-level content: it must never be
+		// accepted. Other fragment errors (for example a malformed snippet) are
+		// already covered by the output checks above.
+		if verifyErr := validateXMLFragment(insert, xmlNamespaceDeclarations(fileContent)); verifyErr != nil {
+			if errors.Is(verifyErr, errXMLDeclarationInContent) ||
+				errors.Is(verifyErr, errXMLDirectiveInContent) ||
+				errors.Is(verifyErr, errXMLUnboundPrefix) {
+				t.Fatalf("insertXMLElement() accepted document-level snippet: %v (file=%q path=%q insert=%q)",
+					verifyErr, fileContent, path, insert)
+			}
+		}
 	})
 }
 
