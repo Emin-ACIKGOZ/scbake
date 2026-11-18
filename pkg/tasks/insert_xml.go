@@ -24,7 +24,7 @@ type InsertXMLTask struct {
 	// ElementPath is a simplified XPath indicating where to insert (e.g., "/project/build/plugins")
 	ElementPath string
 
-	// XMLContent is the XML fragment to insert (must be valid XML)
+	// XMLContent is the XML fragment to insert (must be valid element content)
 	XMLContent string
 
 	Desc string
@@ -353,6 +353,15 @@ var errXMLInvalidNamespaceDecl = errors.New("invalid XML namespace declaration")
 // XML qualified name.
 var errXMLInvalidQName = errors.New("invalid XML qualified name")
 
+// errXMLDuplicateAttribute marks two attributes on one element whose expanded
+// names (namespace URI and local name) are the same. XML requires attribute
+// names to be unique after namespace expansion, not merely as written.
+var errXMLDuplicateAttribute = errors.New("duplicate XML attribute")
+
+// errXMLDuplicateNamespaceDecl marks two declarations of the same prefix (or of
+// the default namespace) on one element.
+var errXMLDuplicateNamespaceDecl = errors.New("duplicate XML namespace declaration")
+
 // validateXMLFragment checks that content is well-formed XML *element content*:
 // text, comments, CDATA, processing instructions, and one or more sibling
 // elements, as accepted at an insertion point inside an existing element.
@@ -480,16 +489,18 @@ func walkXMLDeclarations(content string, base map[string]string, document bool) 
 }
 
 // walkXMLPrefixes verifies that every prefixed element and attribute name uses
-// a prefix declared in scope. RawToken is used because Token has already
-// resolved real declarations to URIs, which makes an undeclared prefix
-// indistinguishable from a URI in some contrived documents.
+// a prefix declared in scope, and that no element carries two attributes with
+// the same expanded name. RawToken is used because Token has already resolved
+// real declarations to URIs, which makes an undeclared prefix indistinguishable
+// from a URI in some contrived documents, and because it preserves the raw
+// prefix needed to expand each attribute name.
 //
 //nolint:cyclop // linear raw-token namespace walk
 func walkXMLPrefixes(content string, base map[string]string) error {
 	decoder := xml.NewDecoder(strings.NewReader(content))
 	decoder.Strict = true
 
-	scopes := []map[string]struct{}{xmlPrefixSet(base)}
+	scopes := []map[string]string{copyXMLNS(base)}
 	for {
 		tok, err := decoder.RawToken()
 		if err != nil {
@@ -501,23 +512,9 @@ func walkXMLPrefixes(content string, base map[string]string) error {
 
 		switch e := tok.(type) {
 		case xml.StartElement:
-			scope := copyXMLPrefixSet(scopes[len(scopes)-1])
-			for _, a := range e.Attr {
-				if err := checkXMLQName("attribute", a.Name); err != nil {
-					return err
-				}
-				switch {
-				case a.Name.Space == xmlnsPrefix:
-					if err := checkXMLNamespaceDeclaration(a.Name.Local, a.Value); err != nil {
-						return err
-					}
-					scope[a.Name.Local] = struct{}{}
-				case a.Name.Space == "" && a.Name.Local == xmlnsPrefix:
-					if err := checkXMLNamespaceDeclaration("", a.Value); err != nil {
-						return err
-					}
-					scope[""] = struct{}{}
-				}
+			scope := copyXMLNS(scopes[len(scopes)-1])
+			if err := collectXMLNamespaceDeclarations(e, scope); err != nil {
+				return err
 			}
 			scopes = append(scopes, scope)
 
@@ -527,13 +524,8 @@ func walkXMLPrefixes(content string, base map[string]string) error {
 			if err := checkXMLPrefix("element", e.Name, scope); err != nil {
 				return err
 			}
-			for _, a := range e.Attr {
-				if isXMLNSAttr(a.Name) {
-					continue
-				}
-				if err := checkXMLPrefix("attribute", a.Name, scope); err != nil {
-					return err
-				}
+			if err := checkXMLAttributeNames(e, scope); err != nil {
+				return err
 			}
 
 		case xml.EndElement:
@@ -544,8 +536,92 @@ func walkXMLPrefixes(content string, base map[string]string) error {
 	}
 }
 
+// collectXMLNamespaceDeclarations validates the raw names and declarations of
+// one start tag, records the declarations in scope for the element, and rejects
+// the same prefix (or the default namespace) being declared twice on it.
+func collectXMLNamespaceDeclarations(e xml.StartElement, scope map[string]string) error {
+	declared := make(map[string]struct{}, len(e.Attr))
+	for _, a := range e.Attr {
+		if err := checkXMLQName("attribute", a.Name); err != nil {
+			return err
+		}
+
+		prefix, isDeclaration := "", false
+		switch {
+		case a.Name.Space == xmlnsPrefix:
+			prefix, isDeclaration = a.Name.Local, true
+		case a.Name.Space == "" && a.Name.Local == xmlnsPrefix:
+			prefix, isDeclaration = "", true
+		}
+		if !isDeclaration {
+			continue
+		}
+
+		if err := checkXMLNamespaceDeclaration(prefix, a.Value); err != nil {
+			return err
+		}
+		if _, duplicate := declared[prefix]; duplicate {
+			return fmt.Errorf("%w for prefix %q on element %q", errXMLDuplicateNamespaceDecl, prefix, rawXMLName(e.Name))
+		}
+		declared[prefix] = struct{}{}
+		scope[prefix] = a.Value
+	}
+	return nil
+}
+
+// checkXMLAttributeNames verifies that every non-declaration attribute has a
+// declared prefix and that no two attributes expand to the same namespace URI
+// and local name. Two prefixes bound to one URI therefore collide, while the
+// same local name in different namespaces remains legal. An unprefixed
+// attribute is in no namespace: the default namespace never applies to it.
+func checkXMLAttributeNames(e xml.StartElement, scope map[string]string) error {
+	expanded := make(map[xmlExpandedName]struct{}, len(e.Attr))
+	for _, a := range e.Attr {
+		if isXMLNSAttr(a.Name) {
+			continue
+		}
+		if err := checkXMLPrefix("attribute", a.Name, scope); err != nil {
+			return err
+		}
+		name, bound := expandXMLAttributeName(a.Name, scope)
+		if !bound {
+			// checkXMLPrefix already rejected an undeclared prefix.
+			continue
+		}
+		if _, duplicate := expanded[name]; duplicate {
+			return fmt.Errorf("%w %q on element %q", errXMLDuplicateAttribute, rawXMLName(a.Name), rawXMLName(e.Name))
+		}
+		expanded[name] = struct{}{}
+	}
+	return nil
+}
+
+// xmlExpandedName is an attribute name after namespace expansion.
+type xmlExpandedName struct {
+	space string
+	local string
+}
+
+// expandXMLAttributeName resolves a raw attribute name against the in-scope
+// prefix map. Unprefixed attributes have no namespace, and the reserved xml
+// prefix always denotes xmlNamespaceURI. bound is false for an undeclared
+// prefix, which checkXMLPrefix reports.
+func expandXMLAttributeName(name xml.Name, scope map[string]string) (xmlExpandedName, bool) {
+	if name.Space == "" {
+		return xmlExpandedName{local: name.Local}, true
+	}
+	if name.Space == xmlPrefix {
+		return xmlExpandedName{space: xmlNamespaceURI, local: name.Local}, true
+	}
+	uri, declared := scope[name.Space]
+	if !declared {
+		return xmlExpandedName{}, false
+	}
+	return xmlExpandedName{space: uri, local: name.Local}, true
+}
+
 // checkXMLPrefix rejects a raw name whose prefix was not declared in scope.
-func checkXMLPrefix(kind string, name xml.Name, scope map[string]struct{}) error {
+func checkXMLPrefix(kind string, name xml.Name, scope map[string]string) error {
 	if name.Space == "" || name.Space == xmlPrefix {
 		return nil
 	}
@@ -599,23 +675,6 @@ func rawXMLName(name xml.Name) string {
 		return name.Local
 	}
 	return name.Space + ":" + name.Local
-}
-
-// xmlPrefixSet collects the prefixes declared by the base scope.
-func xmlPrefixSet(base map[string]string) map[string]struct{} {
-	set := make(map[string]struct{}, len(base))
-	for prefix := range base {
-		set[prefix] = struct{}{}
-	}
-	return set
-}
-
-func copyXMLPrefixSet(src map[string]struct{}) map[string]struct{} {
-	dst := make(map[string]struct{}, len(src))
-	for prefix := range src {
-		dst[prefix] = struct{}{}
-	}
-	return dst
 }
 
 // checkXMLNamespace rejects a name whose namespace is not declared in scope.

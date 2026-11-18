@@ -28,6 +28,18 @@ func TestValidateXMLFragment(t *testing.T) {
 		{name: "default namespace undeclaration", snippet: `<plugin xmlns=""/>`},
 		{name: "prefix rebinding", snippet: `<plugin xmlns:x="urn:a"><child xmlns:x="urn:b"><x:id>1</x:id></child></plugin>`},
 		{
+			name:    "same local attribute name in different namespaces",
+			snippet: `<plugin xmlns:a="urn:a" xmlns:b="urn:b" a:id="1" b:id="2"/>`,
+		},
+		{
+			name:    "same local element name in different namespaces",
+			snippet: `<plugin xmlns:a="urn:a" xmlns:b="urn:b"><a:id/><b:id/></plugin>`,
+		},
+		{
+			name:    "unprefixed attribute alongside a namespaced one",
+			snippet: `<plugin xmlns:a="urn:a" a:id="1" id="2"/>`,
+		},
+		{
 			name:    "reserved xml prefix correctly bound",
 			snippet: `<plugin xmlns:xml="http://www.w3.org/XML/1998/namespace"/>`,
 		},
@@ -107,6 +119,36 @@ func TestValidateXMLFragment(t *testing.T) {
 			want:    errXMLInvalidQName,
 		},
 		{
+			name:    "duplicate attribute",
+			snippet: `<plugin a="1" a="2"/>`,
+			want:    errXMLDuplicateAttribute,
+		},
+		{
+			name:    "duplicate attributes behind one prefix",
+			snippet: `<plugin xmlns:p="urn:p" p:a="1" p:a="2"/>`,
+			want:    errXMLDuplicateAttribute,
+		},
+		{
+			name:    "duplicate expanded attribute via two prefixes",
+			snippet: `<plugin xmlns:a="urn:u" xmlns:b="urn:u" a:id="1" b:id="2"/>`,
+			want:    errXMLDuplicateAttribute,
+		},
+		{
+			name:    "duplicate reserved xml prefix attribute",
+			snippet: `<plugin xml:lang="en" xml:lang="fr"/>`,
+			want:    errXMLDuplicateAttribute,
+		},
+		{
+			name:    "duplicate default namespace declaration",
+			snippet: `<plugin xmlns="urn:a" xmlns="urn:b"/>`,
+			want:    errXMLDuplicateNamespaceDecl,
+		},
+		{
+			name:    "duplicate prefixed namespace declaration",
+			snippet: `<plugin xmlns:p="urn:a" xmlns:p="urn:b"/>`,
+			want:    errXMLDuplicateNamespaceDecl,
+		},
+		{
 			name:    "attribute name with trailing colon",
 			snippet: `<plugin id:="1"/>`,
 			want:    errXMLInvalidQName,
@@ -135,10 +177,10 @@ func TestValidateXMLFragment(t *testing.T) {
 	}
 }
 
-// TestInsertXMLTask_DocumentLevelSnippetRejected is a regression for #219: a
-// snippet that is only valid as a standalone document must fail in both dry-run
-// validation and real execution, and must leave pom.xml untouched.
-func TestInsertXMLTask_DocumentLevelSnippetRejected(t *testing.T) {
+// TestInsertXMLTask_InvalidSnippetRejected is a regression for #219: a snippet
+// that strict parsers reject even though encoding/xml accepts it must fail in
+// both dry-run validation and real execution, and must leave pom.xml untouched.
+func TestInsertXMLTask_InvalidSnippetRejected(t *testing.T) {
 	cases := []struct {
 		name    string
 		snippet string
@@ -155,6 +197,10 @@ func TestInsertXMLTask_DocumentLevelSnippetRejected(t *testing.T) {
 		{"attribute name with leading colon", `<plugin :id="1"/>`},
 		{"attribute name with trailing colon", `<plugin id:="1"/>`},
 		{"element name with leading colon", `<:plugin/>`},
+		{"duplicate attribute", `<plugin a="1" a="2"/>`},
+		{"duplicate expanded attribute", `<plugin xmlns:a="urn:x" xmlns:b="urn:x" a:id="1" b:id="2"/>`},
+		{"duplicate prefixed namespace declaration", `<plugin xmlns:p="urn:a" xmlns:p="urn:b"/>`},
+		{"duplicate default namespace declaration", `<plugin xmlns="urn:a" xmlns="urn:b"/>`},
 	}
 
 	for _, tc := range cases {
@@ -310,6 +356,10 @@ func TestInsertXMLElement_RejectsDocumentLevelOutput(t *testing.T) {
 		`<plugin :id="1"/>`,
 		`<plugin id:="1"/>`,
 		`<:plugin/>`,
+		`<plugin a="1" a="2"/>`,
+		`<plugin xmlns:a="urn:x" xmlns:b="urn:x" a:id="1" b:id="2"/>`,
+		`<plugin xmlns:p="urn:a" xmlns:p="urn:b"/>`,
+		`<plugin xmlns="urn:a" xmlns="urn:b"/>`,
 	}
 
 	for _, snippet := range bad {

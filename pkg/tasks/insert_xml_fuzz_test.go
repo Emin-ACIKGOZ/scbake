@@ -61,6 +61,11 @@ func FuzzInsertXMLElement(f *testing.F) {
 	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin :id="1"/>`)
 	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin id:="1"/>`)
 	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<:plugin/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin a="1" a="2"/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin xmlns:a="urn:x" xmlns:b="urn:x" a:id="1" b:id="2"/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin xmlns:p="urn:a" xmlns:p="urn:b"/>`)
+	f.Add(`<project><build><plugins></plugins></build></project>`, `/project/build/plugins`, `<plugin xmlns="urn:a" xmlns="urn:b"/>`)
+	f.Add(`<project><build><plugins xmlns:a="urn:x" xmlns:b="urn:x" a:id="1" b:id="2"></plugins></build></project>`, `/project/build/plugins`, `<plugin/>`)
 
 	f.Fuzz(func(t *testing.T, fileContent, path, insert string) {
 		result, err := insertXMLElement(fileContent, path, insert)
@@ -77,21 +82,36 @@ func FuzzInsertXMLElement(f *testing.F) {
 				verifyErr, fileContent, path, insert)
 		}
 
-		// A declaration, directive, or prefix unbound both in the snippet and
-		// in the target document is document-level content: it must never be
-		// accepted. Other fragment errors (for example a malformed snippet) are
-		// already covered by the output checks above.
-		if verifyErr := validateXMLFragment(insert, xmlNamespaceDeclarations(fileContent)); verifyErr != nil {
-			if errors.Is(verifyErr, errXMLDeclarationInContent) ||
-				errors.Is(verifyErr, errXMLDirectiveInContent) ||
-				errors.Is(verifyErr, errXMLUnboundPrefix) ||
-				errors.Is(verifyErr, errXMLInvalidNamespaceDecl) ||
-				errors.Is(verifyErr, errXMLInvalidQName) {
-				t.Fatalf("insertXMLElement() accepted invalid element content: %v (file=%q path=%q insert=%q)",
-					verifyErr, fileContent, path, insert)
-			}
+		// A declaration, directive, prefix unbound both in the snippet and
+		// in the target document, or duplicate attribute/declaration is
+		// document-level or otherwise invalid content: it must never be
+		// accepted. Other fragment errors (for example a malformed snippet)
+		// are already covered by the output checks above.
+		if verifyErr := validateXMLFragment(insert, xmlNamespaceDeclarations(fileContent)); isStrictFragmentError(verifyErr) {
+			t.Fatalf("insertXMLElement() accepted invalid element content: %v (file=%q path=%q insert=%q)",
+				verifyErr, fileContent, path, insert)
 		}
 	})
+}
+
+// isStrictFragmentError reports whether err is one of the fragment violations
+// that insertXMLElement must never accept, as opposed to a merely malformed
+// snippet that the output checks already cover.
+func isStrictFragmentError(err error) bool {
+	for _, target := range []error{
+		errXMLDeclarationInContent,
+		errXMLDirectiveInContent,
+		errXMLUnboundPrefix,
+		errXMLInvalidNamespaceDecl,
+		errXMLInvalidQName,
+		errXMLDuplicateAttribute,
+		errXMLDuplicateNamespaceDecl,
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestContainsNormalizedXMLEdgeCases tests edge cases
