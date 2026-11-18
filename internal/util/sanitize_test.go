@@ -4,6 +4,8 @@
 package util
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -135,5 +137,35 @@ func TestSanitize(t *testing.T) {
 				t.Errorf("Sanitize(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestSanitizeErrorPreservesChain pins that the display text is escaped while
+// the original error stays reachable for error-chain inspection.
+func TestSanitizeErrorPreservesChain(t *testing.T) {
+	sentinel := errors.New("sentinel")
+	original := fmt.Errorf("read bad\x1b[31m\x07dir: %w", sentinel)
+
+	sanitized := SanitizeError(original)
+	if got, want := sanitized.Error(), Sanitize(original.Error()); got != want {
+		t.Errorf("SanitizeError().Error() = %q, want %q", got, want)
+	}
+	if !errors.Is(sanitized, sentinel) {
+		t.Errorf("SanitizeError dropped the wrapped sentinel")
+	}
+	if got := errors.Unwrap(sanitized); got != original {
+		t.Errorf("Unwrap() = %v, want the original error", got)
+	}
+
+	wrapped := fmt.Errorf("inspecting managed file: %w", sanitized)
+	if !errors.Is(wrapped, sentinel) {
+		t.Errorf("errors.Is could not inspect through the sanitized wrapper")
+	}
+	if got, want := wrapped.Error(), "inspecting managed file: "+Sanitize(original.Error()); got != want {
+		t.Errorf("wrapped display = %q, want %q", got, want)
+	}
+
+	if SanitizeError(nil) != nil {
+		t.Errorf("SanitizeError(nil) = %v, want nil", SanitizeError(nil))
 	}
 }

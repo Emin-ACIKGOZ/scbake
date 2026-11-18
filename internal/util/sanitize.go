@@ -83,6 +83,11 @@ func SanitizeModuleName(path string) (string, error) {
 //
 // Everything else, including ordinary Unicode and existing literal backslash
 // sequences, is returned unchanged.
+//
+// This function always renders byte controls as \xNN. A composed message that
+// also quotes an untrusted value with %q may show Go's own short escapes (for
+// example \a for BEL) for those same bytes, so the representation is not
+// uniform across the whole message; only this function's output is.
 func Sanitize(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -108,6 +113,28 @@ func Sanitize(s string) string {
 		return s
 	}
 	return b.String()
+}
+
+// sanitizedError wraps an error with a terminal-safe rendering while keeping
+// the original error available to errors.Is and errors.As.
+type sanitizedError struct {
+	err error
+}
+
+// Error returns the sanitized display text of the wrapped error.
+func (e *sanitizedError) Error() string { return Sanitize(e.err.Error()) }
+
+// Unwrap exposes the original error so error-chain inspection still works.
+func (e *sanitizedError) Unwrap() error { return e.err }
+
+// SanitizeError returns an error whose Error text is safe to display and whose
+// Unwrap returns err. Use it with %w so wrapped failures stay inspectable with
+// errors.Is and errors.As while their displayed text escapes terminal controls.
+func SanitizeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &sanitizedError{err: err}
 }
 
 // escapeFor reports how to escape r for terminal display: the escape prefix,

@@ -361,6 +361,32 @@ func TestDetect_BaseReadErrorFailsClosed(t *testing.T) {
 	if !strings.Contains(err.Error(), "inspecting committed base") {
 		t.Errorf("error = %v, want an inspecting-committed-base error", err)
 	}
+	var pathErr *fs.PathError
+	if !errors.As(err, &pathErr) {
+		t.Errorf("error %v does not retain the underlying *fs.PathError", err)
+	}
+}
+
+// TestDetect_ManagedReadErrorPreservesChain pins that wrapping the sanitized
+// display view still leaves the inspect failure inspectable with errors.As.
+func TestDetect_ManagedReadErrorPreservesChain(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "a.txt"), 0o750); err != nil {
+		t.Fatalf("create directory at managed path: %v", err)
+	}
+
+	m := &types.Manifest{ManagedFiles: map[string]string{"a.txt": hashOf([]byte("generated\n"))}}
+	got, err := Detect(m, root)
+	if err == nil {
+		t.Fatalf("managed read error was not surfaced; findings = %+v", got)
+	}
+	if !strings.Contains(err.Error(), "inspecting managed file") {
+		t.Errorf("error = %v, want an inspecting-managed-file error", err)
+	}
+	var pathErr *fs.PathError
+	if !errors.As(err, &pathErr) {
+		t.Errorf("error %v does not retain the underlying *fs.PathError", err)
+	}
 }
 
 // TestDetect_BaseReadErrorEscapesControlPath: the PathError for a base read
