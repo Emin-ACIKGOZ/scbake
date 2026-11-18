@@ -470,6 +470,19 @@ main() {
             die "Failed to create install directory"
         fi
 
+        # Not every mkdir failure is a privilege problem: an existing regular
+        # file at the path, a read-only filesystem, or an invalid name all fail
+        # the same way. Walk up to the nearest existing ancestor; if that is
+        # writable, the user has permission there and sudo cannot help, so
+        # report the real failure instead of prompting for a password.
+        local probe="$INSTALL_DIR"
+        while [ ! -d "$probe" ] && [ "$probe" != "/" ] && [ "$probe" != "." ]; do
+            probe=$(dirname "$probe")
+        done
+        if [ -d "$probe" ] && [ -w "$probe" ]; then
+            die "Failed to create install directory '$INSTALL_DIR'"
+        fi
+
         log_warn "Directory '$INSTALL_DIR' requires elevated privileges"
         log_info "Password prompt coming up (or use ~/.local/bin to avoid sudo)"
 

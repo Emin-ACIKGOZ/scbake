@@ -103,6 +103,9 @@ func runInstallerPinned(t *testing.T, stubDir, version, installDir, sudoLog stri
 // with sudo instead of dying at the unprivileged mkdir. The stub sudo proves
 // both the directory creation and the move were escalated.
 func TestInstallScriptProtectedNewPath(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod 0555 does not block writes, so no sudo would be needed")
+	}
 	stubDir := setupStubBinaries(t)
 	if err := os.WriteFile(filepath.Join(stubDir, "sudo"), []byte(stubSudoScript), 0o755); err != nil { //nolint:gosec // test stub
 		t.Fatalf("write stub sudo: %v", err)
@@ -142,5 +145,45 @@ func TestInstallScriptProtectedNewPath(t *testing.T) {
 		if !strings.Contains(logText, want) {
 			t.Errorf("stub sudo log is missing a %q invocation; log:\n%s", want, logText)
 		}
+	}
+}
+
+// TestInstallScriptMkdirFailureNoSudo covers a mkdir failure that has nothing to
+// do with privileges: the install path already exists as a regular file under a
+// writable parent. install.sh must fail with a clear message instead of
+// prompting for sudo, which could never fix the problem.
+func TestInstallScriptMkdirFailureNoSudo(t *testing.T) {
+	stubDir := setupStubBinaries(t)
+	if err := os.WriteFile(filepath.Join(stubDir, "sudo"), []byte(stubSudoScript), 0o755); err != nil { //nolint:gosec // test stub
+		t.Fatalf("write stub sudo: %v", err)
+	}
+
+	root := t.TempDir()
+	parent := filepath.Join(root, "bindir")
+	if err := os.Mkdir(parent, 0o750); err != nil {
+		t.Fatalf("create writable parent: %v", err)
+	}
+
+	// A regular file where the installer wants its directory.
+	installDir := filepath.Join(parent, "scbake-bin")
+	if err := os.WriteFile(installDir, []byte("not a directory"), 0o644); err != nil { //nolint:gosec // test fixture
+		t.Fatalf("create blocking file: %v", err)
+	}
+
+	sudoLog := filepath.Join(root, "sudo.log")
+	out, err := runInstallerPinned(t, stubDir, "v9.9.9", installDir, sudoLog)
+	if err == nil {
+		t.Fatalf("expected a non-zero exit when the install path is a file\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, "Failed to create install directory") {
+		t.Errorf("expected a clear mkdir failure message, got:\n%s", out)
+	}
+	if strings.Contains(out, "requires elevated privileges") || strings.Contains(out, "Password prompt") {
+		t.Errorf("installer offered sudo for a non-permission failure:\n%s", out)
+	}
+	if logData, readErr := os.ReadFile(sudoLog); readErr == nil { //nolint:gosec // test artifact
+		t.Errorf("stub sudo was invoked unexpectedly; log:\n%s", logData)
+	} else if !os.IsNotExist(readErr) {
+		t.Fatalf("read stub sudo log: %v", readErr)
 	}
 }
