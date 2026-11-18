@@ -13,6 +13,7 @@ import (
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/manifest"
 	"scbake/internal/types"
+	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
 )
@@ -427,36 +428,39 @@ func reportManageActions(actions []manageAction, accept, dryRun bool) {
 // describeAcceptAction phrases one accept result. Dry runs phrase the action as
 // a plan, never as a completed mutation.
 func describeAcceptAction(action manageAction, dryRun bool) string {
+	key := util.Sanitize(action.key)
 	switch {
 	case action.alreadyCurrent:
-		return fmt.Sprintf("ℹ️  %s already matches its current baseline", action.key)
+		return fmt.Sprintf("ℹ️  %s already matches its current baseline", key)
 	case dryRun && action.cleared:
-		return fmt.Sprintf("Would clear accepted baseline for %s (file matches its recorded hash)", action.key)
+		return fmt.Sprintf("Would clear accepted baseline for %s (file matches its recorded hash)", key)
 	case dryRun:
-		return fmt.Sprintf("Would accept %s (sha256 %s)", action.key, shortContentHash(action.hash))
+		return fmt.Sprintf("Would accept %s (sha256 %s)", key, shortContentHash(action.hash))
 	case action.cleared:
-		return fmt.Sprintf("✅ Cleared accepted baseline for %s (file matches its recorded hash)", action.key)
+		return fmt.Sprintf("✅ Cleared accepted baseline for %s (file matches its recorded hash)", key)
 	default:
-		return fmt.Sprintf("✅ Accepted %s (sha256 %s)", action.key, shortContentHash(action.hash))
+		return fmt.Sprintf("✅ Accepted %s (sha256 %s)", key, shortContentHash(action.hash))
 	}
 }
 
 // describeUnmanageAction phrases one unmanage result, using plan wording for a
 // dry run.
 func describeUnmanageAction(action manageAction, dryRun bool) string {
+	key := util.Sanitize(action.key)
+	baseRel := util.Sanitize(action.baseRel)
 	switch {
 	case action.alreadyUnmanaged:
-		return fmt.Sprintf("ℹ️  %s is already unmanaged", action.key)
+		return fmt.Sprintf("ℹ️  %s is already unmanaged", key)
 	case dryRun && action.removeBase:
 		return fmt.Sprintf("Would unmanage %s (remove committed base %s; working file kept)",
-			action.key, action.baseRel)
+			key, baseRel)
 	case dryRun:
-		return fmt.Sprintf("Would unmanage %s (working file kept)", action.key)
+		return fmt.Sprintf("Would unmanage %s (working file kept)", key)
 	case action.removeBase:
 		return fmt.Sprintf("✅ Unmanaged %s (removed committed base %s; working file kept)",
-			action.key, action.baseRel)
+			key, baseRel)
 	default:
-		return fmt.Sprintf("✅ Unmanaged %s (working file kept)", action.key)
+		return fmt.Sprintf("✅ Unmanaged %s (working file kept)", key)
 	}
 }
 
@@ -466,16 +470,18 @@ func reportManageWarnings(actions []manageAction) {
 		if action.warnMissingBase {
 			fmt.Fprintf(os.Stderr,
 				"⚠️  No committed base for %s; accepting without base validation (use 'scbake drift --require-base' to make a missing base an error).\n",
-				action.key)
+				util.Sanitize(action.key))
 		}
 	}
 }
 
-// shortContentHash abbreviates a SHA-256 for human-readable output.
+// shortContentHash abbreviates a SHA-256 for human-readable output. The value
+// is sanitized before display because it is retained from untrusted manifest
+// content.
 func shortContentHash(hash string) string {
 	const n = 12
 	if len(hash) > n {
-		return hash[:n]
+		hash = hash[:n]
 	}
-	return hash
+	return util.Sanitize(hash)
 }
