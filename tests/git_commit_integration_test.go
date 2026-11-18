@@ -91,6 +91,7 @@ func assertNewExcludesTransactionState(t *testing.T, label string, args ...strin
 	t.Helper()
 
 	work := t.TempDir()
+	skipIfAncestorHasMarker(t, work)
 	originalWD, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)

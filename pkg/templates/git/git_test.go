@@ -17,11 +17,33 @@ import (
 	"time"
 )
 
+// skipIfAncestorHasGitMarker keeps a fresh-target fixture meaningful when
+// TMPDIR itself lives inside a Git repository (for example TMPDIR=$PWD/.tmp).
+// GitSkipReason's marker fallback walks lexically past GIT_CEILING_DIRECTORIES,
+// so such an environment cannot represent "no .git anywhere above"; skip with
+// a clear reason instead of asserting the wrong policy. It checks the ancestors
+// of fixtureRoot, not fixtureRoot itself, so a fixture may create its own .git.
+func skipIfAncestorHasGitMarker(tb testing.TB, fixtureRoot string) {
+	tb.Helper()
+	for dir := filepath.Dir(fixtureRoot); ; {
+		marker := filepath.Join(dir, fileutil.GitDir)
+		if _, err := os.Stat(marker); err == nil {
+			tb.Skipf("fixture root %q is inside a Git repository (%s); cannot build a marker-less fresh target (set TMPDIR outside the repository)", fixtureRoot, marker)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
+	}
+}
+
 // TestGitHandler_Structure validates the deterministic structural plan and task ordering
 // for a fresh target (no pre-existing .git).
 // Logic: Git operations MUST be strictly sequential (Init -> Add -> Commit) with no priority gaps.
 func TestGitHandler_Structure(t *testing.T) {
 	tmpDir := t.TempDir()
+	skipIfAncestorHasGitMarker(t, tmpDir)
 
 	h := &Handler{}
 	plan, err := h.GetTasks(tmpDir, "", "")
@@ -295,6 +317,7 @@ func TestGitTemplate_Fresh(t *testing.T) {
 	isolateGitEnv(t)
 
 	tmpDir := t.TempDir()
+	skipIfAncestorHasGitMarker(t, tmpDir)
 	if err := os.WriteFile(filepath.Join(tmpDir, "scbake.toml"), []byte(""), 0600); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
 	}

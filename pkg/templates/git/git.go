@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"scbake/internal/preflight"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
@@ -57,21 +58,24 @@ var internalStateIgnorePath = filepath.Join(fileutil.GitDir, "info", "exclude")
 // is initialized and committed with hooks disabled, and we keep the transaction
 // tracking that predicts creation of `.git`.
 func (h *Handler) GetTasks(targetPath string, _ string, _ string) ([]types.Task, error) {
-	// Determine whether the target is already a Git repository. If so, treat the
-	// repository as hostile and refuse to run any Git command inside it.
+	// Determine whether the target is already a Git repository or inside a
+	// work tree. If so, treat the repository as hostile and refuse to run any
+	// Git command that mutates it.
 	//
-	// We use os.Lstat, not os.Stat: Stat follows symlinks, so a `.git` that is a
-	// dangling symlink (or a symlink whose chain dangles) would look absent and
-	// let us schedule `git init`. Git would then follow that symlink and create
-	// the repository outside the target, or a swapped symlink could point at an
+	// preflight.GitSkipReason uses os.Lstat, not os.Stat, for the `.git` entry:
+	// Stat follows symlinks, so a `.git` that is a dangling symlink (or a
+	// symlink whose chain dangles) would look absent and let us schedule
+	// `git init`. Git would then follow that symlink and create the repository
+	// outside the target, or a swapped symlink could point at an
 	// attacker-controlled repo whose `filter.*.clean`/`core.fsmonitor` execute.
 	// Lstat observes the link itself, so any `.git` entry (dangling symlink,
 	// symlink to anywhere, regular file, or directory) is treated as a
 	// pre-existing repository and no Git tasks are scheduled (fail closed).
-	if targetPath != "" {
-		if _, statErr := os.Lstat(filepath.Join(targetPath, fileutil.GitDir)); statErr == nil {
-			return nil, nil
-		}
+	// Only after that short-circuit may the helper run read-only
+	// `git rev-parse` (with a filesystem `.git` marker fallback) to discover an
+	// ancestor work tree.
+	if preflight.GitSkipReason(targetPath) != "" {
+		return nil, nil
 	}
 
 	var plan []types.Task

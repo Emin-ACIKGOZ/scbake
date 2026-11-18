@@ -151,9 +151,13 @@ exclusive advisory lock on `<root>/.scbake/lock` and hold it through commit or
 rollback. The lock is
 scoped to the manifest root, not a subproject, so parallel runs under one root
 serialize. A second mutator fails fast with exit 75 (`EX_TEMPFAIL`) before any
-project mutation; callers should retry after the active run finishes. `new` is
-the exception: it creates the directory and empty manifest before taking the
-lock, so a busy failure can leave that bootstrap residue. Existing-project
+project mutation; callers should retry after the active run finishes.
+`apply --with git` is the exception: its read-only Git preflight runs before the
+lock, so a missing identity exits 1 without a lock attempt, while a usable
+identity with a busy lock still exits 75. `new` preflights Git, then creates the
+directory and empty manifest before taking the lock, so a missing identity exits
+1 before the directory exists but a busy failure can leave that bootstrap
+residue. Existing-project
 commands also fail rather than creating a missing root. Read-only commands and
 all `--dry-run` runs do not acquire the lock. The kernel releases
 the lock when the process exits or crashes, so a leftover lock file is harmless;
@@ -208,7 +212,7 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 ```
 
 **What happens**:
-1. **Root Discovery**: `manifest.Load` walks up the directory tree from `TargetPath` until it finds an `scbake.toml` or a `.git` folder. Discovery is **bounded by the nearest Git root**: a manifest at or below that root is used, a manifest above it is ignored, and a manifest in the start directory is always accepted as local. When no `.git` bounds a marker-less tree, an ancestor manifest is adopted only with the `--allow-ancestor-search` opt-in (`manifest.LoadWithOptions`); otherwise discovery falls back to the start directory. This enables **Native Monorepo Support**, where a single root manifest manages projects in subdirectories, without silently trusting a stray manifest in a shared parent.
+1. **Root Discovery**: `manifest.Load` walks up the directory tree from `TargetPath` until it finds an `scbake.toml` or a `.git` folder. Discovery is **bounded by the nearest Git root**: a manifest at or below that root is used, a manifest above it is ignored, and a manifest in the start directory is always accepted as local. When no `.git` bounds a marker-less tree, an ancestor manifest is adopted only with the `--allow-ancestor-search` opt-in (`manifest.LoadWithOptions`); otherwise discovery falls back to the start directory. This enables **Native Monorepo Support**, where a single root manifest manages projects in subdirectories, without silently trusting a stray manifest in a shared parent. The `git` template preserves that boundary: it is skipped when the target already contains `.git`, when the same filesystem walk finds a `.git` marker above it (even if Git refuses to inspect that repository because of `GIT_CEILING_DIRECTORIES`, an empty/corrupt `.git`, or dubious ownership), or when Git reports it inside a work tree (`GIT_DIR` alone can make an unrelated target appear inside one; `GIT_DIR` plus `GIT_WORK_TREE` naming another repository is not detected, and the template's Git commands then operate on that other repository, so unset both when using `--with git`). A bare repository has no `.git` marker and is not detected; do not apply `--with git` inside one. A nested `.git` created by an older version is not repaired automatically and must be removed manually.
 2. Initialize transaction system at the discovered `rootPath` to ensure cross-project rollback.
 3. Build list of tasks to execute.
 

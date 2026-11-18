@@ -16,7 +16,9 @@ import (
 // must not start tracking the working tree.
 func TestGitHandler_PredictedPathsUnchanged(t *testing.T) {
 	h := &Handler{}
-	plan, err := h.GetTasks(t.TempDir(), "", "")
+	tmpDir := t.TempDir()
+	skipIfAncestorHasGitMarker(t, tmpDir)
+	plan, err := h.GetTasks(tmpDir, "", "")
 	if err != nil {
 		t.Fatalf("GetTasks: %v", err)
 	}

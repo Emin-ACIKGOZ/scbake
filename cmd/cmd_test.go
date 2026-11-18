@@ -36,6 +36,29 @@ func resetFlags() {
 	pullRegistryName = ""
 }
 
+// skipIfAncestorHasMarker keeps a marker-less fixture meaningful when TMPDIR
+// itself lives inside a project (for example TMPDIR=$PWD/.tmp). Such an
+// environment cannot represent "no .git or scbake.toml anywhere above"; skip
+// with a clear reason instead of asserting the wrong policy. It checks the
+// ancestors of fixtureRoot, not fixtureRoot itself, so a fixture may create its
+// own marker.
+func skipIfAncestorHasMarker(tb testing.TB, fixtureRoot string) {
+	tb.Helper()
+	for dir := filepath.Dir(fixtureRoot); ; {
+		for _, name := range []string{fileutil.ManifestFileName, fileutil.GitDir} {
+			marker := filepath.Join(dir, name)
+			if _, err := os.Stat(marker); err == nil {
+				tb.Skipf("fixture root %q is inside a project (%s); cannot build a marker-less fixture (set TMPDIR outside the repository)", fixtureRoot, marker)
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
+	}
+}
+
 // executeCLI simulates command invocation by setting args on the root Cobra command.
 func executeCLI(args ...string) error {
 	rootCmd.SetArgs(args)
@@ -66,6 +89,7 @@ func createMockGitScript(t *testing.T, dir string, failCommit bool) {
 		// Use findstr to catch the 'commit' subcommand regardless of flag positions.
 		content = fmt.Sprintf(`@echo off
 echo %%* | findstr "init" >nul && ( mkdir %s\info & type nul > %s\info\exclude & exit /b 0 )
+echo %%* | findstr "var" >nul && ( echo scbake-test test@scbake.dev 0 +0000 & exit /b 0 )
 echo %%* | findstr "commit" >nul && ( if "%s"=="true" exit /b 1 )
 exit /b 0`, fileutil.GitDir, fileutil.GitDir, failStr)
 	} else {
@@ -74,6 +98,7 @@ exit /b 0`, fileutil.GitDir, fileutil.GitDir, failStr)
 		content = fmt.Sprintf(`#!/bin/sh
 case "$*" in
   *init*) mkdir -p %s/info; : > %s/info/exclude; exit 0 ;;
+  *var*) echo "scbake-test test@scbake.dev 0 +0000"; exit 0 ;;
   *commit*) [ "%s" = "true" ] && exit 1 ;;
 esac
 exit 0`, fileutil.GitDir, fileutil.GitDir, failStr)
@@ -278,6 +303,7 @@ func TestNew_EndToEnd_Success(t *testing.T) {
 	resetFlags()
 
 	tmpDir := t.TempDir()
+	skipIfAncestorHasMarker(t, tmpDir)
 	binDir := filepath.Join(tmpDir, "bin")
 	_ = os.Mkdir(binDir, fileutil.DirPerms)
 	createMockGitScript(t, binDir, false)
@@ -307,6 +333,7 @@ func TestNew_CommitFailure_CleansDirectory(t *testing.T) {
 	resetFlags()
 
 	tmpDir := t.TempDir()
+	skipIfAncestorHasMarker(t, tmpDir)
 	binDir := filepath.Join(tmpDir, "bin")
 	_ = os.Mkdir(binDir, fileutil.DirPerms)
 	createMockGitScript(t, binDir, true)

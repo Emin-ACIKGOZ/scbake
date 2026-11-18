@@ -40,6 +40,10 @@ var ErrNoSelection = errors.New("no language or templates specified")
 // than failing with an unknown-template error.
 const legacyRootTemplate = "root-templates"
 
+// gitTemplateName is the tooling template that creates a repository and its
+// initial commit.
+const gitTemplateName = "git"
+
 // RunContext holds the flags and arguments for a single execution run.
 type RunContext struct {
 	LangFlag   string
@@ -91,6 +95,12 @@ type manifestChanges struct {
 
 // RunApply orchestrates the template application process.
 func RunApply(rc RunContext, reporter types.Reporter) error {
+	// Git prerequisites are checked before the root lock so a missing identity
+	// or a skip decision fails before lock acquisition creates .scbake. The
+	// check is read-only and needs only the target path.
+	if err := preflightGit(rc); err != nil {
+		return err
+	}
 	return withRootLock(rc, func() error {
 		return runApply(rc, reporter)
 	})
@@ -140,6 +150,10 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 	if err != nil {
 		return fmt.Errorf("could not determine project path: %w", err)
 	}
+
+	// Git identity and skip preflight ran in RunApply before the root lock so
+	// acquisition cannot leave .scbake behind on a prerequisite failure.
+	// `update` only reconciles managed files and never initializes a repository.
 
 	// 2. Initialize Transaction Engine
 	tx, cleanupTx, err := prepareRunTransaction(rc, rootPath)
@@ -952,6 +966,40 @@ func CheckLangPrerequisites(langFlag string) error {
 	return nil
 }
 
+// CheckGitPrerequisites validates the prerequisites for actually creating a
+// repository in targetPath. It is used by `new` before the project directory
+// exists and by the apply pipeline before any write. A target that the git
+// template will skip (existing repository or nested work tree) needs no
+// identity.
+func CheckGitPrerequisites(targetPath string) error {
+	if preflight.GitSkipReason(targetPath) != "" {
+		return nil
+	}
+	return preflight.CheckGitIdentity(targetPath)
+}
+
+// preflightGit enforces the git template's execution prerequisites at plan
+// time, before the transaction writes anything. A dry run fails on the same
+// prerequisite: reporting success for a run that cannot commit would be a
+// false preview (see #144).
+func preflightGit(rc RunContext) error {
+	if rc.Update || !containsTemplate(rc.WithFlag, gitTemplateName) {
+		return nil
+	}
+	// One shared skip/identity decision with `new` validation and the handler.
+	return CheckGitPrerequisites(rc.TargetPath)
+}
+
+// containsTemplate reports whether name appears in the template selection.
+func containsTemplate(names []string, name string) bool {
+	for _, candidate := range names {
+		if candidate == name {
+			return true
+		}
+	}
+	return false
+}
+
 // projectNameSource returns the value a generated manifest's project name is
 // derived from. For `new`, the manifest path stays "." while the directory
 // being created supplies the name; a real run has changed into it, and a dry
@@ -1066,6 +1114,22 @@ func handleLangFlag(rc RunContext, rootPath, projectPath string, plan *types.Pla
 // is the canonical root-relative path of the target.
 func handleWithFlag(rc RunContext, projectPath string, plan *types.Plan, changes *manifestChanges) error {
 	for _, tmplName := range rc.WithFlag {
+		if tmplName == gitTemplateName {
+			if reason := preflight.GitSkipReason(rc.TargetPath); reason != "" {
+				fmt.Fprintf(os.Stderr, "ℹ️  Skipping template '%s': %s (no repository will be initialized)\n", tmplName, reason)
+				// Keep master's manifest behavior: record the requested template
+				// even when it planned no tasks, using the canonical project
+				// path so update selection matches like every other entry.
+				// `update` filters side-effecting tasks, so this entry stays
+				// inert.
+				changes.Templates = append(changes.Templates, types.Template{
+					Name: tmplName,
+					Path: projectPath,
+				})
+				continue
+			}
+		}
+
 		handler, err := templates.GetHandler(tmplName)
 		if err != nil {
 			return err

@@ -123,7 +123,7 @@ func removeFailedProject(projectName string, release func() error) error {
 // validateNewSelection performs every flag and override-directory check that
 // must fail before `new` mutates the filesystem (SCB-012). It returns the
 // parsed --set values and the resolved template override directory.
-func validateNewSelection() (map[string]string, string, error) {
+func validateNewSelection(projectName string) (map[string]string, string, error) {
 	setVars, err := parseSetFlags(newSetFlag)
 	if err != nil {
 		return nil, "", err
@@ -150,6 +150,18 @@ func validateNewSelection() (map[string]string, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	// The git template is planned after the directory exists, but checking here
+	// means a missing identity fails before `new` writes anything at all,
+	// including in a dry run: a preview that exits 0 for a run that cannot
+	// commit is a false success. Probe the directory that will be created (its
+	// nearest existing ancestor until then) rather than "." so validation and
+	// the post-chdir apply share one skip/identity decision. An existing work
+	// tree needs no identity because the template will be skipped.
+	if containsGitTemplate(newWithFlag) {
+		if err := core.CheckGitPrerequisites(projectName); err != nil {
+			return nil, "", err
+		}
+	}
 	return setVars, resolved, nil
 }
 
@@ -171,7 +183,7 @@ func runNew(ctx context.Context, projectName string, dirCreated *bool) error {
 		return fmt.Errorf("invalid project name: %w", err)
 	}
 
-	setVars, resolvedTemplateDir, err := validateNewSelection()
+	setVars, resolvedTemplateDir, err := validateNewSelection(projectName)
 	if err != nil {
 		return err
 	}
@@ -259,6 +271,16 @@ func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporte
 }
 
 const maxKeyValueParts = 2
+
+// containsGitTemplate reports whether the selection includes the git template.
+func containsGitTemplate(names []string) bool {
+	for _, name := range names {
+		if name == "git" {
+			return true
+		}
+	}
+	return false
+}
 
 // parseSetFlags converts --set key=value entries into a map.
 func parseSetFlags(flags []string) (map[string]string, error) {
