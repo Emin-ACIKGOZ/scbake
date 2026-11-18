@@ -1243,6 +1243,17 @@ func (t *CreateTemplateTask) Validate(tc types.TaskContext) error {
 		return err
 	}
 	t.dryRunNote = managedFileDryRunNote(absPath, decision)
+
+	// Record only canonical writes. Skip/keep-local/artifact decisions do not
+	// rewrite the managed file, so they cannot clear that path's drift. Clean
+	// means the file ends equal to the pristine render; a merge override that
+	// keeps local edits is a canonical write but leaves content drift.
+	if tc.PlannedWrites != nil && decision.writePath == absPath {
+		tc.PlannedWrites[decision.ledgerKey] = types.PlannedWrite{
+			Key:   decision.ledgerKey,
+			Clean: decision.override == nil || bytes.Equal(decision.override, decision.content),
+		}
+	}
 	return nil
 }
 

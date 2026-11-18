@@ -259,6 +259,10 @@ func repairDrift(ctx context.Context, absPath, manifestPathArg string) error {
 	}
 
 	cacheDir, registryNames := registryPolicy()
+	var plannedWrites map[string]types.PlannedWrite
+	if dryRun {
+		plannedWrites = make(map[string]types.PlannedWrite)
+	}
 	rc := core.RunContext{
 		TargetPath:          absPath,
 		ManifestPathArg:     manifestPathArg,
@@ -270,15 +274,16 @@ func repairDrift(ctx context.Context, absPath, manifestPathArg string) error {
 		RegistryNames:       registryNames,
 		Ctx:                 ctx,
 		AllowAncestorSearch: allowAncestorSearch,
+		DryRunWrites:        plannedWrites,
 	}
 	// A dry run writes nothing, so a post-run Detect would still see every
 	// pre-repair finding, including changes the plan would restore. Capture the
-	// pre-repair findings instead and predict which of them survive.
+	// pre-repair findings instead and predict which of them survive from the
+	// writes the dry-run plan actually selects.
 	var preRepair []drift.Finding
-	var preManifest *types.Manifest
 	if dryRun {
 		var loadErr error
-		preManifest, preRepair, loadErr = loadDriftState(absPath)
+		_, preRepair, loadErr = loadDriftState(absPath)
 		if loadErr != nil {
 			return loadErr
 		}
@@ -289,7 +294,7 @@ func repairDrift(ctx context.Context, absPath, manifestPathArg string) error {
 		return err
 	}
 	if dryRun {
-		reportPredictedResidual(preRepair, preManifest)
+		reportPredictedResidual(preRepair, plannedWrites)
 		return nil
 	}
 	return reportResidualDrift(absPath)
@@ -313,10 +318,10 @@ func loadDriftState(absPath string) (*types.Manifest, []drift.Finding, error) {
 
 // reportPredictedResidual prints the blocking findings a dry-run repair would
 // leave behind. A dry run writes nothing, so predicting from the pre-repair scan
-// is the only way to avoid listing files the real plan would restore (notably a
-// deleted managed file).
-func reportPredictedResidual(findings []drift.Finding, m *types.Manifest) {
-	residual := predictedResidualFindings(findings, m)
+// plus the plan's planned writes is the only way to avoid both listing files the
+// real plan would restore and missing files outside the scoped plan.
+func reportPredictedResidual(findings []drift.Finding, writes map[string]types.PlannedWrite) {
+	residual := predictedResidualFindings(findings, writes)
 	if len(residual) == 0 {
 		return
 	}
@@ -329,58 +334,25 @@ func reportPredictedResidual(findings []drift.Finding, m *types.Manifest) {
 }
 
 // predictedResidualFindings maps pre-repair findings to the blocking set that a
-// dry-run repair may leave behind:
-//
-//   - Missing files are assumed restorable by the repair plan (the plan line
-//     still shows their Create), unless they are listed as unmanaged.
-//   - Modified files survive unless a canonical write repairs them (overwrite or
-//     --force); unmanaged files are filtered from the plan, so they survive.
-//   - BaseInvalid is repaired by a canonical write (overwrite or --force) and
-//     survives the other strategies; an unmanaged path is not rewritten.
-//   - BaseMissing is advisory for drift (and merge does not backfill it), so it
-//     is never part of the blocking summary.
-//
-// This is a conservative heuristic: it may over-report a converged Modified
-// file or a base a canonical write would repair, but it only suppresses findings
-// the plan is expected to restore, so it never claims a false clean.
-func predictedResidualFindings(findings []drift.Finding, m *types.Manifest) []drift.Finding {
-	unmanaged := make(map[string]struct{})
-	if m != nil {
-		for _, key := range m.UnmanagedFiles {
-			unmanaged[key] = struct{}{}
-		}
-	}
-	restores := driftStrategyFlag == types.ConflictOverwrite || force
-
+// dry-run repair may leave behind. Planned writes are the source of truth: they
+// already reflect the scoped plan, the conflict strategy, --force, convergence,
+// and merge outcomes. Only a Clean canonical write clears a finding; a missing
+// or modified path with no planned writer (another project outside the target
+// scope, a stale ledger key, an unmanaged path, or a preserved local edit) stays
+// residual. BaseMissing is advisory for drift, so it is never part of the
+// blocking summary.
+func predictedResidualFindings(findings []drift.Finding, writes map[string]types.PlannedWrite) []drift.Finding {
 	residual := make([]drift.Finding, 0, len(findings))
 	for _, f := range findings {
-		_, detached := unmanaged[f.Path]
-		if residualAfterRepair(f.Kind, restores, detached) {
-			residual = append(residual, f)
+		if f.Kind == drift.BaseMissing {
+			continue
 		}
+		if write, ok := writes[f.Path]; ok && write.Key == f.Path && write.Clean {
+			continue
+		}
+		residual = append(residual, f)
 	}
 	return residual
-}
-
-// residualAfterRepair reports whether a pre-repair finding survives the planned
-// repair. restores marks a strategy that performs a canonical write (overwrite
-// or --force); detached marks a path listed in unmanaged_files, which the plan
-// filters out and therefore cannot restore.
-func residualAfterRepair(kind drift.Kind, restores, detached bool) bool {
-	switch kind {
-	case drift.BaseMissing:
-		// Advisory for drift, and merge does not backfill it.
-		return false
-	case drift.Missing:
-		// Recreated by the repair plan unless the path is detached.
-		return detached
-	case drift.Modified, drift.BaseInvalid:
-		// A canonical write rewrites the file and its base; other strategies
-		// preserve the local state, and a detached path is never rewritten.
-		return !restores || detached
-	default:
-		return true
-	}
 }
 
 // reportResidualDrift re-checks the managed files after a real repair so a run

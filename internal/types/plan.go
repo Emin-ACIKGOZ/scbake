@@ -72,6 +72,24 @@ type TaskContext struct {
 	// between tasks; read-only validation uses it to distinguish an artifact
 	// that is not there yet from one that is genuinely missing.
 	PlannedPaths []string
+
+	// PlannedWrites accumulates the canonical managed-file writes a dry run
+	// would perform, keyed by root-relative managed_files key. It is nil when no
+	// dry-run prediction is being collected; tasks only record into a non-nil
+	// map, so a real run never populates it.
+	PlannedWrites map[string]PlannedWrite
+}
+
+// PlannedWrite is a canonical managed-file write a dry-run plan would perform.
+// It lets a preview predict which drift findings the plan repairs without
+// executing anything.
+type PlannedWrite struct {
+	// Key is the root-relative managed_files key the write targets.
+	Key string
+	// Clean reports that the canonical file would end equal to the pristine
+	// render after the write: there was no merge override, or the override
+	// equals the pending render. A clean write clears content drift for Key.
+	Clean bool
 }
 
 // PathPlanned reports whether absPath, or an ancestor of it, was declared by an

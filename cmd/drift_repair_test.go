@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"scbake/internal/manifest"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
 	"strings"
@@ -41,6 +42,47 @@ func newDriftRepairProject(t *testing.T) string {
 	}
 	if err := executeCLI("update", "."); err != nil {
 		t.Fatalf("seeding fixture with update failed: %v", err)
+	}
+	return root
+}
+
+const driftRepairMonorepoManifest = `scbake_version = "v1.0.0"
+
+[[projects]]
+name = "a"
+path = "services/a"
+language = "go"
+
+[[projects]]
+name = "b"
+path = "services/b"
+language = "go"
+`
+
+// newDriftRepairMonorepo creates two Go projects under services/. A root .git
+// marker lets a scoped update from a subdirectory discover the manifest root
+// without --allow-ancestor-search.
+func newDriftRepairMonorepo(t *testing.T) string {
+	t.Helper()
+
+	resetFlags()
+	updateConflictStrategyFlag = types.ConflictMerge
+	driftStrategyFlag = types.ConflictMerge
+
+	root := t.TempDir()
+	t.Chdir(root)
+
+	manifestPath := filepath.Join(root, fileutil.ManifestFileName)
+	if err := os.WriteFile(manifestPath, []byte(driftRepairMonorepoManifest), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("writing %s: %v", fileutil.ManifestFileName, err)
+	}
+	if err := os.Mkdir(filepath.Join(root, fileutil.GitDir), fileutil.DirPerms); err != nil {
+		t.Fatalf("creating Git marker: %v", err)
+	}
+	for _, target := range []string{"services/a", "services/b"} {
+		if err := executeCLI("update", target); err != nil {
+			t.Fatalf("seeding %s with update failed: %v", target, err)
+		}
 	}
 	return root
 }
@@ -111,7 +153,7 @@ func TestDriftRepairReportsResidualDrift(t *testing.T) {
 }
 
 // TestDriftRepairDryRunAnnotatesPreservedFile pins the preview half of #226: the
-// dry run must disclose that main.go will not be written, predict the residual
+// dry run must disclose main.go's reconciliation outcome, predict the residual
 // drift, and leave the tree untouched.
 //
 //nolint:cyclop // end-to-end dry-run assertions
@@ -164,6 +206,93 @@ func TestDriftRepairDryRunAnnotatesPreservedFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, fileutil.GitIgnore)); !os.IsNotExist(err) {
 		t.Errorf("dry run recreated %s (stat error: %v)", fileutil.GitIgnore, err)
+	}
+}
+
+// TestDriftRepairDryRunScopedMonorepoPredictsOtherProject pins the scoped-plan
+// false clean: repairing services/a must not claim that services/b's missing
+// file will be restored, because the plan only targets services/a.
+//
+//nolint:cyclop // end-to-end scoped dry-run assertions
+func TestDriftRepairDryRunScopedMonorepoPredictsOtherProject(t *testing.T) {
+	root := newDriftRepairMonorepo(t)
+	for _, rel := range []string{"services/a/main.go", "services/b/main.go"} {
+		if err := os.Remove(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("removing %s: %v", rel, err)
+		}
+	}
+
+	var dryRunErr error
+	out := captureStdout(t, func() {
+		dryRunErr = executeCLI("drift", "--repair", "--dry-run", "services/a")
+	})
+	if dryRunErr != nil {
+		t.Fatalf("scoped dry-run repair = %v, want nil", dryRunErr)
+	}
+	_, residual, ok := strings.Cut(out, "may remain drifted")
+	if !ok {
+		t.Fatalf("scoped dry run predicted no residual: %q", out)
+	}
+	if !strings.Contains(residual, "services/b/main.go") {
+		t.Errorf("scoped residual section omits services/b/main.go: %q", residual)
+	}
+	if strings.Contains(residual, "services/a/main.go") {
+		t.Errorf("scoped residual section lists the restored services/a/main.go: %q", residual)
+	}
+	if strings.Contains(residual, ".gitignore") {
+		t.Errorf("scoped residual section lists a restored .gitignore: %q", residual)
+	}
+
+	// The real scoped repair must leave the same residual set.
+	resetFlags()
+	var repairErr error
+	realOut := captureStdout(t, func() {
+		repairErr = executeCLI("drift", "--repair", "services/a")
+	})
+	if repairErr != nil {
+		t.Fatalf("scoped real repair = %v, want nil", repairErr)
+	}
+	if !strings.Contains(realOut, "still drifted") || !strings.Contains(realOut, "services/b/main.go") {
+		t.Errorf("real scoped repair summary does not match the prediction: %q", realOut)
+	}
+	if strings.Contains(realOut, "services/a/main.go") {
+		t.Errorf("real scoped repair summary lists the restored services/a/main.go: %q", realOut)
+	}
+
+	resetFlags()
+	if err := executeCLI("drift"); !errors.Is(err, errDriftDetected) {
+		t.Errorf("drift after scoped repair = %v, want errDriftDetected", err)
+	}
+}
+
+// TestDriftRepairDryRunStaleLedgerKeyIsResidual pins the other scope hole: a
+// managed_files key with no planned writer is not restorable and must stay in
+// the prediction.
+func TestDriftRepairDryRunStaleLedgerKeyIsResidual(t *testing.T) {
+	root := newDriftRepairProject(t)
+
+	m, _, err := manifest.Load(root)
+	if err != nil {
+		t.Fatalf("loading manifest: %v", err)
+	}
+	m.ManagedFiles["stale.txt"] = strings.Repeat("a", 64)
+	if err := manifest.Save(m, root); err != nil {
+		t.Fatalf("saving stale ledger key: %v", err)
+	}
+
+	var dryRunErr error
+	out := captureStdout(t, func() {
+		dryRunErr = executeCLI("drift", "--repair", "--dry-run")
+	})
+	if dryRunErr != nil {
+		t.Fatalf("dry-run repair with stale key = %v, want nil", dryRunErr)
+	}
+	_, residual, ok := strings.Cut(out, "may remain drifted")
+	if !ok {
+		t.Fatalf("stale-key dry run predicted no residual: %q", out)
+	}
+	if !strings.Contains(residual, "stale.txt") {
+		t.Errorf("residual section omits the stale ledger key: %q", residual)
 	}
 }
 
@@ -266,6 +395,29 @@ func TestDriftRepairDryRunCorruptBasePrediction(t *testing.T) {
 	}
 	if !strings.Contains(out, "main.go") {
 		t.Errorf("corrupt-base dry run does not name main.go: %q", out)
+	}
+}
+
+// TestDriftRepairDryRunCorruptBaseCleanWriteNoResidual covers a corrupt base
+// whose canonical file still matches the recorded hash: overwrite plans a clean
+// canonical write, so the base is repaired and the preview is quiet.
+func TestDriftRepairDryRunCorruptBaseCleanWriteNoResidual(t *testing.T) {
+	root := newDriftRepairProject(t)
+
+	basePath := filepath.Join(root, fileutil.CommittedBaseDir, "main.go")
+	if err := os.WriteFile(basePath, []byte("corrupt base\n"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("corrupting %s: %v", basePath, err)
+	}
+
+	var dryRunErr error
+	out := captureStdout(t, func() {
+		dryRunErr = executeCLI("drift", "--repair", "--dry-run", "--conflict-strategy", "overwrite")
+	})
+	if dryRunErr != nil {
+		t.Fatalf("overwrite dry-run repair = %v, want nil", dryRunErr)
+	}
+	if strings.Contains(out, "may remain drifted") {
+		t.Errorf("clean-write dry run predicted residual drift: %q", out)
 	}
 }
 
