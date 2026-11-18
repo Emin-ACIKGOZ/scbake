@@ -602,31 +602,59 @@ func ManagedFileUnchanged(tc types.TaskContext, outputRelPath string) (bool, err
 	return recorded != "" && existingHash == recorded, nil
 }
 
+// managedFileBaseRepair returns the current bytes of outputRelPath and whether
+// its pristine base shadow needs backfilling. The base is repairable only when
+// the working file still matches its recorded hash and the existing base is
+// missing or stale; a working file that no longer matches its recorded hash is
+// never a repair target. It is read-only and is the predicate shared by
+// EnsureManagedFileBase and ManagedFileBaseNeedsRepair.
+func managedFileBaseRepair(tc types.TaskContext, outputRelPath string) ([]byte, bool, error) {
+	if tc.Manifest == nil {
+		return nil, false, nil
+	}
+	existing, err := fileutil.SafeReadFile(tc.TargetPath, outputRelPath)
+	if err != nil {
+		return nil, false, err
+	}
+	absPath, err := fileutil.SafePath(tc.TargetPath, outputRelPath)
+	if err != nil {
+		return nil, false, err
+	}
+	existingHash := HashContent(existing)
+	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
+	recorded := recordedHash(tc.Manifest, ledgerKey, outputRelPath, existingHash)
+	if recorded == "" || existingHash != recorded {
+		return existing, false, nil
+	}
+	if base, ok := readBaseShadow(tc, ledgerKey); ok && BaseMatchesRecordedHash(base, recorded) {
+		return existing, false, nil
+	}
+	return existing, true, nil
+}
+
+// ManagedFileBaseNeedsRepair reports whether EnsureManagedFileBase would write a
+// pristine base shadow for outputRelPath. It is the read-only half of that
+// function, so a dry run can disclose a base-only reconciliation without
+// touching the tree or the manifest.
+func ManagedFileBaseNeedsRepair(tc types.TaskContext, outputRelPath string) (bool, error) {
+	_, needsRepair, err := managedFileBaseRepair(tc, outputRelPath)
+	return needsRepair, err
+}
+
 // EnsureManagedFileBase backfills the pristine base shadow for a managed file
 // that still matches its recorded hash, when the base is missing or does not
 // match. It uses the current file bytes, so it does not need the original
 // source. It reports whether a base write was needed.
 func EnsureManagedFileBase(tc types.TaskContext, outputRelPath string) (bool, error) {
-	if tc.Manifest == nil {
-		return false, nil
-	}
-	existing, err := fileutil.SafeReadFile(tc.TargetPath, outputRelPath)
-	if err != nil {
+	existing, needsRepair, err := managedFileBaseRepair(tc, outputRelPath)
+	if err != nil || !needsRepair {
 		return false, err
 	}
 	absPath, err := fileutil.SafePath(tc.TargetPath, outputRelPath)
 	if err != nil {
 		return false, err
 	}
-	existingHash := HashContent(existing)
 	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
-	recorded := recordedHash(tc.Manifest, ledgerKey, outputRelPath, existingHash)
-	if recorded == "" || existingHash != recorded {
-		return false, nil
-	}
-	if base, ok := readBaseShadow(tc, ledgerKey); ok && BaseMatchesRecordedHash(base, recorded) {
-		return false, nil
-	}
 	if err := writeBaseShadow(tc, ledgerKey, existing); err != nil {
 		return false, err
 	}
@@ -1277,7 +1305,7 @@ func PlanManagedFile(tc types.TaskContext, outputRelPath string, content []byte)
 // ordinary create or update path, so the verb is empty too.
 func DryRunVerbForNote(note string) string {
 	switch note {
-	case "no change", "local edits preserved", "unchanged":
+	case "no change", "local edits preserved", "unchanged", "base repair only":
 		return "Skip"
 	case "conflict; would write artifact":
 		return "Write artifact for"

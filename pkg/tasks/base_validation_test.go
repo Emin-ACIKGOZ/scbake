@@ -327,3 +327,85 @@ func TestMergeWholeFileCRLFEditIsClean(t *testing.T) {
 		t.Fatalf("whole-file CRLF edit should merge cleanly; stat err = %v", err)
 	}
 }
+
+// TestManagedFileBaseNeedsRepair pins the read-only predicate that a dry run
+// shares with EnsureManagedFileBase. Only a clean working file with a missing or
+// stale base is a repair target; a local edit is never repaired from itself.
+func TestManagedFileBaseNeedsRepair(t *testing.T) { //nolint:cyclop // table-driven predicate assertions
+	const original = "alpha\nshared\nomega\n"
+
+	tests := []struct {
+		name    string
+		prepare func(t *testing.T, root string)
+		want    bool
+	}{
+		{
+			name:    "clean base needs no repair",
+			prepare: func(*testing.T, string) {},
+			want:    false,
+		},
+		{
+			name: "missing base needs repair",
+			prepare: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(root, fileutil.CommittedBaseDir, "Makefile")); err != nil {
+					t.Fatalf("remove base: %v", err)
+				}
+			},
+			want: true,
+		},
+		{
+			name: "corrupt base needs repair",
+			prepare: func(t *testing.T, root string) {
+				t.Helper()
+				basePath := filepath.Join(root, fileutil.CommittedBaseDir, "Makefile")
+				if err := os.WriteFile(basePath, []byte("corrupt\n"), 0o600); err != nil {
+					t.Fatalf("corrupt base: %v", err)
+				}
+			},
+			want: true,
+		},
+		{
+			name: "locally edited file is not a repair target",
+			prepare: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(root, fileutil.CommittedBaseDir, "Makefile")); err != nil {
+					t.Fatalf("remove base: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("local edit\n"), 0o600); err != nil {
+					t.Fatalf("write local edit: %v", err)
+				}
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, tx, tc := mergeTestContext(t)
+			defer func() { _ = tx.Rollback() }()
+
+			if err := newMergeTask(original).Execute(tc); err != nil {
+				t.Fatalf("initial execute: %v", err)
+			}
+			tt.prepare(t, root)
+
+			got, err := ManagedFileBaseNeedsRepair(tc, "Makefile")
+			if err != nil {
+				t.Fatalf("ManagedFileBaseNeedsRepair() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("ManagedFileBaseNeedsRepair() = %t, want %t", got, tt.want)
+			}
+			// The predicate must stay read-only: calling it twice yields the
+			// same answer and never creates the base it just reported missing.
+			again, err := ManagedFileBaseNeedsRepair(tc, "Makefile")
+			if err != nil {
+				t.Fatalf("second ManagedFileBaseNeedsRepair() error = %v", err)
+			}
+			if again != got {
+				t.Errorf("second ManagedFileBaseNeedsRepair() = %t, want %t", again, got)
+			}
+		})
+	}
+}

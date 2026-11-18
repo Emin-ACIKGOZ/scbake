@@ -83,8 +83,9 @@ type LicenseTask struct {
 	TaskPrio int
 
 	// dryRunNote is the read-only reconciliation note recorded by Validate and
-	// surfaced through DryRunNote. It stays empty for an ordinary write and for
-	// a base-only repair of an already-clean LICENSE.
+	// surfaced through DryRunNote. It stays empty for an ordinary write and
+	// names the update skip path's only real effect: "base repair only" when the
+	// pristine base shadow needs backfilling, or "no change" when it is clean.
 	dryRunNote string
 }
 
@@ -150,12 +151,13 @@ func licenseRender(tc types.TaskContext) (text string, skip bool, err error) {
 }
 
 // DryRunNote implements types.DryRunAnnotator. It is empty for an ordinary
-// license write and for the base-only repair of an already-clean LICENSE.
+// license write and annotates the update skip path as a base repair or no-op.
 func (t *LicenseTask) DryRunNote() string { return t.dryRunNote }
 
 // DryRunVerb implements types.DryRunVerbProvider so the preview says "Skip"
-// instead of "Generate" when the reconciliation is a no-op or preserves local
-// edits, and names the artifact when a conflict diverts the write.
+// instead of "Generate" when the reconciliation is a no-op, a base-only repair,
+// or preserves local edits, and names the artifact when a conflict diverts the
+// write.
 func (t *LicenseTask) DryRunVerb() string { return tasks.DryRunVerbForNote(t.dryRunNote) }
 
 // Validate checks compliance metadata, license resolution, and the managed-file
@@ -174,14 +176,25 @@ func (t *LicenseTask) Validate(tc types.TaskContext) error {
 		// The update path only repairs the pristine base shadow from the
 		// current bytes; that is a write and real-run-only. Plan with those
 		// bytes so overwrite still predicts the canonical write (and Merge
-		// stays conservative), but leave the note empty: no license content
-		// would be written.
+		// stays conservative), then annotate the actual effect: a base repair
+		// when the shadow is missing or stale, and no change when it is clean.
 		existing, err := fileutil.SafeReadFile(tc.TargetPath, "LICENSE")
 		if err != nil {
 			return err
 		}
-		_, err = tasks.PlanManagedFile(tc, "LICENSE", existing)
-		return err
+		if _, err = tasks.PlanManagedFile(tc, "LICENSE", existing); err != nil {
+			return err
+		}
+		needsRepair, err := tasks.ManagedFileBaseNeedsRepair(tc, "LICENSE")
+		if err != nil {
+			return err
+		}
+		if needsRepair {
+			t.dryRunNote = "base repair only"
+		} else {
+			t.dryRunNote = "no change"
+		}
+		return nil
 	}
 
 	t.dryRunNote, err = tasks.PlanManagedFile(tc, "LICENSE", []byte(text))

@@ -77,6 +77,7 @@ func TestDryRunVerbForNote(t *testing.T) {
 		{note: "no change", want: "Skip"},
 		{note: "local edits preserved", want: "Skip"},
 		{note: "unchanged", want: "Skip"},
+		{note: "base repair only", want: "Skip"},
 		{note: "conflict; would write artifact", want: "Write artifact for"},
 	}
 	for _, tt := range tests {

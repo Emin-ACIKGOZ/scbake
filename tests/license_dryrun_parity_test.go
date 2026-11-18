@@ -131,6 +131,9 @@ func TestDryRunLicenseUpdateSkipStaysWriteFree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clean update dry run = %v, want nil\n%s", err, out)
 	}
+	if !strings.Contains(out, "[DRY RUN] Skip LICENSE file (base repair only)") {
+		t.Errorf("clean update dry run = %q, want the base-repair Skip annotation", out)
+	}
 	after := dryRunTakeSnapshot(t, root)
 	dryRunAssertSnapshotsEqual(t, before, after)
 	dryRunAssertNoResidue(t, after)
@@ -146,5 +149,27 @@ func TestDryRunLicenseUpdateSkipStaysWriteFree(t *testing.T) {
 	}
 	if _, err := os.Stat(baseLicense); err != nil {
 		t.Errorf("real update did not repair the base shadow: %v", err)
+	}
+}
+
+// TestDryRunLicenseUpdateCleanSkipAnnotatesNoChange covers an unchanged LICENSE
+// whose pristine base is already valid: the update skip path writes nothing, so
+// the preview must say Skip with a no-change annotation instead of an
+// unannotated Generate line.
+func TestDryRunLicenseUpdateCleanSkipAnnotatesNoChange(t *testing.T) {
+	root := t.TempDir()
+	project := licenseNewProject(t, root,
+		"--with", "compliance", licenseTestArgs, "--copyright-holder=Test Corp")
+
+	before := dryRunTakeSnapshot(t, root)
+	out, err := dryRunRunIn(t, project, "update", "--conflict-strategy=fail", "--dry-run")
+	if err != nil {
+		t.Fatalf("clean update dry run = %v, want nil\n%s", err, out)
+	}
+	after := dryRunTakeSnapshot(t, root)
+	dryRunAssertSnapshotsEqual(t, before, after)
+	dryRunAssertNoResidue(t, after)
+	if !strings.Contains(out, "[DRY RUN] Skip LICENSE file (no change)") {
+		t.Errorf("clean update dry run = %q, want the no-change Skip annotation", out)
 	}
 }

@@ -378,6 +378,10 @@ func TestDriftRepairDryRunForcePredictsClean(t *testing.T) {
 // TestDriftRepairDryRunCorruptBasePrediction ensures a corrupt base is predicted
 // conservatively under merge (which does not rewrite a clean file) and that the
 // read-only prediction cannot panic.
+//
+// The prediction reports base-invalid residual even though a real merge run
+// repairs the base, because Validate does not plan the real-run-only base
+// write. This conservative over-report is accepted; it must never under-report.
 func TestDriftRepairDryRunCorruptBasePrediction(t *testing.T) {
 	root := newDriftRepairProject(t)
 
@@ -592,6 +596,12 @@ func TestDriftRepairDryRunPredictsDeletedLicenseRestorable(t *testing.T) {
 // TestDriftRepairDryRunLicenseCorruptBasePrediction mirrors the main.go base
 // cases: overwrite plans a canonical write so the base is repaired, while merge
 // keeps its conservative prediction because it does not rewrite a clean file.
+//
+// The merge prediction is deliberately conservative: Validate plans no
+// canonical write, so the pre-repair base-invalid finding survives and the dry
+// run reports LICENSE as residual even though the real merge run repairs the
+// base from the clean working file. That over-report is accepted: a preview may
+// claim more drift than remains, never less, and the real run still clears it.
 func TestDriftRepairDryRunLicenseCorruptBasePrediction(t *testing.T) {
 	root := newDriftRepairLicenseProject(t)
 
@@ -621,6 +631,74 @@ func TestDriftRepairDryRunLicenseCorruptBasePrediction(t *testing.T) {
 	}
 	if strings.Contains(overwriteOut, "may remain drifted") {
 		t.Errorf("overwrite dry run predicted residual drift for a clean LICENSE: %q", overwriteOut)
+	}
+}
+
+// TestDriftRepairDryRunLicenseCleanSkipAnnotated pins the annotation for the
+// update skip path of an unchanged LICENSE: the preview must use the Skip verb
+// and distinguish a base-only repair from a true no-op, while predicting no
+// residual drift and leaving the real LICENSE bytes untouched.
+func TestDriftRepairDryRunLicenseCleanSkipAnnotated(t *testing.T) { //nolint:cyclop // end-to-end annotation assertions
+	root := newDriftRepairLicenseProject(t)
+	licensePath := filepath.Join(root, "LICENSE")
+	before, err := os.ReadFile(licensePath) //nolint:gosec // test temp path
+	if err != nil {
+		t.Fatalf("reading seeded LICENSE: %v", err)
+	}
+
+	var dryRunErr error
+	out := captureStdout(t, func() {
+		dryRunErr = executeCLI("drift", "--repair", "--dry-run")
+	})
+	if dryRunErr != nil {
+		t.Fatalf("clean dry-run repair = %v, want nil", dryRunErr)
+	}
+	if !strings.Contains(out, "[DRY RUN] Skip LICENSE file (no change)") {
+		t.Errorf("clean LICENSE dry run = %q, want the no-change Skip annotation", out)
+	}
+	if strings.Contains(out, "may remain drifted") {
+		t.Errorf("clean LICENSE dry run predicted residual drift: %q", out)
+	}
+
+	// Remove the committed base so only the real-run repair has work to do.
+	basePath := filepath.Join(root, fileutil.CommittedBaseDir, "LICENSE")
+	if err := os.Remove(basePath); err != nil {
+		t.Fatalf("removing %s: %v", basePath, err)
+	}
+	resetFlags()
+	out = captureStdout(t, func() {
+		dryRunErr = executeCLI("drift", "--repair", "--dry-run")
+	})
+	if dryRunErr != nil {
+		t.Fatalf("base-repair dry-run = %v, want nil", dryRunErr)
+	}
+	if !strings.Contains(out, "[DRY RUN] Skip LICENSE file (base repair only)") {
+		t.Errorf("base-repair dry run = %q, want the base-repair Skip annotation", out)
+	}
+	if strings.Contains(out, "may remain drifted") {
+		t.Errorf("base-repair dry run predicted residual drift: %q", out)
+	}
+	if _, err := os.Stat(basePath); !os.IsNotExist(err) {
+		t.Errorf("dry run repaired the base shadow (stat err: %v)", err)
+	}
+
+	resetFlags()
+	var repairErr error
+	captureStdout(t, func() {
+		repairErr = executeCLI("drift", "--repair")
+	})
+	if repairErr != nil {
+		t.Fatalf("base-repair real run = %v, want nil", repairErr)
+	}
+	if _, err := os.Stat(basePath); err != nil {
+		t.Errorf("real repair did not restore the base shadow: %v", err)
+	}
+	after, err := os.ReadFile(licensePath) //nolint:gosec // test temp path
+	if err != nil {
+		t.Fatalf("reading LICENSE after repair: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Error("base-only repair rewrote the LICENSE content")
 	}
 }
 
