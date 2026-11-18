@@ -418,6 +418,14 @@ type managedFileDecision struct {
 func decideManagedFile(tc types.TaskContext, absPath, outputRelPath string, content []byte) (managedFileDecision, error) {
 	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
 
+	// Fail closed before any target or base write, including in a dry run, when
+	// the committed base tree is redirected through a symlink or a non-directory
+	// component. SafePath accepts an in-root symlink, so this is the only guard
+	// that keeps the pristine base at <root>/.scbake-base.
+	if err := validateCommittedBaseTree(taskRoot(tc), ledgerKey); err != nil {
+		return managedFileDecision{}, err
+	}
+
 	// A plan-level filter normally removes unmanaged tasks, but direct and
 	// library callers still need the execution-level defense. Returning an
 	// empty write path is the same no-op signal as the other skip paths.
@@ -469,9 +477,7 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 		return ValidateManagedFile(tc, outputRelPath, content)
 	}
 
-	// Resolve the ledger key before preconditions so an unmanaged path is
-	// skipped without creating directories or walking conflict handling.
-	_, skipped, err := manageWriteKey(tc, outputRelPath)
+	_, absPath, skipped, err := prepareManagedWrite(tc, outputRelPath)
 	if err != nil {
 		return err
 	}
@@ -479,33 +485,61 @@ func WriteManagedFile(tc types.TaskContext, outputRelPath string, content []byte
 		return nil
 	}
 
-	absPath, err := checkFilePreconditions(tc, outputRelPath, tc.TargetPath)
-	if err != nil {
-		return err
-	}
-
 	decision, err := decideManagedFile(tc, absPath, outputRelPath, content)
 	if err != nil {
 		return err // Conflict strategy is 'fail'
 	}
-	ledgerKey, content, newHash := decision.ledgerKey, decision.content, decision.newHash
-	writePath, override := decision.writePath, decision.override
-	if writePath == "" {
+	return applyManagedDecision(tc, absPath, decision, perm)
+}
+
+// prepareManagedWrite resolves the ledger key, applies the unmanaged skip, and
+// runs the committed-base preflight before any target parent directory is
+// created. skipped reports that the path must not be written at all.
+func prepareManagedWrite(tc types.TaskContext, outputRelPath string) (ledgerKey, absPath string, skipped bool, err error) {
+	// Resolve the ledger key before preconditions so an unmanaged path is
+	// skipped without creating directories or walking conflict handling.
+	ledgerKey, skipped, err = manageWriteKey(tc, outputRelPath)
+	if err != nil {
+		return "", "", false, err
+	}
+	if skipped {
+		return ledgerKey, "", true, nil
+	}
+
+	// Reject a redirected committed base before creating the target's parent
+	// directories; decideManagedFile repeats the check for dry-run and direct
+	// callers.
+	if err := validateCommittedBaseTree(taskRoot(tc), ledgerKey); err != nil {
+		return "", "", false, err
+	}
+
+	absPath, err = checkFilePreconditions(tc, outputRelPath, tc.TargetPath)
+	if err != nil {
+		return "", "", false, err
+	}
+	return ledgerKey, absPath, false, nil
+}
+
+// applyManagedDecision writes the reconciled render and advances the ledger and
+// pristine base only for a canonical write. An empty write path, or an artifact
+// that already holds the pending bytes, is a no-op.
+func applyManagedDecision(tc types.TaskContext, absPath string, decision managedFileDecision, perm os.FileMode) error {
+	if decision.writePath == "" {
 		return nil // Skip (keep-local, unchanged, or a no-op)
 	}
 
 	// Idempotent artifact: a repeated conflict must not rewrite a side artifact
 	// whose content is already identical.
-	if isIdenticalArtifact(writePath, absPath, content) {
+	if isIdenticalArtifact(decision.writePath, absPath, decision.content) {
 		return nil
 	}
 
-	if err := writePendingContent(tc, writePath, content, override, perm); err != nil {
+	if err := writePendingContent(tc, decision.writePath, decision.content, decision.override, perm); err != nil {
 		return err
 	}
 
-	if writePath == absPath {
-		return recordCanonicalWrite(tc, ledgerKey, newHash, content)
+	if decision.writePath == absPath {
+		return recordCanonicalWrite(tc, decision.ledgerKey, decision.newHash, decision.content)
 	}
 	return nil
 }
@@ -823,6 +857,9 @@ func writeBaseShadow(tc types.TaskContext, ledgerKey string, content []byte) err
 	if root == "" {
 		return nil
 	}
+	if err := validateCommittedBaseTree(root, ledgerKey); err != nil {
+		return err
+	}
 	absPath, err := baseShadowPath(root, ledgerKey)
 	if err != nil {
 		return fmt.Errorf("invalid base shadow path for %s: %w", ledgerKey, err)
@@ -1063,7 +1100,7 @@ func readBaseShadow(tc types.TaskContext, ledgerKey string) ([]byte, bool) {
 	if root == "" {
 		return nil, false
 	}
-	data, err := fileutil.SafeReadFile(root, BaseShadowRelPath(ledgerKey))
+	data, err := ReadBaseShadow(root, ledgerKey)
 	if err != nil {
 		return nil, false
 	}
