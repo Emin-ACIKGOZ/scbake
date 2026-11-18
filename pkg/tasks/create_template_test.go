@@ -11,6 +11,7 @@ import (
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/types"
 	"scbake/internal/util/fileutil"
+	"strings"
 	"testing"
 )
 
@@ -656,34 +657,112 @@ func TestWriteManagedFile_ManagedFilesScopedByProject(t *testing.T) {
 	}
 }
 
-// TestWriteManagedFile_StaleLegacyKeyNotTrusted verifies that a legacy
-// project-relative key which does not match the file's on-disk content is not
-// used as a drift baseline. Otherwise another subproject's stale entry could
-// mask real drift or cause a silent overwrite.
+// TestWriteManagedFile_StaleLegacyKeyNotTrusted covers a legacy
+// project-relative key that does not match the file's on-disk content.
+//
+// The merge subtest is the regression guard for the stale-key trust rule:
+// without it, another subproject's stale entry could be adopted as a baseline
+// and mask real drift or cause a silent overwrite. The fail subtest only
+// documents default-fail behavior for this fixture; it would keep passing
+// without the trust rule because the on-disk bytes genuinely differ from the
+// pending render, so it is not evidence that the stale key is rejected.
 func TestWriteManagedFile_StaleLegacyKeyNotTrusted(t *testing.T) {
+	// Stale-key regression guard: a mismatched legacy key must not be trusted,
+	// so merge cannot mistake the stale pending hash for an unchanged template.
+	// It must instead preserve the local file via an artifact and must not
+	// re-scope the stale key into the ledger.
+	t.Run("merge writes artifact", func(t *testing.T) {
+		target, manifest, tc, onDisk, stale := newStaleLegacyFixture(t)
+		tc.ConflictStrategy = types.ConflictMerge
+
+		if err := WriteManagedFile(tc, "LICENSE", stale, 0o600); err != nil {
+			t.Fatalf("WriteManagedFile: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(target, "LICENSE.scbake-new")); err != nil {
+			t.Errorf("stale legacy key suppressed the artifact write: %v", err)
+		}
+		assertLocalFileBytes(t, target, onDisk)
+		if _, ok := manifest.ManagedFiles["services/a/LICENSE"]; ok {
+			t.Errorf("stale legacy key was re-scoped as a trusted baseline")
+		}
+	})
+
+	// Default-fail behavior coverage, not the stale-key trust guard: the fail
+	// strategy reports drift for any mismatch between the on-disk bytes and the
+	// pending render, trusted stale key or not. The assertions below pin that
+	// observable outcome (drift error, no artifact, untouched bytes, no ledger
+	// entry) but do not prove the stale key was rejected.
+	t.Run("fail reports drift", func(t *testing.T) {
+		target, manifest, tc, onDisk, stale := newStaleLegacyFixture(t)
+		tc.ConflictStrategy = types.ConflictFail
+
+		err := WriteManagedFile(tc, "LICENSE", stale, 0o600)
+		assertStaleLegacyFailOutcome(t, err, target, manifest, onDisk)
+	})
+}
+
+// newStaleLegacyFixture builds a subproject whose on-disk LICENSE differs from
+// the hash recorded under the legacy flat key. The pending render equals that
+// stale hash, so a blindly-trusted legacy key would look like an unchanged
+// template and suppress drift detection.
+func newStaleLegacyFixture(
+	t *testing.T,
+) (target string, manifest *types.Manifest, tc types.TaskContext, onDisk, stale []byte) {
+	t.Helper()
 	root := t.TempDir()
 	tx, err := transaction.New(root)
 	if err != nil {
 		t.Fatalf("transaction.New() failed: %v", err)
 	}
 
-	target := filepath.Join(root, "services", "a")
+	target = filepath.Join(root, "services", "a")
 	if err := os.MkdirAll(target, 0o750); err != nil {
 		t.Fatalf("MkdirAll failed: %v", err)
 	}
-	onDisk := []byte("alice license\n")
+	onDisk = []byte("alice license\n")
 	if err := os.WriteFile(filepath.Join(target, "LICENSE"), onDisk, 0o600); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	// The legacy flat key holds a DIFFERENT project's hash. The new content
-	// equals what is already on disk, which is the case where a blindly-trusted
-	// legacy key would take the idempotency path and silently accept the file.
-	manifest := &types.Manifest{ManagedFiles: map[string]string{"LICENSE": HashContent([]byte("bob license\n"))}}
-	tc := types.TaskContext{TargetPath: target, Manifest: manifest, Tx: tx}
+	stale = []byte("bob license\n")
+	manifest = &types.Manifest{ManagedFiles: map[string]string{"LICENSE": HashContent(stale)}}
+	tc = types.TaskContext{TargetPath: target, Manifest: manifest, Tx: tx}
+	return target, manifest, tc, onDisk, stale
+}
 
-	if err := WriteManagedFile(tc, "LICENSE", onDisk, 0o600); err == nil {
-		t.Fatal("expected a conflict: a mismatched legacy key must not be trusted as a baseline")
+// assertStaleLegacyFailOutcome checks that the fail strategy refused the write:
+// a drift error, no artifact, untouched local bytes, and no new ledger entry.
+func assertStaleLegacyFailOutcome(
+	t *testing.T, err error, target string, manifest *types.Manifest, want []byte,
+) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("WriteManagedFile succeeded, want a drift error")
+	}
+	if !strings.Contains(err.Error(), "manual modifications") {
+		t.Errorf("error = %q, want it to mention manual modifications", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(target, "LICENSE.scbake-new")); !os.IsNotExist(statErr) {
+		t.Errorf("fail strategy wrote an artifact (stat err = %v)", statErr)
+	}
+	assertLocalFileBytes(t, target, want)
+	if _, ok := manifest.ManagedFiles["services/a/LICENSE"]; ok {
+		t.Errorf("fail strategy recorded a managed ledger entry for the scoped key")
+	}
+	if got := len(manifest.ManagedFiles); got != 1 {
+		t.Errorf("managed ledger has %d entries, want only the pre-existing stale one: %v", got, manifest.ManagedFiles)
+	}
+}
+
+// assertLocalFileBytes fails when the subproject LICENSE no longer holds want.
+func assertLocalFileBytes(t *testing.T, target string, want []byte) {
+	t.Helper()
+	got, err := os.ReadFile(filepath.Join(target, "LICENSE")) //nolint:gosec // test-controlled temp path
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("LICENSE = %q, want %q", got, want)
 	}
 }
 

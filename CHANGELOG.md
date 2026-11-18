@@ -4,6 +4,36 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.16.6] - 2026-11-18
+
+### Bug Fixes
+
+- **tasks:** Adopt byte-identical files instead of conflicting
+
+## [0.16.5] - 2026-11-18
+
+### Bug Fixes
+
+- **tasks:** Reject a symlinked committed base directory
+
+## [0.16.4] - 2026-11-18
+
+### Bug Fixes
+
+- **release:** Make installer quiet mode succeed silently
+
+## [0.16.3] - 2026-11-18
+
+### Bug Fixes
+
+- **filesystem:** Reject non-regular files before reading
+
+## [0.16.2] - 2026-11-18
+
+### Bug Fixes
+
+- **release:** Create protected install dirs with sudo
+
 ## [0.16.1] - 2026-11-18
 
 ### Bug Fixes

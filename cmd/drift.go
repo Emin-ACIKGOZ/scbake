@@ -16,6 +16,7 @@ import (
 	"scbake/internal/manifest"
 	"scbake/internal/types"
 	"scbake/internal/ui"
+	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 
 	"github.com/spf13/cobra"
@@ -225,26 +226,28 @@ func partitionFindings(findings []drift.Finding, requireBase bool) (blocking, ad
 // shows the hash of the base on disk.
 func printFindings(findings []drift.Finding) {
 	for _, f := range findings {
+		path := util.Sanitize(f.Path)
+		basePath := util.Sanitize(f.BasePath)
 		switch f.Kind {
 		case drift.BaseMissing:
 			fmt.Printf("  %-12s %s (expected base %s, recorded %s)\n",
-				f.Kind, f.Path, f.BasePath, shortHash(f.Recorded))
+				f.Kind, path, basePath, shortHash(f.Recorded))
 		case drift.BaseInvalid:
 			fmt.Printf("  %-12s %s (expected base %s, recorded %s, base %s)\n",
-				f.Kind, f.Path, f.BasePath, shortHash(f.Recorded), shortHash(f.Actual))
+				f.Kind, path, basePath, shortHash(f.Recorded), shortHash(f.Actual))
 		case drift.Missing:
 			if f.Accepted {
-				fmt.Printf("  %-12s %s (accepted %s)\n", f.Kind, f.Path, shortHash(f.Baseline))
+				fmt.Printf("  %-12s %s (accepted %s)\n", f.Kind, path, shortHash(f.Baseline))
 			} else {
-				fmt.Printf("  %-12s %s (recorded %s)\n", f.Kind, f.Path, shortHash(f.Recorded))
+				fmt.Printf("  %-12s %s (recorded %s)\n", f.Kind, path, shortHash(f.Recorded))
 			}
 		default:
 			if f.Accepted {
 				fmt.Printf("  %-12s %s (accepted %s, on disk %s)\n",
-					f.Kind, f.Path, shortHash(f.Baseline), shortHash(f.Actual))
+					f.Kind, path, shortHash(f.Baseline), shortHash(f.Actual))
 			} else {
 				fmt.Printf("  %-12s %s (recorded %s, on disk %s)\n",
-					f.Kind, f.Path, shortHash(f.Recorded), shortHash(f.Actual))
+					f.Kind, path, shortHash(f.Recorded), shortHash(f.Actual))
 			}
 		}
 	}
@@ -276,13 +279,14 @@ func repairDrift(ctx context.Context, absPath, manifestPathArg string) error {
 }
 
 // shortHash abbreviates a SHA-256 for human-readable output; the full hash is
-// not needed for a CI gate.
+// not needed for a CI gate. Manifest values are untrusted, so the truncated
+// value is sanitized before display.
 func shortHash(h string) string {
 	const n = 12
 	if len(h) > n {
-		return h[:n]
+		h = h[:n]
 	}
-	return h
+	return util.Sanitize(h)
 }
 
 func init() {
