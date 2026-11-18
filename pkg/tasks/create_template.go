@@ -418,19 +418,25 @@ type managedFileDecision struct {
 func decideManagedFile(tc types.TaskContext, absPath, outputRelPath string, content []byte) (managedFileDecision, error) {
 	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
 
+	// A plan-level filter normally removes unmanaged tasks, but direct and
+	// library callers still need the execution-level defense. Returning an
+	// empty write path is the same no-op signal as the other skip paths, and it
+	// must happen before any base validation so an unmanaged path is a no-op in
+	// both Validate and Write.
+	if shouldSkipUnmanaged(tc, ledgerKey) {
+		return managedFileDecision{ledgerKey: ledgerKey}, nil
+	}
+
 	// Fail closed before any target or base write, including in a dry run, when
 	// the committed base tree is redirected through a symlink or a non-directory
 	// component. SafePath accepts an in-root symlink, so this is the only guard
-	// that keeps the pristine base at <root>/.scbake-base.
-	if err := validateCommittedBaseTree(taskRoot(tc), ledgerKey); err != nil {
-		return managedFileDecision{}, err
-	}
-
-	// A plan-level filter normally removes unmanaged tasks, but direct and
-	// library callers still need the execution-level defense. Returning an
-	// empty write path is the same no-op signal as the other skip paths.
-	if shouldSkipUnmanaged(tc, ledgerKey) {
-		return managedFileDecision{ledgerKey: ledgerKey}, nil
+	// that keeps the pristine base at <root>/.scbake-base. Only read-only and
+	// direct callers validate here: WriteManagedFile already ran the same
+	// preflight in prepareManagedWrite before creating parent directories.
+	if tc.Tx == nil {
+		if err := validateCommittedBaseTree(taskRoot(tc), ledgerKey); err != nil {
+			return managedFileDecision{}, err
+		}
 	}
 
 	// Make the ignore entry part of the managed render before hashing so the

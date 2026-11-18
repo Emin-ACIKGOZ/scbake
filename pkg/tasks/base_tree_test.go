@@ -163,3 +163,55 @@ func TestWriteManagedFileAllowsRealBaseTree(t *testing.T) {
 		t.Fatalf("target = %q, want %q", got, content)
 	}
 }
+
+// TestUnmanagedPathSkipsBaseValidation: an unmanaged ledger key must be a no-op
+// for both ValidateManagedFile and WriteManagedFile even when the committed base
+// tree is redirected through a symlink. decideManagedFile skips unmanaged paths
+// before the read-only base preflight, and the real write path skips in
+// prepareManagedWrite before its preflight. A managed path still fails closed in
+// both directions.
+func TestUnmanagedPathSkipsBaseValidation(t *testing.T) {
+	requireSymlinks(t)
+
+	root, tx, tc := mergeTestContext(t)
+	defer func() { _ = tx.Rollback() }()
+
+	tc.Manifest.UnmanagedFiles = []string{"Makefile"}
+
+	baseRoot := filepath.Join(root, fileutil.CommittedBaseDir)
+	if err := os.MkdirAll(filepath.Join(root, "src"), fileutil.DirPerms); err != nil {
+		t.Fatalf("create src: %v", err)
+	}
+	if err := os.Symlink("src", baseRoot); err != nil {
+		t.Fatalf("symlink base root: %v", err)
+	}
+
+	if err := ValidateManagedFile(tc, "Makefile", []byte("all:\n")); err != nil {
+		t.Fatalf("ValidateManagedFile on an unmanaged path: %v", err)
+	}
+	if err := WriteManagedFile(tc, "Makefile", []byte("all:\n"), 0o600); err != nil {
+		t.Fatalf("WriteManagedFile on an unmanaged path: %v", err)
+	}
+
+	// A dry run has no transaction, so ValidateManagedFile is the only base
+	// preflight; it must still skip the unmanaged path.
+	dryRun := tc
+	dryRun.Tx = nil
+	dryRun.DryRun = true
+	if err := ValidateManagedFile(dryRun, "Makefile", []byte("all:\n")); err != nil {
+		t.Fatalf("dry-run ValidateManagedFile on an unmanaged path: %v", err)
+	}
+
+	managedErr := ValidateManagedFile(dryRun, "generated.txt", []byte("generated\n"))
+	requireBaseSymlinkError(t, managedErr, baseRoot)
+
+	managedErr = WriteManagedFile(tc, "generated.txt", []byte("generated\n"), 0o600)
+	requireBaseSymlinkError(t, managedErr, baseRoot)
+
+	if _, err := os.Stat(filepath.Join(root, "Makefile")); !os.IsNotExist(err) {
+		t.Fatalf("unmanaged write created the target (stat err: %v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "generated.txt")); !os.IsNotExist(err) {
+		t.Fatalf("rejected managed write created the target (stat err: %v)", err)
+	}
+}
