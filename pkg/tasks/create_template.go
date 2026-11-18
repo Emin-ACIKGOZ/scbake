@@ -1055,6 +1055,11 @@ func writeBaseFile(absPath string, content []byte) error {
 
 // readBaseShadow returns the pristine base content for a managed file, if it
 // exists. The lookup uses the same sanitized mapping as the write path.
+//
+// A base that exists but cannot be read (for example because it was replaced by
+// a FIFO) is treated as missing rather than silently accepted: callers fall back
+// to the artifact/invalid-base path, and the transaction's backup of the base
+// fails fast instead of opening a non-regular file.
 func readBaseShadow(tc types.TaskContext, ledgerKey string) ([]byte, bool) {
 	if ledgerKey == "" {
 		return nil, false
@@ -1065,6 +1070,11 @@ func readBaseShadow(tc types.TaskContext, ledgerKey string) ([]byte, bool) {
 	}
 	data, err := fileutil.SafeReadFile(root, BaseShadowRelPath(ledgerKey))
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr,
+				"⚠️  Cannot read pristine base for %s: %v; treating it as missing.\n",
+				ledgerKey, err)
+		}
 		return nil, false
 	}
 	return data, true
