@@ -113,7 +113,8 @@ func finishManage(applyErr error, actions []manageAction, accept bool) error {
 		return applyErr
 	}
 	if applyErr != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Transaction committed with warning: %v\n", applyErr)
+		fmt.Fprintf(os.Stderr, "⚠️  Transaction committed with warning: %s\n",
+			util.Sanitize(applyErr.Error()))
 	}
 	reportManageActions(actions, accept, false)
 	reportManageWarnings(actions)
@@ -176,10 +177,10 @@ func applyManage(root string, updated *types.Manifest, actions []manageAction) e
 	// rolls back the base removals, and a failure after it rolls back both.
 	manifestPath := filepath.Join(root, fileutil.ManifestFileName)
 	if err := tx.Track(manifestPath); err != nil {
-		return fmt.Errorf("failed to track manifest file: %w", err)
+		return fmt.Errorf("failed to track manifest file: %s", util.Sanitize(err.Error()))
 	}
 	if err := manifest.Save(updated, root); err != nil {
-		return fmt.Errorf("manifest save failed: %w", err)
+		return fmt.Errorf("manifest save failed: %s", util.Sanitize(err.Error()))
 	}
 	snapshotManifestContent(tx, manifestPath)
 
@@ -187,7 +188,7 @@ func applyManage(root string, updated *types.Manifest, actions []manageAction) e
 		if errors.Is(err, transaction.ErrCommitted) {
 			return err
 		}
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return fmt.Errorf("failed to commit transaction: %s", util.Sanitize(err.Error()))
 	}
 	return nil
 }
@@ -199,15 +200,18 @@ func loadManageManifest(rc RunContext) (*types.Manifest, string, error) {
 		AllowAncestorSearch: rc.AllowAncestorSearch,
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
+		return nil, "", fmt.Errorf("failed to load %s: %s",
+			fileutil.ManifestFileName, util.Sanitize(err.Error()))
 	}
 
 	manifestPath := filepath.Join(root, fileutil.ManifestFileName)
 	if _, err := os.Stat(manifestPath); err != nil {
 		if os.IsNotExist(err) {
-			return nil, "", fmt.Errorf("no %s found at %s", fileutil.ManifestFileName, root)
+			return nil, "", fmt.Errorf("no %s found at %s",
+				fileutil.ManifestFileName, util.Sanitize(root))
 		}
-		return nil, "", fmt.Errorf("failed to inspect %s: %w", manifestPath, err)
+		return nil, "", fmt.Errorf("failed to inspect %s: %s",
+			util.Sanitize(manifestPath), util.Sanitize(err.Error()))
 	}
 	return m, root, nil
 }
@@ -228,16 +232,18 @@ func resolveManagedKey(root, target, arg string) (string, error) {
 
 	rel, err := filepath.Rel(root, abs)
 	if err != nil {
-		return "", fmt.Errorf("cannot make path %q relative to %q: %w", arg, root, err)
+		return "", fmt.Errorf("cannot make path %q relative to %q: %s",
+			arg, root, util.Sanitize(err.Error()))
 	}
 	if rel == "." || rel == ".." || filepath.IsAbs(rel) ||
 		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q is outside the project root %s", arg, root)
+		return "", fmt.Errorf("path %q is outside the project root %s", arg, util.Sanitize(root))
 	}
 
 	key := filepath.ToSlash(filepath.Clean(rel))
 	if _, err := fileutil.SafePath(root, filepath.FromSlash(key)); err != nil {
-		return "", fmt.Errorf("path %q is outside the project root %s: %w", arg, root, err)
+		return "", fmt.Errorf("path %q is outside the project root %s: %s",
+			arg, util.Sanitize(root), util.Sanitize(err.Error()))
 	}
 	return key, nil
 }
@@ -277,7 +283,7 @@ func planAccept(m *types.Manifest, root, key, arg string) (manageAction, error) 
 		if os.IsNotExist(err) {
 			return action, fmt.Errorf("cannot accept %q: file does not exist", arg)
 		}
-		return action, fmt.Errorf("cannot accept %q: %w", arg, err)
+		return action, fmt.Errorf("cannot accept %q: %s", arg, util.Sanitize(err.Error()))
 	}
 	action.hash = tasks.HashContent(data)
 
@@ -300,7 +306,8 @@ func validateAcceptBase(root, key, recorded string, action *manageAction) error 
 	case errors.Is(baseErr, os.ErrNotExist):
 		action.warnMissingBase = true
 	default:
-		return fmt.Errorf("cannot read committed base for %q: %w", key, baseErr)
+		return fmt.Errorf("cannot read committed base for %q: %s",
+			key, util.Sanitize(baseErr.Error()))
 	}
 	return nil
 }
@@ -368,7 +375,8 @@ func planUnmanage(m *types.Manifest, root, key, arg string) (manageAction, error
 func inspectUnmanageBase(root, key, baseRel string) (string, bool, error) {
 	baseAbs, err := fileutil.SafePath(root, filepath.FromSlash(baseRel))
 	if err != nil {
-		return "", false, fmt.Errorf("invalid base shadow path for %q: %w", key, err)
+		return "", false, fmt.Errorf("invalid base shadow path for %q: %s",
+			key, util.Sanitize(err.Error()))
 	}
 	info, statErr := os.Lstat(baseAbs)
 	if statErr == nil {
@@ -378,7 +386,8 @@ func inspectUnmanageBase(root, key, baseRel string) (string, bool, error) {
 		return baseAbs, true, nil
 	}
 	if !os.IsNotExist(statErr) {
-		return "", false, fmt.Errorf("failed to inspect committed base for %q: %w", key, statErr)
+		return "", false, fmt.Errorf("failed to inspect committed base for %q: %s",
+			key, util.Sanitize(statErr.Error()))
 	}
 	return baseAbs, false, nil
 }
@@ -404,10 +413,12 @@ func removeUnmanagedBases(tx *transaction.Manager, actions []manageAction) error
 		}
 		removed[action.baseAbs] = struct{}{}
 		if err := tx.Track(action.baseAbs); err != nil {
-			return fmt.Errorf("failed to track base shadow %s: %w", action.baseAbs, err)
+			return fmt.Errorf("failed to track base shadow %s: %s",
+				util.Sanitize(action.baseAbs), util.Sanitize(err.Error()))
 		}
 		if err := os.Remove(action.baseAbs); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("failed to remove base shadow %s: %w", action.baseAbs, err)
+			return fmt.Errorf("failed to remove base shadow %s: %s",
+				util.Sanitize(action.baseAbs), util.Sanitize(err.Error()))
 		}
 	}
 	return nil

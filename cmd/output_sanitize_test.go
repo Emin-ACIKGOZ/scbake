@@ -102,6 +102,180 @@ func TestDriftEscapesTerminalControls(t *testing.T) {
 	}
 }
 
+// assertWrappedPathErrorSanitized pins that a filesystem PathError embedding a
+// manifest-controlled path is escaped instead of reaching the terminal raw.
+func assertWrappedPathErrorSanitized(t *testing.T, label, stderr string) {
+	t.Helper()
+	if !strings.Contains(stderr, escapedControlDirKey) {
+		t.Errorf("%s did not escape the control-character path; stderr:\n%q", label, stderr)
+	}
+	if !strings.Contains(stderr, "\\x1b[31m") {
+		t.Errorf("%s did not escape ESC; stderr:\n%q", label, stderr)
+	}
+	if !strings.Contains(stderr, "\\x07") {
+		t.Errorf("%s did not escape BEL; stderr:\n%q", label, stderr)
+	}
+	for _, r := range []rune{'\x1b', '\x07', '\r'} {
+		if strings.ContainsRune(stderr, r) {
+			t.Errorf("%s emitted a raw %q byte; stderr:\n%q", label, r, stderr)
+		}
+	}
+}
+
+// TestDriftEscapesWrappedPathError is the regression for #223: a managed key
+// naming a directory used to leak the raw ESC/BEL bytes of the *PathError from
+// inspect through drift's stderr.
+func TestDriftEscapesWrappedPathError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("control characters are not valid Windows file names")
+	}
+	resetFlags()
+	t.Cleanup(resetFlags)
+
+	root := t.TempDir()
+	manifest := fmt.Sprintf(`scbake_version = "v0.3.0"
+
+[managed_files]
+  "%s" = "deadbeef"
+`, controlDirKeyTOML)
+	if err := os.WriteFile(filepath.Join(root, fileutil.ManifestFileName), []byte(manifest), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("writing fixture manifest: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, controlDirKey), fileutil.DirPerms); err != nil {
+		t.Fatalf("creating control-character directory: %v", err)
+	}
+	t.Chdir(root)
+
+	_, stderr := runWithCapturedOutput(t, func() {
+		if err := executeCLI("drift"); err == nil {
+			t.Error("drift on an unreadable managed path unexpectedly succeeded")
+		}
+	})
+	assertWrappedPathErrorSanitized(t, "drift", stderr)
+	if !strings.Contains(stderr, "inspecting managed file") {
+		t.Errorf("drift did not report the inspect failure; stderr:\n%q", stderr)
+	}
+}
+
+// TestAcceptEscapesWrappedPathError covers the accept ReadFile failure path,
+// which used to wrap the same raw *PathError into the command error.
+func TestAcceptEscapesWrappedPathError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("control characters are not valid Windows file names")
+	}
+	resetFlags()
+	t.Cleanup(resetFlags)
+
+	root := t.TempDir()
+	manifest := fmt.Sprintf(`scbake_version = "v0.3.0"
+
+[managed_files]
+  "%s" = "deadbeef"
+`, controlDirKeyTOML)
+	if err := os.WriteFile(filepath.Join(root, fileutil.ManifestFileName), []byte(manifest), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("writing fixture manifest: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, controlDirKey), fileutil.DirPerms); err != nil {
+		t.Fatalf("creating control-character directory: %v", err)
+	}
+	t.Chdir(root)
+
+	_, stderr := runWithCapturedOutput(t, func() {
+		if err := executeCLI("accept", controlDirKey); err == nil {
+			t.Error("accept of a directory unexpectedly succeeded")
+		}
+	})
+	assertWrappedPathErrorSanitized(t, "accept", stderr)
+	if !strings.Contains(stderr, "cannot accept") {
+		t.Errorf("accept did not report the read failure; stderr:\n%q", stderr)
+	}
+}
+
+// TestAcceptBaseReadEscapesWrappedPathError covers the committed-base
+// validation failure, whose PathError embeds the same manifest-controlled key.
+func TestAcceptBaseReadEscapesWrappedPathError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("control characters are not valid Windows file names")
+	}
+	resetFlags()
+	t.Cleanup(resetFlags)
+
+	root := t.TempDir()
+	manifest := fmt.Sprintf(`scbake_version = "v0.3.0"
+
+[managed_files]
+  "%s" = "deadbeef"
+`, controlDirKeyTOML)
+	if err := os.WriteFile(filepath.Join(root, fileutil.ManifestFileName), []byte(manifest), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("writing fixture manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, controlDirKey), []byte("working bytes"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("writing managed file: %v", err)
+	}
+	basePath := filepath.Join(root, fileutil.CommittedBaseDir, controlDirKey)
+	if err := os.MkdirAll(basePath, fileutil.DirPerms); err != nil {
+		t.Fatalf("creating directory at committed base path: %v", err)
+	}
+	t.Chdir(root)
+
+	_, stderr := runWithCapturedOutput(t, func() {
+		if err := executeCLI("accept", controlDirKey); err == nil {
+			t.Error("accept unexpectedly succeeded with an unreadable committed base")
+		}
+	})
+	assertWrappedPathErrorSanitized(t, "accept base", stderr)
+	if !strings.Contains(stderr, "cannot read committed base") {
+		t.Errorf("accept did not report the base read failure; stderr:\n%q", stderr)
+	}
+}
+
+// TestUnmanageBaseRemovalEscapesWrappedPathError forces the os.Remove failure in
+// removeUnmanagedBases by making the committed base directory read-only, then
+// checks that neither the base path nor the wrapped remove error leaks controls.
+func TestUnmanageBaseRemovalEscapesWrappedPathError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("control characters are not valid Windows file names")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove files from a read-only directory")
+	}
+	resetFlags()
+	t.Cleanup(resetFlags)
+
+	root := t.TempDir()
+	manifest := fmt.Sprintf(`scbake_version = "v0.3.0"
+
+[managed_files]
+  "%s" = "deadbeef"
+`, controlDirKeyTOML)
+	if err := os.WriteFile(filepath.Join(root, fileutil.ManifestFileName), []byte(manifest), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("writing fixture manifest: %v", err)
+	}
+	baseDir := filepath.Join(root, fileutil.CommittedBaseDir)
+	if err := os.MkdirAll(baseDir, fileutil.DirPerms); err != nil {
+		t.Fatalf("creating committed base directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, controlDirKey), []byte("pristine"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("writing committed base: %v", err)
+	}
+	//nolint:gosec // G302: a read-only directory needs owner-write cleared.
+	if err := os.Chmod(baseDir, 0o550); err != nil {
+		t.Fatalf("making committed base directory read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(baseDir, fileutil.DirPerms) })
+	t.Chdir(root)
+
+	_, stderr := runWithCapturedOutput(t, func() {
+		if err := executeCLI("unmanage", controlDirKey); err == nil {
+			t.Error("unmanage unexpectedly removed a base from a read-only directory")
+		}
+	})
+	assertWrappedPathErrorSanitized(t, "unmanage", stderr)
+	if !strings.Contains(stderr, "failed to remove base shadow") {
+		t.Errorf("unmanage did not report the base removal failure; stderr:\n%q", stderr)
+	}
+}
+
 // TestListProjectsKeepsNormalName pins that ordinary values render unchanged.
 func TestListProjectsKeepsNormalName(t *testing.T) {
 	resetFlags()
@@ -209,6 +383,17 @@ const escapedManageControlKey = `evil\x1b[31m\x0d\x0aFAKE: managed.txt`
 
 // escapedManageBasePath is the sanitized committed base path for the key.
 const escapedManageBasePath = `.scbake-base/` + escapedManageControlKey
+
+// controlDirKey is a manifest key whose directory name carries ESC and BEL.
+// Reading a directory fails with a PathError that embeds the key, so it
+// exercises the wrapped-error display paths rather than the finding paths.
+const controlDirKey = "bad\x1b[31m\x07dir"
+
+// controlDirKeyTOML is controlDirKey as a TOML basic string.
+const controlDirKeyTOML = `bad\u001b[31m\u0007dir`
+
+// escapedControlDirKey is how Sanitize must render controlDirKey.
+const escapedControlDirKey = `bad\x1b[31m\x07dir`
 
 // runWithCapturedOutput runs fn and returns both captured stdout and stderr.
 func runWithCapturedOutput(t *testing.T, fn func()) (stdout, stderr string) {

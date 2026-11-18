@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -359,6 +360,38 @@ func TestDetect_BaseReadErrorFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "inspecting committed base") {
 		t.Errorf("error = %v, want an inspecting-committed-base error", err)
+	}
+}
+
+// TestDetect_BaseReadErrorEscapesControlPath: the PathError for a base read
+// failure embeds the manifest-controlled key, so its displayed text must be
+// escaped before it can reach stderr.
+func TestDetect_BaseReadErrorEscapesControlPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("control characters are not valid Windows file names")
+	}
+	root := t.TempDir()
+	const key = "bad\x1b[31m\x07dir"
+	if err := os.MkdirAll(filepath.Join(root, tasks.BaseShadowRelPath(key)), 0o750); err != nil {
+		t.Fatalf("create directory at base path: %v", err)
+	}
+
+	m := &types.Manifest{ManagedFiles: map[string]string{key: hashOf([]byte("generated\n"))}}
+	got, err := Detect(m, root)
+	if err == nil {
+		t.Fatalf("base read error was not surfaced; findings = %+v", got)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "inspecting committed base") {
+		t.Errorf("error = %q, want an inspecting-committed-base error", msg)
+	}
+	if !strings.Contains(msg, `bad\x1b[31m\x07dir`) {
+		t.Errorf("error did not escape the control-character base path: %q", msg)
+	}
+	for _, r := range []rune{'\x1b', '\x07', '\r'} {
+		if strings.ContainsRune(msg, r) {
+			t.Errorf("error emitted raw control byte %q: %q", r, msg)
+		}
 	}
 }
 
