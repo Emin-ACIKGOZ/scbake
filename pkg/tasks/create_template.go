@@ -98,6 +98,10 @@ type CreateTemplateTask struct {
 	// threaded to ReadTemplate so registry cache resolution is constrained to
 	// the requested template and never reads a sibling template's file.
 	TemplateName string
+
+	// dryRunNote is the read-only reconciliation note recorded by Validate and
+	// surfaced through DryRunNote. It is empty for an ordinary write.
+	dryRunNote string
 }
 
 // Description implements types.Task.
@@ -1213,15 +1217,53 @@ func (t *CreateTemplateTask) render(tc types.TaskContext) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// DryRunNote implements types.DryRunAnnotator. Validate records the note from
+// the same decision WriteManagedFile would use; an ordinary create or update
+// records no note, leaving the executor's description unchanged.
+func (t *CreateTemplateTask) DryRunNote() string { return t.dryRunNote }
+
 // Validate resolves, renders, and reconciles the template without creating
 // directories, tracking, writing, or mutating the ledger. It shares render and
-// ValidateManagedFile with Execute, so the preview reports the real decision.
+// decideManagedFile with Execute, so the preview reports the real decision. It
+// also records the dry-run annotation here because this is the only place that
+// holds the shared reconciliation result.
 func (t *CreateTemplateTask) Validate(tc types.TaskContext) error {
+	t.dryRunNote = ""
+
 	content, err := t.render(tc)
 	if err != nil {
 		return err
 	}
-	return ValidateManagedFile(tc, t.OutputPath, content)
+	absPath, err := resolveTaskPath(tc.TargetPath, t.OutputPath, "output")
+	if err != nil {
+		return err
+	}
+	decision, err := decideManagedFile(tc, absPath, t.OutputPath, content)
+	if err != nil {
+		return err
+	}
+	t.dryRunNote = managedFileDryRunNote(absPath, decision)
+	return nil
+}
+
+// managedFileDryRunNote describes a reconciliation that does not perform a
+// plain create or update. An empty note means the ordinary write path, so a
+// preview only gains text when the real run would skip, preserve, or divert
+// the write.
+func managedFileDryRunNote(absPath string, decision managedFileDecision) string {
+	if decision.writePath == "" {
+		return "no change"
+	}
+	if decision.writePath != absPath {
+		return "conflict; would write artifact"
+	}
+	if decision.override != nil && sameFileContent(absPath, decision.override) {
+		return "local edits preserved"
+	}
+	if sameFileContent(absPath, decision.content) {
+		return "unchanged"
+	}
+	return ""
 }
 
 // Execute performs the template creation task.

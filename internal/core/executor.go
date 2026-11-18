@@ -70,20 +70,26 @@ func runTask(plan *types.Plan, index int, task types.Task, tc types.TaskContext,
 	}
 
 	desc := task.Description()
+	var err error
 	if tc.DryRun {
 		if sd, ok := task.(types.SourceDescriber); ok {
 			desc = sd.DescriptionWithSource(tc)
 		}
+		// A dry run reports what the real run would decide, without
+		// performing any of it. Validate is the read-only half of a task,
+		// so this path can never write. Running it before TaskStart lets a
+		// task annotate its description with the decision it just made; the
+		// note is recorded by Validate because that is the only place that
+		// holds the shared reconciliation result (see types.DryRunAnnotator).
+		err = task.Validate(tc)
+		if note := dryRunNote(task); note != "" {
+			desc += " (" + note + ")"
+		}
 	}
 	reporter.TaskStart(desc, index+1, len(plan.Tasks))
 
-	var err error
-	if tc.DryRun {
-		// A dry run reports what the real run would decide, without
-		// performing any of it. Validate is the read-only half of a task,
-		// so this path can never write.
-		err = task.Validate(tc)
-	} else {
+	if !tc.DryRun {
+		// A real run executes; the dry run already ran Validate above.
 		err = task.Execute(tc)
 	}
 
@@ -93,6 +99,16 @@ func runTask(plan *types.Plan, index int, task types.Task, tc types.TaskContext,
 		return fmt.Errorf("task failed (%s): %w", task.Description(), err)
 	}
 	return nil
+}
+
+// dryRunNote returns a task's optional dry-run annotation. Tasks that do not
+// implement types.DryRunAnnotator contribute no note.
+func dryRunNote(task types.Task) string {
+	annotator, ok := task.(types.DryRunAnnotator)
+	if !ok {
+		return ""
+	}
+	return annotator.DryRunNote()
 }
 
 // carryPlannedPaths records the paths task declared it will create, so a later

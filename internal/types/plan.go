@@ -141,6 +141,18 @@ type SourceDescriber interface {
 	DescriptionWithSource(tc TaskContext) string
 }
 
+// DryRunAnnotator is optionally implemented by tasks that can explain the
+// reconciliation their read-only Validate just decided. The executor calls
+// DryRunNote after Validate and, only in a dry run, appends a non-empty note to
+// the reported description. This lets a preview disclose that a task will not
+// write (a no-op, a preserved local edit, or an artifact) instead of implying
+// that every listed task creates or updates a file. The note is computed during
+// Validate because that is where the task has already made the same read-only
+// decision the real run would make; computing it separately could disagree.
+type DryRunAnnotator interface {
+	DryRunNote() string
+}
+
 // RegistryAwareHandler is optionally implemented by language and tooling
 // handlers that resolve registry-cached templates at plan time. Core calls it
 // with the configured registry allowlist. Handlers that only build
