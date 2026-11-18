@@ -28,23 +28,35 @@ func chdirTempWorkspace(t *testing.T) string {
 	return dir
 }
 
-// hostGoVersion returns the version the host go toolchain writes into go.mod
-// for `go mod init`. The probe runs in its own temp directory instead of the
-// test's cwd so it cannot pick up the repository's go.mod/toolchain directive
-// or depend on when the test changes directory.
-func hostGoVersion(t *testing.T) string {
+// hostGoDirective returns the version the host go toolchain writes into go.mod
+// for `go mod init`, by running that command in a fresh temp directory and
+// reading its `go` directive. `go env GOVERSION` is not equivalent: it can
+// report suffixes such as X:boringcrypto or "devel" that `go mod init` does not
+// write. The probe runs outside the test's cwd so it cannot pick up the
+// repository's go.mod/toolchain directive or depend on when the test changes
+// directory, and it does not touch the network.
+func hostGoDirective(t *testing.T) string {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "go", "env", "GOVERSION")
-	cmd.Dir = t.TempDir()
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("go env GOVERSION: %v", err)
+	dir := t.TempDir()
+	cmd := exec.CommandContext(t.Context(), "go", "mod", "init", "probe")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod init probe: %v\n%s", err, out)
 	}
-	version := strings.TrimPrefix(strings.TrimSpace(string(out)), "go")
-	if version == "" {
-		t.Fatal("go env GOVERSION returned an empty version")
+	goMod := readProjectFile(t, filepath.Join(dir, "go.mod"))
+	for _, line := range strings.Split(goMod, "\n") {
+		version, ok := strings.CutPrefix(line, "go ")
+		if !ok {
+			continue
+		}
+		version = strings.TrimSpace(version)
+		if version == "" {
+			t.Fatalf("go mod init probe wrote an empty go directive:\n%s", goMod)
+		}
+		return version
 	}
-	return version
+	t.Fatalf("go mod init probe wrote no go directive:\n%s", goMod)
+	return ""
 }
 
 func readProjectFile(t *testing.T, path string) string {
@@ -160,7 +172,7 @@ func TestIssue140_PlainGoProjectDoesNotApplySchemaDefault(t *testing.T) {
 	goMod := readProjectFile(t, filepath.Join("plain", "go.mod"))
 	requireRegexp(t, "plain/go.mod", goMod, regexp.MustCompile(`(?m)^module plain$`))
 	requireRegexp(t, "plain/go.mod", goMod,
-		regexp.MustCompile(`(?m)^go `+regexp.QuoteMeta(hostGoVersion(t))+`$`))
+		regexp.MustCompile(`(?m)^go `+regexp.QuoteMeta(hostGoDirective(t))+`$`))
 	requireNoRegexp(t, "plain/go.mod", goMod, regexp.MustCompile(`(?m)^go 1\.22$`))
 
 	// Without a schema default the plain project records no go_version; CI
