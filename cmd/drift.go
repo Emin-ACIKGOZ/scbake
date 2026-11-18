@@ -321,7 +321,7 @@ func reportPredictedResidual(findings []drift.Finding, m *types.Manifest) {
 		return
 	}
 
-	fmt.Printf("Dry run: %d managed file(s) would remain drifted:\n", countFindingPaths(residual))
+	fmt.Printf("Dry run: %d managed file(s) may remain drifted:\n", countFindingPaths(residual))
 	printFindings(residual)
 	if driftStrategyFlag != types.ConflictOverwrite {
 		fmt.Println("Use --conflict-strategy overwrite to force restoration.")
@@ -329,17 +329,20 @@ func reportPredictedResidual(findings []drift.Finding, m *types.Manifest) {
 }
 
 // predictedResidualFindings maps pre-repair findings to the blocking set that a
-// dry-run repair would leave behind:
+// dry-run repair may leave behind:
 //
 //   - Missing files are assumed restorable by the repair plan (the plan line
 //     still shows their Create), unless they are listed as unmanaged.
-//   - Modified files survive every strategy except overwrite, which rewrites
-//     them; unmanaged files are filtered from the plan, so they survive even
-//     overwrite.
-//   - BaseInvalid is repaired by overwrite's canonical write and survives the
-//     other strategies; an unmanaged path is not rewritten, so its base stays.
+//   - Modified files survive unless a canonical write repairs them (overwrite or
+//     --force); unmanaged files are filtered from the plan, so they survive.
+//   - BaseInvalid is repaired by a canonical write (overwrite or --force) and
+//     survives the other strategies; an unmanaged path is not rewritten.
 //   - BaseMissing is advisory for drift (and merge does not backfill it), so it
 //     is never part of the blocking summary.
+//
+// This is a conservative heuristic: it may over-report a converged Modified
+// file or a base a canonical write would repair, but it only suppresses findings
+// the plan is expected to restore, so it never claims a false clean.
 func predictedResidualFindings(findings []drift.Finding, m *types.Manifest) []drift.Finding {
 	unmanaged := make(map[string]struct{})
 	if m != nil {
@@ -347,12 +350,12 @@ func predictedResidualFindings(findings []drift.Finding, m *types.Manifest) []dr
 			unmanaged[key] = struct{}{}
 		}
 	}
-	overwrite := driftStrategyFlag == types.ConflictOverwrite
+	restores := driftStrategyFlag == types.ConflictOverwrite || force
 
 	residual := make([]drift.Finding, 0, len(findings))
 	for _, f := range findings {
 		_, detached := unmanaged[f.Path]
-		if residualAfterRepair(f.Kind, overwrite, detached) {
+		if residualAfterRepair(f.Kind, restores, detached) {
 			residual = append(residual, f)
 		}
 	}
@@ -360,9 +363,10 @@ func predictedResidualFindings(findings []drift.Finding, m *types.Manifest) []dr
 }
 
 // residualAfterRepair reports whether a pre-repair finding survives the planned
-// repair. detached marks a path listed in unmanaged_files, which the plan
+// repair. restores marks a strategy that performs a canonical write (overwrite
+// or --force); detached marks a path listed in unmanaged_files, which the plan
 // filters out and therefore cannot restore.
-func residualAfterRepair(kind drift.Kind, overwrite, detached bool) bool {
+func residualAfterRepair(kind drift.Kind, restores, detached bool) bool {
 	switch kind {
 	case drift.BaseMissing:
 		// Advisory for drift, and merge does not backfill it.
@@ -371,9 +375,9 @@ func residualAfterRepair(kind drift.Kind, overwrite, detached bool) bool {
 		// Recreated by the repair plan unless the path is detached.
 		return detached
 	case drift.Modified, drift.BaseInvalid:
-		// Overwrite rewrites the canonical file and its base; other strategies
+		// A canonical write rewrites the file and its base; other strategies
 		// preserve the local state, and a detached path is never rewritten.
-		return !overwrite || detached
+		return !restores || detached
 	default:
 		return true
 	}

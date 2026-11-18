@@ -33,6 +33,9 @@ func resetFlags() {
 	templateDirFlag = ""
 	recoverDiscardFlag = false
 	driftRepairFlag = false
+	driftRequireBaseFlag = false
+	driftStrategyFlag = types.ConflictMerge
+	updateConflictStrategyFlag = types.ConflictMerge
 	pullRegistryName = ""
 }
 

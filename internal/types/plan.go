@@ -142,13 +142,16 @@ type SourceDescriber interface {
 }
 
 // DryRunAnnotator is optionally implemented by tasks that can explain the
-// reconciliation their read-only Validate just decided. The executor calls
-// DryRunNote after Validate and, only in a dry run, appends a non-empty note to
-// the reported description. This lets a preview disclose that a task will not
-// write (a no-op, a preserved local edit, or an artifact) instead of implying
-// that every listed task creates or updates a file. The note is computed during
-// Validate because that is where the task has already made the same read-only
-// decision the real run would make; computing it separately could disagree.
+// reconciliation outcome their read-only Validate just decided: a no-op, a
+// preserved local edit, a converged write, or a conflict diverted to an
+// artifact. The executor calls DryRunNote after Validate and, only in a dry run,
+// appends a non-empty note to the reported description. A note does not promise
+// that no filesystem write occurs: an artifact writes a side file, and a
+// merge-preserved reconciliation may still write bytes identical to the file on
+// disk. It lets the preview distinguish those outcomes from an ordinary create
+// or update. The note is computed during Validate because that is where the task
+// has already made the same read-only decision the real run would make;
+// computing it separately could disagree.
 type DryRunAnnotator interface {
 	DryRunNote() string
 }

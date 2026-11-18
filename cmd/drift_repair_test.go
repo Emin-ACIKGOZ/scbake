@@ -133,7 +133,7 @@ func TestDriftRepairDryRunAnnotatesPreservedFile(t *testing.T) {
 		t.Fatalf("drift --repair --dry-run = %v, want nil", dryRunErr)
 	}
 
-	const wantHeader = "Dry run: 1 managed file(s) would remain drifted:"
+	const wantHeader = "Dry run: 1 managed file(s) may remain drifted:"
 	planAndHeader, residual, ok := strings.Cut(out, wantHeader)
 	if !ok {
 		t.Fatalf("dry run does not predict exactly one residual file: %q", out)
@@ -187,7 +187,7 @@ func TestDriftRepairDryRunOverwritePredictsClean(t *testing.T) {
 	if dryRunErr != nil {
 		t.Fatalf("drift --repair --dry-run --conflict-strategy overwrite = %v, want nil", dryRunErr)
 	}
-	if strings.Contains(out, "would remain drifted") {
+	if strings.Contains(out, "may remain drifted") {
 		t.Errorf("overwrite dry run predicted residual drift: %q", out)
 	}
 
@@ -200,6 +200,72 @@ func TestDriftRepairDryRunOverwritePredictsClean(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, fileutil.GitIgnore)); !os.IsNotExist(err) {
 		t.Errorf("overwrite dry run recreated %s (stat error: %v)", fileutil.GitIgnore, err)
+	}
+}
+
+// TestDriftRepairDryRunForcePredictsClean covers --force with merge: a forced
+// repair canonically rewrites the modified file, so the preview must predict no
+// residual and the real repair must clear the drift.
+func TestDriftRepairDryRunForcePredictsClean(t *testing.T) {
+	root := newDriftRepairProject(t)
+	addLocalEditAndDeleteGitignore(t, root)
+
+	var dryRunErr error
+	out := captureStdout(t, func() {
+		dryRunErr = executeCLI("drift", "--repair", "--dry-run", "--force")
+	})
+	if dryRunErr != nil {
+		t.Fatalf("drift --repair --dry-run --force = %v, want nil", dryRunErr)
+	}
+	if strings.Contains(out, "may remain drifted") {
+		t.Errorf("forced dry run predicted residual drift: %q", out)
+	}
+
+	resetFlags()
+	var repairErr error
+	captureStdout(t, func() {
+		repairErr = executeCLI("drift", "--repair", "--force")
+	})
+	if repairErr != nil {
+		t.Fatalf("drift --repair --force = %v, want nil", repairErr)
+	}
+	mainContent, err := os.ReadFile(filepath.Join(root, "main.go")) // #nosec G304 -- test path
+	if err != nil {
+		t.Fatalf("reading main.go: %v", err)
+	}
+	if strings.Contains(string(mainContent), "// local edit") {
+		t.Error("forced repair did not restore the managed main.go")
+	}
+
+	resetFlags()
+	if err := executeCLI("drift"); err != nil {
+		t.Errorf("drift after forced repair = %v, want nil", err)
+	}
+}
+
+// TestDriftRepairDryRunCorruptBasePrediction ensures a corrupt base is predicted
+// conservatively under merge (which does not rewrite a clean file) and that the
+// read-only prediction cannot panic.
+func TestDriftRepairDryRunCorruptBasePrediction(t *testing.T) {
+	root := newDriftRepairProject(t)
+
+	basePath := filepath.Join(root, fileutil.CommittedBaseDir, "main.go")
+	if err := os.WriteFile(basePath, []byte("corrupt base\n"), fileutil.PrivateFilePerms); err != nil {
+		t.Fatalf("corrupting %s: %v", basePath, err)
+	}
+
+	var dryRunErr error
+	out := captureStdout(t, func() {
+		dryRunErr = executeCLI("drift", "--repair", "--dry-run")
+	})
+	if dryRunErr != nil {
+		t.Fatalf("drift --repair --dry-run = %v, want nil", dryRunErr)
+	}
+	if !strings.Contains(out, "may remain drifted") {
+		t.Errorf("corrupt-base dry run did not predict residual drift: %q", out)
+	}
+	if !strings.Contains(out, "main.go") {
+		t.Errorf("corrupt-base dry run does not name main.go: %q", out)
 	}
 }
 
