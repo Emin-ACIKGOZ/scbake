@@ -112,13 +112,41 @@ func TestInstallScriptQuietModeLatestUsesDefaultDir(t *testing.T) {
 	if _, statErr := os.Stat(want); statErr != nil {
 		t.Errorf("binary was not installed to the default location %s: %v", want, statErr)
 	}
+}
 
-	// `--quiet` must never be materialized as an install directory.
-	for _, dir := range []string{workDir, home} {
-		quietDir := filepath.Join(dir, "--quiet")
-		if _, statErr := os.Stat(quietDir); !os.IsNotExist(statErr) {
-			t.Errorf("installer created a directory literally named %q (stat err: %v)", quietDir, statErr)
-		}
+// TestInstallScriptRejectsExtraPositionalArgs covers the argument limit: at most
+// a version and an install directory are accepted, so a third positional
+// argument must fail loudly before anything is installed.
+func TestInstallScriptRejectsExtraPositionalArgs(t *testing.T) {
+	requireBash(t) // skip Windows before doing any work; runInstallArgs re-resolves bash
+
+	stubDir := setupStubBinaries(t)
+	home := t.TempDir()
+	workDir := t.TempDir()
+
+	for _, tc := range []struct {
+		name  string
+		quiet bool
+	}{
+		{name: "plain"},
+		{name: "quiet", quiet: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installDir := filepath.Join(t.TempDir(), "bin")
+			args := []string{"v9.9.9", installDir, "extra"}
+			if tc.quiet {
+				args = append(args, "--quiet")
+			}
+
+			stdout, stderr, err := runInstallArgs(t, stubDir, home, workDir, "success", args...)
+			if err == nil {
+				t.Fatalf("expected a non-zero exit for extra positional arguments\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+			}
+			if !strings.Contains(stderr, "Too many arguments") {
+				t.Errorf("expected a 'Too many arguments' error on stderr, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+			}
+			assertNotInstalled(t, installDir)
+		})
 	}
 }
 
