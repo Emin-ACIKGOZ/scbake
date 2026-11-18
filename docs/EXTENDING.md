@@ -557,9 +557,10 @@ formerly a schema default). That recorded value keeps rendering as an explicit
 `go-version` pin after `update`, even when it differs from `go.mod`; there is no
 automatic migration. Remove the `go_version` entry from `[metadata]` to switch
 CI to `go-version-file`, or re-apply the Go pack with `--set go_version=<version>`
-to make the explicit pin match `go.mod`. Re-applying the Go pack only records
-the value; the already-rendered workflow picks it up on a later `update` or
-`apply --with ci_github`. `build_tool` in the
+to make the explicit pin match `go.mod`. Re-applying the Go pack rewrites the
+`go` directive in `go.mod` to that version but does not re-render the workflow;
+the already-rendered workflow picks up the recorded value on a later `update`
+or `apply --with ci_github`. `build_tool` in the
 `makefile` template is the documented record-only example: it is validated and
 stored but intentionally has no consumer.
 
