@@ -65,6 +65,10 @@ apply --with compliance to change license terms.`,
 		if err := core.RunUpdate(rc, reporter); err != nil {
 			return err
 		}
+		if dryRun {
+			fmt.Println("✅ Dry run complete; no changes written.")
+			return nil
+		}
 		fmt.Println("✅ Success! 'update' command finished.")
 		return nil
 	},
