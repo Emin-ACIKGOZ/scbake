@@ -552,6 +552,15 @@ consumes `go_version` when set with `--set`, rendering that value as the CI
 pin; when absent it renders `go-version-file` for the first Go project's
 `go.mod`, so CI uses the same directive the Go pack wrote.
 
+That single source has two monorepo limits. One `setup-go` step serves the
+whole workspace, so when Go projects declare different `go` directives the
+job provisions the first Go project's version. For Go 1.21+ toolchains the
+default `GOTOOLCHAIN=auto` downloads a newer toolchain for the others at build
+time. And when the first
+Go project has no `go.mod` yet — `apply --with ci_github` before the Go pack
+runs — the workflow still emits `go-version-file` at that missing path, so CI
+fails at setup until the module exists.
+
 Manifests written by older versions may still record `go_version` (it was
 formerly a schema default). That recorded value keeps rendering as an explicit
 `go-version` pin after `update`, even when it differs from `go.mod`; there is no
