@@ -175,11 +175,18 @@ func LookupPath(cacheDir, registryName, tplPath string) string {
 		return ""
 	}
 	registryDir := filepath.Join(cacheDir, registryName)
+	// A symlinked registry directory must not redirect reads outside the cache
+	// root. ResolveCacheEntry skips such entries; the exported helper must apply
+	// the same containment rule.
+	if ensureStrictlyWithin(cacheDir, registryDir) != nil {
+		return ""
+	}
 	candidate := filepath.Join(registryDir, filepath.Clean(tplPath))
 	if ensureStrictlyWithin(registryDir, candidate) != nil {
 		return ""
 	}
-	if _, err := os.Stat(candidate); err != nil {
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
 		return ""
 	}
 	return candidate
