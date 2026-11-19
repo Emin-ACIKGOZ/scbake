@@ -245,8 +245,9 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 	if containsTemplate(withTemplates, complianceTemplateName) {
 		if err := CheckCompliancePrerequisites(m.Metadata["license"], m.Metadata["copyright_holder"]); err != nil {
 			return fmt.Errorf(
-				"compliance is recorded but its metadata is missing; run "+
-					"'scbake apply --with compliance --license <id> --copyright-holder <name>': %w", err)
+				"compliance is recorded but its metadata is missing; from the affected "+
+					"project directory run 'scbake apply --with compliance --license <id> "+
+					"--copyright-holder <name>': %w", err)
 		}
 	}
 	if lang == "" && len(withTemplates) == 0 {
