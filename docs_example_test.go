@@ -193,7 +193,7 @@ func TestRustHandlerExampleTemplates(t *testing.T) {
 // shell parser. String assertions cannot catch an unbalanced subshell.
 func TestInstallSnippetsParse(t *testing.T) {
 	for _, file := range []string{"README.md", "docs/INSTALLING.md"} {
-		raw, err := os.ReadFile(file)
+		raw, err := os.ReadFile(file) //nolint:gosec // fixed repository documentation path in a test
 		if err != nil {
 			t.Fatalf("read %s: %v", file, err)
 		}
