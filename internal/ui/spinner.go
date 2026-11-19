@@ -32,6 +32,9 @@ type SpinnerReporter struct {
 	done          chan struct{}
 	spinnerCtx    context.Context
 	spinnerCancel context.CancelFunc
+	// spinnerStopped is closed by the animation goroutine when it exits. TaskEnd
+	// waits on it so no spinner write can happen after TaskEnd returns.
+	spinnerStopped chan struct{}
 }
 
 // NewSpinnerReporter initializes a reporter with a specified number of high-level steps.
@@ -60,41 +63,45 @@ func (r *SpinnerReporter) SetTotalSteps(total int) {
 
 // TaskStart initiates the spinner animation for a specific sub-task in a separate goroutine.
 func (r *SpinnerReporter) TaskStart(desc string, curr, total int) {
-	// Cancel previous spinner if still running (cleanup)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Cancel any spinner that was not ended explicitly. It captures its own
+	// context and done channel, so it can exit without touching this task's state.
 	if r.spinnerCancel != nil {
 		r.spinnerCancel()
 	}
 
 	// Create context with timeout to prevent goroutine leaks if TaskEnd() is never called
-	r.spinnerCtx, r.spinnerCancel = context.WithTimeout(context.Background(), spinnerTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), spinnerTimeout)
+	done := make(chan struct{})
+	stopped := make(chan struct{})
 
-	r.mu.Lock()
+	r.spinnerCtx = ctx
+	r.spinnerCancel = cancel
+	r.done = done
+	r.spinnerStopped = stopped
 	r.activeDesc = desc
 	r.activeIndex = curr
 	r.activeTotal = total
-	r.done = make(chan struct{})
-	r.mu.Unlock()
 
-	go r.animate()
+	go r.animate(ctx, done, stopped, desc, curr, total)
 }
 
 // animate handles the ticker logic and ANSI escape sequences for the spinner animation.
-func (r *SpinnerReporter) animate() {
+// It owns the task state passed by TaskStart, so it never reads fields guarded by r.mu.
+func (r *SpinnerReporter) animate(ctx context.Context, done <-chan struct{}, stopped chan<- struct{}, desc string, index, total int) {
+	defer close(stopped)
 	ticker := time.NewTicker(spinnerDelay)
 	defer ticker.Stop()
 	i := 0
 	for {
 		select {
-		case <-r.done:
+		case <-done:
 			return
-		case <-r.spinnerCtx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			r.mu.Lock()
-			desc := r.activeDesc
-			index := r.activeIndex
-			total := r.activeTotal
-			r.mu.Unlock()
 			outputMux.Lock()
 			prefix := fmt.Sprintf("[%d/%d]", index, total)
 			fmt.Printf("\r%s %s %s", prefix, spinnerChars[i%len(spinnerChars)], desc)
@@ -105,20 +112,40 @@ func (r *SpinnerReporter) animate() {
 }
 
 // TaskEnd stops the active spinner goroutine and prints a final success or failure indicator.
+// It is idempotent: once a task has ended, further calls are no-ops.
 func (r *SpinnerReporter) TaskEnd(err error) {
-	// Signal goroutine to stop (primary method)
-	close(r.done)
-
-	// Cancel context to ensure cleanup if done channel was already consumed
-	if r.spinnerCancel != nil {
-		r.spinnerCancel()
-	}
-
 	r.mu.Lock()
+	done := r.done
+	stopped := r.spinnerStopped
+	ctx := r.spinnerCtx
+	cancel := r.spinnerCancel
 	desc := r.activeDesc
 	index := r.activeIndex
 	total := r.activeTotal
+	// Mark the task as ended. A repeated TaskEnd, or a TaskEnd before TaskStart,
+	// then observes nil and returns without touching the closed channel.
+	r.done = nil
+	r.spinnerStopped = nil
+	r.spinnerCtx = nil
+	r.spinnerCancel = nil
 	r.mu.Unlock()
+
+	if done == nil {
+		return
+	}
+
+	// Signal the goroutine to stop and join it so it cannot write after TaskEnd
+	// returns. The context timeout bounds the wait if the goroutine is stuck on
+	// output.
+	close(done)
+	select {
+	case <-stopped:
+	case <-ctx.Done():
+	}
+	if cancel != nil {
+		cancel()
+	}
+
 	outputMux.Lock()
 	defer outputMux.Unlock()
 	prefix := fmt.Sprintf("[%d/%d]", index, total)
