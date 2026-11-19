@@ -806,6 +806,125 @@ func TestRunUnmanageRootGitignoreRefused(t *testing.T) {
 	}
 }
 
+// TestResolveManagedKeyRootClassification is the #269 regression: the project
+// root (spelled ".", absolutely, or with a trailing separator) is classified as
+// the root rather than an escape, while outside paths and ordinary directories
+// keep their existing meaning.
+func TestResolveManagedKeyRootClassification(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o750); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		arg         string
+		wantKey     string
+		wantRoot    bool
+		wantOutside bool
+	}{
+		{name: "dot", arg: ".", wantRoot: true},
+		{name: "dot slash", arg: "." + string(filepath.Separator), wantRoot: true},
+		{name: "absolute root", arg: root, wantRoot: true},
+		{name: "parent", arg: "..", wantOutside: true},
+		{name: "outside absolute directory", arg: outside, wantOutside: true},
+		{name: "inside directory is not root", arg: "nested", wantKey: "nested"},
+		{name: "managed file", arg: "a.txt", wantKey: "a.txt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, err := resolveManagedKey(root, root, tt.arg)
+			if tt.wantRoot {
+				if err == nil {
+					t.Fatalf("resolveManagedKey(%q) = %q, want a root-path error", tt.arg, key)
+				}
+				if !strings.Contains(err.Error(), "managed file path is required") {
+					t.Errorf("root error does not name the required input: %v", err)
+				}
+				if strings.Contains(err.Error(), "outside the project root") {
+					t.Errorf("root classified as outside: %v", err)
+				}
+				return
+			}
+			if tt.wantOutside {
+				if err == nil || !strings.Contains(err.Error(), "outside the project root") {
+					t.Fatalf("resolveManagedKey(%q) error = %v, want outside-root refusal", tt.arg, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveManagedKey(%q) error = %v", tt.arg, err)
+			}
+			if key != tt.wantKey {
+				t.Errorf("resolveManagedKey(%q) = %q, want %q", tt.arg, key, tt.wantKey)
+			}
+		})
+	}
+}
+
+// TestRunAcceptUnmanageRootPathInvariant pins the command-level #269 behavior:
+// both commands reject the project root with the root classification, leave the
+// manifest untouched, still reject an ordinary unmanaged directory, and accept
+// a valid managed file.
+func TestRunAcceptUnmanageRootPathInvariant(t *testing.T) {
+	for _, accept := range []bool{true, false} {
+		name := "unmanage"
+		if accept {
+			name = "accept"
+		}
+		run := func(rc RunContext, paths []string) error {
+			if accept {
+				return RunAccept(rc, paths)
+			}
+			return RunUnmanage(rc, paths)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeManageFixture(t, root, map[string]string{"a.txt": "pristine\n"})
+			if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("edited\n"), 0o600); err != nil {
+				t.Fatalf("write edited a.txt: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Join(root, "nested"), 0o750); err != nil {
+				t.Fatalf("mkdir nested: %v", err)
+			}
+			rc := manageRunContext(root)
+			manifestPath := filepath.Join(root, fileutil.ManifestFileName)
+			before := mustManageRead(t, manifestPath)
+
+			for _, arg := range []string{".", root} {
+				err := run(rc, []string{arg})
+				if err == nil {
+					t.Fatalf("%s %q succeeded, want a root-path refusal", name, arg)
+				}
+				if !strings.Contains(err.Error(), "managed file path is required") {
+					t.Errorf("%s %q error does not name the required input: %v", name, arg, err)
+				}
+				if strings.Contains(err.Error(), "outside the project root") {
+					t.Errorf("%s %q classified the root as outside: %v", name, arg, err)
+				}
+			}
+			if got := mustManageRead(t, manifestPath); got != before {
+				t.Errorf("%s root-path refusal rewrote the manifest", name)
+			}
+
+			err := run(rc, []string{"nested"})
+			if err == nil {
+				t.Fatalf("%s of an ordinary directory succeeded", name)
+			}
+			if strings.Contains(err.Error(), "managed file path is required") {
+				t.Errorf("%s classified a nested directory as the project root: %v", name, err)
+			}
+
+			if err := run(rc, []string{"a.txt"}); err != nil {
+				t.Fatalf("%s of a valid managed file failed: %v", name, err)
+			}
+		})
+	}
+}
+
 func mustManageRead(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path) //nolint:gosec // test-controlled fixture path under t.TempDir()
