@@ -1079,13 +1079,15 @@ func containsTemplate(names []string, name string) bool {
 
 // projectNameSource returns the value a generated manifest's project name is
 // derived from. For `new`, the manifest path stays "." while the directory
-// being created supplies the name; a real run has changed into it, and a dry
-// run plans against the relative project name. Otherwise the name comes from
-// the resolved target, so a spelling such as "..", "./svc", or an absolute
-// path yields the target directory's base name instead of the literal argument.
+// being created supplies the name; rootPath is that directory's resolved
+// absolute path for both a real run and a dry run, so a reserved TargetPath
+// such as "." is never passed to the name sanitizer. Otherwise the name comes
+// from the resolved target, so a spelling such as "..", "./svc", or an
+// absolute path yields the target directory's base name instead of the literal
+// argument.
 func projectNameSource(rc RunContext, rootPath, projectPath string) string {
 	if rc.NewProject {
-		return rc.TargetPath
+		return rootPath
 	}
 	if projectPath == "." {
 		return rootPath
@@ -1164,11 +1166,10 @@ func handleLangFlag(rc RunContext, rootPath, projectPath string, plan *types.Pla
 
 	// For `new`, the manifest's project path stays "." (it is relative to the
 	// project root), but the project name must come from the directory being
-	// created. A real run has changed into that directory, so its TargetPath is
-	// "."; a dry run passes the relative project name instead. Otherwise the
-	// name comes from the resolved target path. Deriving the name from the
-	// resolved target in both cases keeps the preview and the generated manifest
-	// in agreement and avoids recording a spelling such as "..".
+	// created. projectNameSource uses rootPath for both a real run and a dry
+	// run, so the preview and the generated manifest agree and neither records a
+	// spelling such as "." or "..". Otherwise the name comes from the resolved
+	// target path.
 	projectName, err := util.SanitizeModuleName(projectNameSource(rc, rootPath, projectPath))
 	if err != nil {
 		return "", fmt.Errorf("could not determine project name: %w", err)
