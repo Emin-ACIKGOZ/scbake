@@ -241,7 +241,7 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 	if err != nil {
 		return err
 	}
-	if err := checkUpdatePreconditions(m, rootPath, withTemplates, relPath); err != nil {
+	if err := checkUpdatePreconditions(m, rootPath, lang, withTemplates, relPath); err != nil {
 		return err
 	}
 	if lang == "" && len(withTemplates) == 0 {
@@ -258,8 +258,14 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 
 // checkUpdatePreconditions reports a pending transaction before checking
 // compliance metadata, so recovery state is never masked by a flag error.
-func checkUpdatePreconditions(m *types.Manifest, rootPath string, withTemplates []string, relPath string) error {
+func checkUpdatePreconditions(m *types.Manifest, rootPath, lang string, withTemplates []string, relPath string) error {
 	if err := transaction.CheckPending(rootPath); err != nil {
+		return err
+	}
+	if err := ValidateLanguageName(lang); err != nil {
+		return err
+	}
+	if err := ValidateTemplateNames(withTemplates); err != nil {
 		return err
 	}
 	if !containsTemplate(withTemplates, complianceTemplateName) ||

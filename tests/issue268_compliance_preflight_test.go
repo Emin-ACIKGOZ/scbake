@@ -487,3 +487,35 @@ func TestIssue268ApplyLoadErrorPrecedesToolchain(t *testing.T) {
 		t.Errorf("toolchain preflight masked the manifest error:\n%s", out)
 	}
 }
+
+// TestIssue268UpdateUnknownLanguagePrecedesCompliance keeps update's recorded
+// selection validation ahead of the compliance remediation.
+func TestIssue268UpdateUnknownLanguagePrecedesCompliance(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	body := `scbake_version = "v0.3.0"
+
+[[projects]]
+  name = "api"
+  path = "."
+  language = "bogus"
+
+[[templates]]
+  name = "compliance"
+  path = "."
+`
+	if err := os.WriteFile(filepath.Join(work, "scbake.toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	out, err := runCLI("update")
+	if err == nil {
+		t.Fatalf("update with an unknown recorded language succeeded:\n%s", out)
+	}
+	line := dryRunErrorLine(out)
+	if !strings.Contains(line, "unknown language") {
+		t.Errorf("expected the unknown-language error, got:\n%s", out)
+	}
+	if strings.Contains(line, "compliance is recorded") {
+		t.Errorf("compliance preflight masked the invalid selection:\n%s", out)
+	}
+}
