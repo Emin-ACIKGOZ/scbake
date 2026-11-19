@@ -11,8 +11,8 @@
     "go_version": {
       "type": "string",
       "required": false,
-      "default": "1.22",
-      "description": "Go version to set up in the CI workflow"
+      "description": "Optional Go version to pin in the CI workflow. When --lang go is selected in the same run, the Go pack also writes it to go.mod; when absent, CI reads the version from the first Go project's go.mod.",
+      "pattern": "^1\\.\\d+(\\.\\d+)?$"
     },
     "node_version": {
       "type": "string",

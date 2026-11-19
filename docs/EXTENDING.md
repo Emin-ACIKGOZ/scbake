@@ -547,9 +547,31 @@ stale. The comparison includes the patch component: a dependency that requires
 directive is not a blocker; `tidy -go=1.24` lowers a main-module `go 1.24.0` to
 `1.24`.)
 The `ci_github` template consumes `runner_os` at render time and emits
-`shell: bash` for the Windows runner, whose default shell is PowerShell.
-`build_tool` in the `makefile` template is the documented record-only example:
-it is validated and stored but intentionally has no consumer.
+`shell: bash` for the Windows runner, whose default shell is PowerShell. It also
+consumes `go_version` when set with `--set`, rendering that value as the CI
+pin; when absent it renders `go-version-file` for the first Go project's
+`go.mod`, so CI uses the same directive the Go pack wrote.
+
+That single source has two monorepo limits. One `setup-go` step serves the
+whole workspace, so when Go projects declare different `go` directives the
+job provisions the first Go project's version. For Go 1.21+ toolchains the
+default `GOTOOLCHAIN=auto` downloads a newer toolchain for the others at build
+time. And when the first
+Go project has no `go.mod` yet — `apply --with ci_github` before the Go pack
+runs — the workflow still emits `go-version-file` at that missing path, so CI
+fails at setup until the module exists.
+
+Manifests written by older versions may still record `go_version` (it was
+formerly a schema default). That recorded value keeps rendering as an explicit
+`go-version` pin after `update`, even when it differs from `go.mod`; there is no
+automatic migration. Remove the `go_version` entry from `[metadata]` to switch
+CI to `go-version-file`, or re-apply the Go pack with `--set go_version=<version>`
+to make the explicit pin match `go.mod`. Re-applying the Go pack rewrites the
+`go` directive in `go.mod` to that version but does not re-render the workflow;
+the already-rendered workflow picks up the recorded value on a later `update`
+or `apply --with ci_github`. `build_tool` in the
+`makefile` template is the documented record-only example: it is validated and
+stored but intentionally has no consumer.
 
 On a failed `apply --lang go` against a project without `go.mod`, the first
 content snapshot of the created `go.mod` is authoritative, so a later command
