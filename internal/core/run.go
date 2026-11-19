@@ -187,10 +187,10 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 	}
 	if rc.Update {
 		plan.Tasks = managedWriteTasks(plan.Tasks)
-		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel)
+		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel, rc.Update)
 	} else if !rc.Force {
 		// `apply` skips detached paths unless --force re-manages them.
-		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel)
+		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel, rc.Update)
 	}
 
 	// 4. Build Task Context & Validate Schemas
@@ -346,8 +346,10 @@ func managedWriteTasks(plan []types.Task) []types.Task {
 // does not list a task the real run skips. Tasks without a known managed output
 // path are kept; the write path performs its own execution-level guard.
 // projectRel is the project's slash-separated path relative to the manifest
-// root ("." for the root project).
-func filterUnmanagedTasks(plan []types.Task, m *types.Manifest, projectRel string) []types.Task {
+// root ("." for the root project). update reports that the path stays unmanaged
+// and names the documented apply --force re-manage route, because update never
+// re-manages a detached path, not even with --force.
+func filterUnmanagedTasks(plan []types.Task, m *types.Manifest, projectRel string, update bool) []types.Task {
 	if m == nil || len(m.UnmanagedFiles) == 0 {
 		return plan
 	}
@@ -365,12 +367,25 @@ func filterUnmanagedTasks(plan []types.Task, m *types.Manifest, projectRel strin
 		}
 		key := filepath.ToSlash(filepath.Clean(path.Join(projectRel, w.ManagedOutputPath())))
 		if _, skipped := unmanaged[key]; skipped {
-			fmt.Fprintf(os.Stderr, "⚠️  Skipping unmanaged %s; use --force to manage it again\n", key)
+			fmt.Fprint(os.Stderr, unmanagedSkipMessage(key, update))
 			continue
 		}
 		out = append(out, t)
 	}
 	return out
+}
+
+// unmanagedSkipMessage is the plan-time warning for a detached path.
+// `apply` accepts --force, so it can point at that flag; `update` never
+// re-manages a detached path, so repeating "use --force" there is false advice.
+func unmanagedSkipMessage(key string, update bool) string {
+	if update {
+		return fmt.Sprintf(
+			"⚠️  Skipping unmanaged %s; it remains unmanaged. Re-manage it with 'scbake apply --force' using the same selector.\n",
+			key,
+		)
+	}
+	return fmt.Sprintf("⚠️  Skipping unmanaged %s; use --force to manage it again\n", key)
 }
 
 // prepareRunTransaction initializes the transaction manager for a run. A dry

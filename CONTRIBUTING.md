@@ -54,7 +54,7 @@ Useful commands:
 | `go vet ./...` | Vet checks |
 | `go fmt ./...` | Format |
 | `go generate ./...` | Regenerate the embedded SPDX license data |
-| `./scbake list` | Run the built binary |
+| `./scbake list langs` | Run the built binary |
 
 ## Code standards
 

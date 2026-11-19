@@ -74,7 +74,7 @@ rm -rf my-backend
 
 ## Create Other Projects
 
-### Python (Spring Boot) Backend
+### Java (Spring Boot) Backend
 
 ```bash
 ./scbake new my-api --lang spring --with makefile,ci_github,maven_linter
