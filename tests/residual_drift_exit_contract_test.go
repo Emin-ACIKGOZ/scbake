@@ -31,7 +31,7 @@ func appendLine(t *testing.T, path, line string) {
 // TestResidualDriftExitContract pins the documented exit contract: update and
 // drift --repair exit 0 when they complete with residual drift, while drift is
 // the authoritative gate and accept clears an intentional edit.
-func TestResidualDriftExitContract(t *testing.T) {
+func TestResidualDriftExitContract(t *testing.T) { //nolint:cyclop // multi-command exit contract
 	work := t.TempDir()
 	t.Chdir(work)
 
@@ -76,5 +76,11 @@ func TestResidualDriftExitContract(t *testing.T) {
 	}
 	if !strings.Contains(out, "still drifted") {
 		t.Errorf("drift --repair should report residual drift, output:\n%s", out)
+	}
+	// The repair completed with exit 0, but the tree is still dirty: drift is
+	// the authoritative gate.
+	out, err = runCLI("drift")
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+		t.Fatalf("drift should still fail after a residual repair, got err=%v\n%s", err, out)
 	}
 }
