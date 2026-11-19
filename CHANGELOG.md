@@ -4,6 +4,20 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.16.16] - 2026-11-19
+
+### Bug Fixes
+
+- **cli:** Reject unknown conflict-strategy values early
+
+### Documentation
+
+- **cli:** List merge in conflict-strategy references
+
+### Testing
+
+- **cli:** Prove invalid strategies run no command
+
 ## [0.16.15] - 2026-11-19
 
 ### Bug Fixes
