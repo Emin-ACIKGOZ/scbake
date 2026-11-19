@@ -486,6 +486,9 @@ func TestLookupPath_RejectsEscapingPaths(t *testing.T) {
 		{name: "escape to cache root", registryName: "acme", tplPath: "../outside-registry.tpl"},
 		{name: "escape out of cache", registryName: "acme", tplPath: "../../outside-cache.tpl"},
 		{name: "escape after cleaning", registryName: "acme", tplPath: "templates/../../outside-registry.tpl"},
+		// Absolute inputs already failed on the baseline because filepath.Join
+		// relativizes a later absolute element; these rows pin the explicit
+		// contract rather than a pre-fix escape.
 		{name: "absolute path", registryName: "acme", tplPath: filepath.Join(base, "outside-cache.tpl")},
 		{name: "absolute root path", registryName: "acme", tplPath: "/etc/passwd"},
 		{name: "current directory", registryName: "acme", tplPath: "."},
