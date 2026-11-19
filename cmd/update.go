@@ -33,6 +33,9 @@ Paths detached with 'scbake unmanage' stay unmanaged: update does not re-manage
 them, not even with --force. Re-manage one by running 'scbake apply --force'
 with the same language/template selection and path.`,
 	Args: cobra.MaximumNArgs(1),
+	PreRunE: func(*cobra.Command, []string) error {
+		return types.ValidateConflictStrategy(updateConflictStrategyFlag)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		manifestPathArg := "."
 		targetPath := "."
