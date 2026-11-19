@@ -1045,6 +1045,9 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 			key := managedFilesKey(tc, absPath, relPath)
 			return recordCanonicalWrite(tc, key, HashContent(existing), existing)
 		}
+		// The block is present but the file also carries user rules. It stays
+		// user-owned; say so rather than silently reporting a clean tree.
+		warnInternalStateUnmanaged(tc, relPath)
 		return nil
 	}
 

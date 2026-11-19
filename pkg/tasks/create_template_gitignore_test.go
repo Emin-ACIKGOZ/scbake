@@ -791,6 +791,61 @@ func TestEnsureInternalStateAdoptsLegacyBlock(t *testing.T) {
 	}
 }
 
+// TestEnsureInternalStateAdoptsCRLFLegacyBlock is the Windows-created variant
+// of the adoption case: the canonical block is compared EOL-insensitively.
+func TestEnsureInternalStateAdoptsCRLFLegacyBlock(t *testing.T) {
+	root := t.TempDir()
+	block := strings.ReplaceAll(string(appendInternalStateIgnore(nil)), "\n", "\r\n")
+	if err := os.WriteFile(filepath.Join(root, fileutil.GitIgnore), []byte(block), fileutil.FilePerms); err != nil {
+		t.Fatalf("seed legacy .gitignore: %v", err)
+	}
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+	manifest := &types.Manifest{}
+	tc := types.TaskContext{TargetPath: root, Manifest: manifest, Tx: tx}
+
+	if err := ensureInternalStateIgnored(tc, root); err != nil {
+		t.Fatalf("ensureInternalStateIgnored() failed: %v", err)
+	}
+	if got, want := manifest.ManagedFiles[fileutil.GitIgnore], HashContent([]byte(block)); got != want {
+		t.Fatalf("CRLF legacy block not adopted: managed hash %q, want %q", got, want)
+	}
+}
+
+// TestEnsureInternalStateWarnsForUserRules covers the block-plus-rules case:
+// the file is not owned, so it must stay unmanaged and warn instead of
+// silently producing a false-clean drift result.
+func TestEnsureInternalStateWarnsForUserRules(t *testing.T) {
+	root := t.TempDir()
+	content := "node_modules/\n" + string(appendInternalStateIgnore(nil))
+	if err := os.WriteFile(filepath.Join(root, fileutil.GitIgnore), []byte(content), fileutil.FilePerms); err != nil {
+		t.Fatalf("seed .gitignore: %v", err)
+	}
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+	manifest := &types.Manifest{}
+	tc := types.TaskContext{TargetPath: root, Manifest: manifest, Tx: tx}
+
+	out := captureStderr(t, func() {
+		if err := ensureInternalStateIgnored(tc, root); err != nil {
+			t.Fatalf("ensureInternalStateIgnored() failed: %v", err)
+		}
+	})
+	if _, ok := manifest.ManagedFiles[fileutil.GitIgnore]; ok {
+		t.Fatalf("user-owned .gitignore was recorded as managed: %v", manifest.ManagedFiles)
+	}
+	if got := readGitIgnore(t, root); got != content {
+		t.Fatalf(".gitignore was rewritten: %q", got)
+	}
+	if !strings.Contains(out, "left the file unmanaged") {
+		t.Fatalf("block-plus-rules case did not warn:\n%s", out)
+	}
+}
+
 // TestWriteBaseShadow_LeavesUserGitIgnoreUnmanaged covers the other half of the
 // issue #250 policy: a pre-existing .gitignore that scbake only appends to stays
 // user-owned. Recording it as managed would let a later apply overwrite the
