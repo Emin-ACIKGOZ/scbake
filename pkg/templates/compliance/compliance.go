@@ -113,14 +113,14 @@ var _ interface{ WritesManagedFile() bool } = (*LicenseTask)(nil)
 // by Validate and Execute so the preview reports the real decision.
 func licenseRender(tc types.TaskContext) (text string, skip bool, err error) {
 	if tc.Manifest.Metadata == nil {
-		return "", false, errors.New("missing compliance metadata (license and copyright_holder) in manifest")
+		return "", false, errors.New("missing compliance metadata: --license and --copyright-holder are not recorded in the manifest")
 	}
 
 	licenseID := tc.Manifest.Metadata["license"]
 	holders := tc.Manifest.Metadata["copyright_holder"]
 
 	if licenseID == "" || holders == "" {
-		return "", false, errors.New("explicit license and copyright_holder are required for the compliance template")
+		return "", false, errors.New("explicit --license and --copyright-holder are required for the compliance template")
 	}
 
 	// During update/repair, a clean managed LICENSE is already reconciled. Skip

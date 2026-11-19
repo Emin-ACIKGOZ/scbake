@@ -138,6 +138,16 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	if newLangFlag == "" && len(newWithFlag) == 0 {
 		return nil, "", core.ErrNoSelection
 	}
+	// The compliance template cannot generate LICENSE without both values.
+	// Validate here, before bootstrapProjectDir creates the directory, so a
+	// missing flag is an argument error rather than a late task failure that
+	// has to clean up a partially written project.
+	if containsTemplate(newWithFlag, "compliance") {
+		license, copyrightHolder := core.ComplianceMetadata(newLicenseFlag, newCopyrightHolderFlag, setVars)
+		if err := core.CheckCompliancePrerequisites(license, copyrightHolder); err != nil {
+			return nil, "", err
+		}
+	}
 	// Check the language toolchain before the directory exists, so a missing
 	// binary (e.g. go) does not leave a directory to be cleaned up. A dry run
 	// writes nothing, so it is left to core to report the missing tool as a
@@ -161,7 +171,7 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	// nearest existing ancestor until then) rather than "." so validation and
 	// the post-chdir apply share one skip/identity decision. An existing work
 	// tree needs no identity because the template will be skipped.
-	if containsGitTemplate(newWithFlag) {
+	if containsTemplate(newWithFlag, "git") {
 		if err := core.CheckGitPrerequisites(projectName); err != nil {
 			return nil, "", err
 		}
@@ -280,10 +290,10 @@ func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporte
 
 const maxKeyValueParts = 2
 
-// containsGitTemplate reports whether the selection includes the git template.
-func containsGitTemplate(names []string) bool {
-	for _, name := range names {
-		if name == "git" {
+// containsTemplate reports whether name appears in the template selection.
+func containsTemplate(names []string, name string) bool {
+	for _, candidate := range names {
+		if candidate == name {
 			return true
 		}
 	}

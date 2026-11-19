@@ -44,6 +44,10 @@ const legacyRootTemplate = "root-templates"
 // initial commit.
 const gitTemplateName = "git"
 
+// complianceTemplateName is the tooling template whose LICENSE task needs
+// explicit license metadata.
+const complianceTemplateName = "compliance"
+
 // RunContext holds the flags and arguments for a single execution run.
 type RunContext struct {
 	LangFlag   string
@@ -101,10 +105,13 @@ type manifestChanges struct {
 
 // RunApply orchestrates the template application process.
 func RunApply(rc RunContext, reporter types.Reporter) error {
-	// Git prerequisites are checked before the root lock so a missing identity
-	// or a skip decision fails before lock acquisition creates .scbake. The
-	// check is read-only and needs only the target path.
+	// Template prerequisites are checked before the root lock so a missing
+	// identity, skip decision, or required metadata fails before lock
+	// acquisition creates .scbake or any task writes. The checks are read-only.
 	if err := preflightGit(rc); err != nil {
+		return err
+	}
+	if err := preflightCompliance(rc); err != nil {
 		return err
 	}
 	return withRootLock(rc, func() error {
@@ -230,6 +237,15 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 	lang, withTemplates, relPath, err := resolveUpdateSelection(m, rootPath, rc.TargetPath)
 	if err != nil {
 		return err
+	}
+	// A manifest that records the compliance template but lost its metadata
+	// must fail before the plan executes, the same invariant apply enforces.
+	// Normally this is unreachable because a successful apply recorded both
+	// values, but a hand-edited or truncated manifest can reach it.
+	if containsTemplate(withTemplates, complianceTemplateName) {
+		if err := CheckCompliancePrerequisites(m.Metadata["license"], m.Metadata["copyright_holder"]); err != nil {
+			return err
+		}
 	}
 	if lang == "" && len(withTemplates) == 0 {
 		return fmt.Errorf("%s records no templates for %q; nothing to update", fileutil.ManifestFileName, rc.ManifestPathArg)
@@ -995,6 +1011,57 @@ func preflightGit(rc RunContext) error {
 	}
 	// One shared skip/identity decision with `new` validation and the handler.
 	return CheckGitPrerequisites(rc.TargetPath)
+}
+
+// ComplianceMetadata returns the license and copyright holder a compliance run
+// will record. --set values override the dedicated flags, matching the merge
+// buildTaskContext performs.
+func ComplianceMetadata(license, copyrightHolder string, setVars map[string]string) (string, string) {
+	if value, ok := setVars["license"]; ok {
+		license = value
+	}
+	if value, ok := setVars["copyright_holder"]; ok {
+		copyrightHolder = value
+	}
+	return license, copyrightHolder
+}
+
+// CheckCompliancePrerequisites verifies the metadata the compliance template
+// needs before the caller mutates the filesystem. The error names the CLI flags
+// rather than the manifest fields so the fix is actionable.
+func CheckCompliancePrerequisites(license, copyrightHolder string) error {
+	if license != "" && copyrightHolder != "" {
+		return nil
+	}
+	return errors.New("explicit --license and --copyright-holder are required for the compliance template")
+}
+
+// preflightCompliance enforces the compliance template's required metadata
+// before RunApply acquires the root lock, so a missing value fails before any
+// write. `apply` may reuse metadata recorded by an earlier compliance run; the
+// manifest is read here only to decide that, while runApply performs the
+// authoritative load under the lock. `update` reads recorded metadata and never
+// takes these flags, so it is exempt.
+func preflightCompliance(rc RunContext) error {
+	if rc.Update || !containsTemplate(rc.WithFlag, complianceTemplateName) {
+		return nil
+	}
+	license, copyrightHolder := ComplianceMetadata(rc.License, rc.CopyrightHolder, rc.SetVars)
+	if license == "" || copyrightHolder == "" {
+		m, _, err := loadManifestForRun(rc)
+		if err != nil {
+			return err
+		}
+		if m.Metadata != nil {
+			if license == "" {
+				license = m.Metadata["license"]
+			}
+			if copyrightHolder == "" {
+				copyrightHolder = m.Metadata["copyright_holder"]
+			}
+		}
+	}
+	return CheckCompliancePrerequisites(license, copyrightHolder)
 }
 
 // containsTemplate reports whether name appears in the template selection.
