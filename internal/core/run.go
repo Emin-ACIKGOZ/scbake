@@ -22,7 +22,6 @@ import (
 	"scbake/pkg/templates"
 	"scbake/pkg/templates/compliance"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -234,21 +233,10 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 		return err
 	}
 	if lang == "" && len(withTemplates) == 0 {
-		// Only a target that is the manifest root is a monorepo root. From a
-		// subdirectory the recorded paths are still useful context, but saying
-		// "this is a monorepo root" would misdescribe the target.
-		if paths := projectPaths(m); relPath == "." && len(paths) > 0 {
-			safePaths := make([]string, 0, len(paths))
-			for _, p := range paths {
-				// Quote each path so a hand-edited manifest path with spaces stays
-				// copy-pasteable as a single argument.
-				safePaths = append(safePaths, strconv.Quote(p))
+		if relPath == "." {
+			if err := monorepoUpdateHint(m, rc.ManifestPathArg); err != nil {
+				return err
 			}
-			return fmt.Errorf(
-				"%s records no templates for %q; this is a monorepo root. "+
-					"Run 'scbake update <project>' from the manifest root (add "+
-					"--allow-ancestor-search outside a Git work tree) for one of: %s",
-				fileutil.ManifestFileName, rc.ManifestPathArg, strings.Join(safePaths, ", "))
 		}
 		return fmt.Errorf("%s records no templates for %q; nothing to update", fileutil.ManifestFileName, rc.ManifestPathArg)
 	}
@@ -306,7 +294,7 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 
 	var lang string
 	for _, p := range m.Projects {
-		if p.Path == rel {
+		if canonicalProjectRel(p.Path) == rel {
 			lang = p.Language
 			break
 		}
@@ -314,11 +302,57 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 
 	var with []string
 	for _, t := range m.Templates {
-		if t.Path == rel && t.Name != legacyRootTemplate {
+		if canonicalProjectRel(t.Path) == rel && t.Name != legacyRootTemplate {
 			with = append(with, t.Name)
 		}
 	}
 	return lang, deduplicateTemplates(with), rel, nil
+}
+
+// monorepoUpdateHint reports the recorded subprojects when a root update has no
+// root templates. Only validated paths are placed in the suggested command;
+// invalid recorded paths are listed as ignored so manifest data cannot inject a
+// shell command.
+func monorepoUpdateHint(m *types.Manifest, targetArg string) error {
+	paths := projectPaths(m)
+	if len(paths) == 0 {
+		return nil
+	}
+	var valid, invalid []string
+	for _, p := range paths {
+		if err := validateProjectPath(p); err != nil {
+			invalid = append(invalid, shellQuote(util.Sanitize(p)))
+			continue
+		}
+		valid = append(valid, shellQuote(p))
+	}
+	msg := fmt.Sprintf("%s records no templates for %q; this is a monorepo root",
+		fileutil.ManifestFileName, targetArg)
+	if len(valid) > 0 {
+		msg += fmt.Sprintf(". Run 'scbake update <project>' from the manifest root "+
+			"(add --allow-ancestor-search outside a Git work tree) for one of: %s",
+			strings.Join(valid, ", "))
+	}
+	if len(invalid) > 0 {
+		msg += ". Invalid recorded paths are ignored: " + strings.Join(invalid, ", ")
+	}
+	return errors.New(msg)
+}
+
+// canonicalProjectRel returns the cleaned, slash-separated project path, or ""
+// for an empty entry. It is used consistently for selection and hint output.
+func canonicalProjectRel(p string) string {
+	if p == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(p))
+}
+
+// shellQuote renders path as one POSIX single-quoted shell word. Validated
+// project paths cannot contain a quote, but escaping keeps the helper safe if a
+// caller changes.
+func shellQuote(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 }
 
 // projectPaths returns the distinct, sorted project paths recorded in the
@@ -330,8 +364,8 @@ func projectPaths(m *types.Manifest) []string {
 	seen := make(map[string]struct{}, len(m.Projects))
 	paths := make([]string, 0, len(m.Projects))
 	for _, p := range m.Projects {
-		clean := filepath.ToSlash(filepath.Clean(p.Path))
-		if p.Path == "" || clean == "." {
+		clean := canonicalProjectRel(p.Path)
+		if clean == "" || clean == "." {
 			continue
 		}
 		if _, ok := seen[clean]; ok {

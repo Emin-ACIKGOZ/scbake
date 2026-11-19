@@ -81,7 +81,7 @@ func TestRootUpdateNamesMonorepoProjects(t *testing.T) {
 	if !ok || exitErr.ExitCode() == 0 {
 		t.Fatalf("root update should exit non-zero, got err=%v\n%s", err, out)
 	}
-	for _, want := range []string{"monorepo root", "scbake update <project>", "from the manifest root", "--allow-ancestor-search", `"services/api"`, `"apps/web"`} {
+	for _, want := range []string{"monorepo root", "scbake update <project>", "from the manifest root", "--allow-ancestor-search", `'services/api'`, `'apps/web'`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("root update error does not contain %q:\n%s", want, out)
 		}
@@ -136,5 +136,76 @@ func TestRootUpdateSanitizesManifestPaths(t *testing.T) {
 	}
 	if !strings.Contains(out, `services/\x1b[31mapi`) {
 		t.Errorf("output does not contain the escaped project path:\n%s", out)
+	}
+}
+
+// TestRootUpdateDoesNotSuggestShellMetacharacterPaths ensures a malicious or
+// corrupt manifest cannot place command substitution into the suggested
+// command. Invalid paths are reported as ignored, single-quoted.
+func TestRootUpdateDoesNotSuggestShellMetacharacterPaths(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	body := `scbake_version = "v0.3.0"
+
+[[projects]]
+  name = "evil"
+  path = "$(touch PWNED)"
+  language = "go"
+
+[[projects]]
+  name = "api"
+  path = "services/api"
+  language = "go"
+`
+	if err := os.WriteFile(filepath.Join(work, "scbake.toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	out, err := runCLI("update")
+	if err == nil {
+		t.Fatalf("root update should exit non-zero:\n%s", out)
+	}
+	if strings.Contains(out, `"$(touch PWNED)"`) {
+		t.Errorf("invalid path was suggested in a double-quoted command:\n%s", out)
+	}
+	if !strings.Contains(out, `'$(touch PWNED)'`) {
+		t.Errorf("invalid path was not reported as an ignored single-quoted value:\n%s", out)
+	}
+	if !strings.Contains(out, `'services/api'`) {
+		t.Errorf("valid project was not suggested:\n%s", out)
+	}
+}
+
+// TestRootUpdateNormalizesRecordedPaths keeps the hint and selection consistent
+// for hand-edited non-clean relative paths.
+func TestRootUpdateNormalizesRecordedPaths(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	body := `scbake_version = "v0.3.0"
+
+[[projects]]
+  name = "api"
+  path = "./services/api"
+  language = "go"
+
+[[templates]]
+  name = "makefile"
+  path = "./services/api"
+`
+	if err := os.WriteFile(filepath.Join(work, "scbake.toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(work, "services", "api"), 0o750); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	out, err := runCLI("update")
+	if err == nil {
+		t.Fatalf("root update should report the monorepo hint, got success:\n%s", out)
+	}
+	if !strings.Contains(out, `'services/api'`) {
+		t.Errorf("hint did not use the cleaned path:\n%s", out)
+	}
+	dry, err := runCLI("update", "services/api", "--allow-ancestor-search", "--dry-run")
+	if err != nil {
+		t.Fatalf("suggested cleaned target did not select the project: %v\n%s", err, dry)
 	}
 }
