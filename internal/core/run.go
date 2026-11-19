@@ -1080,11 +1080,6 @@ func preflightCompliance(rc RunContext) error {
 	if rc.Update || !containsTemplate(rc.WithFlag, complianceTemplateName) {
 		return nil
 	}
-	if !rc.DryRun {
-		if err := CheckLangPrerequisites(rc.LangFlag); err != nil {
-			return err
-		}
-	}
 	license, holder := ComplianceMetadata(rc.License, rc.CopyrightHolder, rc.SetVars)
 	_, setLicense := rc.SetVars["license"]
 	_, setHolder := rc.SetVars["copyright_holder"]
@@ -1092,6 +1087,11 @@ func preflightCompliance(rc RunContext) error {
 	m, root, err := loadManifestForRun(rc)
 	if err != nil {
 		return err
+	}
+	if !rc.DryRun {
+		if err := CheckLangPrerequisites(rc.LangFlag); err != nil {
+			return err
+		}
 	}
 	if err := validateApplySelection(rc); err != nil {
 		return err

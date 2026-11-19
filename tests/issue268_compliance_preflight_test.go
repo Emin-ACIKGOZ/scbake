@@ -465,3 +465,25 @@ func TestIssue268ApplyToolchainErrorPrecedesCompliance(t *testing.T) {
 		t.Errorf("compliance preflight masked the toolchain error:\n%s", out)
 	}
 }
+
+// TestIssue268ApplyLoadErrorPrecedesToolchain keeps the manifest read ahead of
+// the toolchain preflight for a real language.
+func TestIssue268ApplyLoadErrorPrecedesToolchain(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	if err := os.WriteFile(filepath.Join(work, "scbake.toml"), []byte("scbake_version = \"v0.3.0\"\n[[projects]\n"), 0o600); err != nil {
+		t.Fatalf("write corrupt manifest: %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	out, err := runCLI("apply", "--lang", "svelte", "--with", "compliance")
+	if err == nil {
+		t.Fatalf("apply with a corrupt manifest succeeded:\n%s", out)
+	}
+	line := dryRunErrorLine(out)
+	if !strings.Contains(line, "load") && !strings.Contains(line, "decode") {
+		t.Errorf("manifest load error did not win:\n%s", out)
+	}
+	if strings.Contains(line, "npm") {
+		t.Errorf("toolchain preflight masked the manifest error:\n%s", out)
+	}
+}
