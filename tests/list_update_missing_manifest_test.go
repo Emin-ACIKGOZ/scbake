@@ -67,6 +67,10 @@ func TestRootUpdateNamesMonorepoProjects(t *testing.T) {
 [[projects]]
   name = "root"
   path = "."
+
+[[projects]]
+  name = "dot-slash"
+  path = "./"
 `
 	if err := os.WriteFile(filepath.Join(work, "scbake.toml"), []byte(body), 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -82,8 +86,8 @@ func TestRootUpdateNamesMonorepoProjects(t *testing.T) {
 			t.Errorf("root update error does not contain %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "for one of: .") {
-		t.Errorf("root update suggested the root project as a subproject target:\n%s", out)
+	if strings.Contains(out, "for one of: .") || strings.Contains(out, `"./"`) {
+		t.Errorf("root update suggested a root-equivalent project as a target:\n%s", out)
 	}
 }
 

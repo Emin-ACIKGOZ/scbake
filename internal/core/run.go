@@ -248,7 +248,7 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 				"%s records no templates for %q; this is a monorepo root. "+
 					"Run 'scbake update <project>' from the manifest root (add "+
 					"--allow-ancestor-search outside a Git work tree) for one of: %s",
-				fileutil.ManifestFileName, util.Sanitize(rc.ManifestPathArg), strings.Join(safePaths, ", "))
+				fileutil.ManifestFileName, rc.ManifestPathArg, strings.Join(safePaths, ", "))
 		}
 		return fmt.Errorf("%s records no templates for %q; nothing to update", fileutil.ManifestFileName, rc.ManifestPathArg)
 	}
@@ -330,14 +330,15 @@ func projectPaths(m *types.Manifest) []string {
 	seen := make(map[string]struct{}, len(m.Projects))
 	paths := make([]string, 0, len(m.Projects))
 	for _, p := range m.Projects {
-		if p.Path == "" || p.Path == "." {
+		clean := filepath.ToSlash(filepath.Clean(p.Path))
+		if p.Path == "" || clean == "." {
 			continue
 		}
-		if _, ok := seen[p.Path]; ok {
+		if _, ok := seen[clean]; ok {
 			continue
 		}
-		seen[p.Path] = struct{}{}
-		paths = append(paths, p.Path)
+		seen[clean] = struct{}{}
+		paths = append(paths, clean)
 	}
 	sort.Strings(paths)
 	return paths
