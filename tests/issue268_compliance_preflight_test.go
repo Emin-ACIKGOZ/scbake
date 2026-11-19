@@ -149,7 +149,7 @@ func TestIssue268UpdateFailsBeforeExecutingWhenMetadataMissing(t *testing.T) { /
 	if strings.Contains(output, "Executing plan") {
 		t.Errorf("update executed the plan before validating metadata:\n%s", output)
 	}
-	for _, want := range []string{"--license", "--copyright-holder", "scbake apply --with compliance"} {
+	for _, want := range []string{"--license", "--copyright-holder", "scbake apply --with compliance", "--allow-ancestor-search"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("error does not contain %q:\n%s", want, output)
 		}
@@ -220,7 +220,53 @@ func TestIssue268UnknownLanguagePrecedesCompliance(t *testing.T) {
 	if strings.Contains(line, "--license") {
 		t.Errorf("compliance preflight masked the unknown-language error:\n%s", out)
 	}
+	if strings.Contains(out, "Creating directory") {
+		t.Errorf("unknown language was rejected after directory creation:\n%s", out)
+	}
 	if _, statErr := os.Stat(filepath.Join(work, "demo")); !os.IsNotExist(statErr) {
 		t.Errorf("rejected new left a directory behind (stat err: %v)", statErr)
+	}
+}
+
+// TestIssue268UpdateAllowsUnmanagedLicense keeps update viable when the LICENSE
+// writer will not run because LICENSE was detached.
+func TestIssue268UpdateAllowsUnmanagedLicense(t *testing.T) {
+	root := t.TempDir()
+	skipIfAncestorHasMarker(t, root)
+	t.Chdir(root)
+	if out, err := runCLI("new", "proj", "--with", "compliance",
+		"--license", "MIT", "--copyright-holder", "Test Corp"); err != nil {
+		t.Fatalf("prepare project: %v\n%s", err, out)
+	}
+	project := filepath.Join(root, "proj")
+	t.Chdir(project)
+	if out, err := runCLI("unmanage", "LICENSE"); err != nil {
+		t.Fatalf("unmanage LICENSE: %v\n%s", err, out)
+	}
+
+	manifestPath := filepath.Join(project, "scbake.toml")
+	data, err := os.ReadFile(manifestPath) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var kept []string
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "license =") ||
+			strings.HasPrefix(trimmed, "copyright_holder =") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if err := os.WriteFile(manifestPath, []byte(strings.Join(kept, "\n")), 0o600); err != nil { //nolint:gosec // test-controlled path
+		t.Fatalf("rewrite manifest: %v", err)
+	}
+
+	out, err := runCLI("update")
+	if err != nil {
+		t.Fatalf("update should skip the unmanaged LICENSE, got %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Skipping unmanaged LICENSE") {
+		t.Errorf("update did not report the unmanaged LICENSE:\n%s", out)
 	}
 }

@@ -242,12 +242,12 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 	// must fail before the plan executes, the same invariant apply enforces.
 	// Normally this is unreachable because a successful apply recorded both
 	// values, but a hand-edited or truncated manifest can reach it.
-	if containsTemplate(withTemplates, complianceTemplateName) {
+	if containsTemplate(withTemplates, complianceTemplateName) && !listsUnmanagedKey(m, "LICENSE") {
 		if err := CheckCompliancePrerequisites(m.Metadata["license"], m.Metadata["copyright_holder"]); err != nil {
 			return fmt.Errorf(
 				"compliance is recorded but its metadata is missing; from the affected "+
 					"project directory run 'scbake apply --with compliance --license <id> "+
-					"--copyright-holder <name>': %w", err)
+					"--copyright-holder <name> --allow-ancestor-search': %w", err)
 		}
 	}
 	if lang == "" && len(withTemplates) == 0 {
