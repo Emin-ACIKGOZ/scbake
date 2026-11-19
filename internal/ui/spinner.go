@@ -30,7 +30,6 @@ type SpinnerReporter struct {
 	activeIndex   int
 	activeTotal   int
 	done          chan struct{}
-	spinnerCtx    context.Context
 	spinnerCancel context.CancelFunc
 	// spinnerStopped is closed by the animation goroutine when it exits. TaskEnd
 	// waits on it so no spinner write can happen after TaskEnd returns.
@@ -77,7 +76,6 @@ func (r *SpinnerReporter) TaskStart(desc string, curr, total int) {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 
-	r.spinnerCtx = ctx
 	r.spinnerCancel = cancel
 	r.done = done
 	r.spinnerStopped = stopped
@@ -117,7 +115,6 @@ func (r *SpinnerReporter) TaskEnd(err error) {
 	r.mu.Lock()
 	done := r.done
 	stopped := r.spinnerStopped
-	ctx := r.spinnerCtx
 	cancel := r.spinnerCancel
 	desc := r.activeDesc
 	index := r.activeIndex
@@ -126,7 +123,6 @@ func (r *SpinnerReporter) TaskEnd(err error) {
 	// then observes nil and returns without touching the closed channel.
 	r.done = nil
 	r.spinnerStopped = nil
-	r.spinnerCtx = nil
 	r.spinnerCancel = nil
 	r.mu.Unlock()
 
@@ -134,17 +130,14 @@ func (r *SpinnerReporter) TaskEnd(err error) {
 		return
 	}
 
-	// Signal the goroutine to stop and join it so it cannot write after TaskEnd
-	// returns. The context timeout bounds the wait if the goroutine is stuck on
-	// output.
+	// Signal the goroutine with both mechanisms, then join it so it cannot write
+	// after TaskEnd returns. Canceling first makes the select observe ctx.Done
+	// at its next iteration; the join still waits for any in-flight print.
 	close(done)
-	select {
-	case <-stopped:
-	case <-ctx.Done():
-	}
 	if cancel != nil {
 		cancel()
 	}
+	<-stopped
 
 	outputMux.Lock()
 	defer outputMux.Unlock()
