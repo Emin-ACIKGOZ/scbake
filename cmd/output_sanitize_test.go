@@ -624,7 +624,7 @@ func assertUnsafeNameEscapedOnce(t *testing.T, label, text string, tc unsafeProj
 	if escapedAt < 0 {
 		t.Fatalf("test vector %q has no escape", tc.escaped)
 	}
-	if strings.Contains(text, `\\`+tc.escaped[escapedAt:]) {
+	if strings.Contains(text, "\\"+tc.escaped[escapedAt:]) {
 		t.Errorf("%s double-escaped the project name; output:\n%q", label, text)
 	}
 }

@@ -173,7 +173,7 @@ func TestIssue260ListUnknownResourceSanitized(t *testing.T) { //nolint:cyclop //
 					}
 				}
 			}
-			if strings.Contains(stderr, `\\`+tc.escaped[strings.IndexByte(tc.escaped, '\\'):]) {
+			if strings.Contains(stderr, "\\"+tc.escaped[strings.IndexByte(tc.escaped, '\\'):]) {
 				t.Errorf("resource argument was double-escaped; stderr:\n%q", stderr)
 			}
 		})
