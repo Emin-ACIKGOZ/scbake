@@ -753,6 +753,13 @@ func validateProjectName(n string) error {
 	return validateIdentifier(n, "name")
 }
 
+// ValidateProjectName reports whether name is a safe project identifier. The
+// command layer uses it to reject an unsafe name before creating a directory,
+// including for template-only projects that skip language planning.
+func ValidateProjectName(name string) error {
+	return validateProjectName(name)
+}
+
 // validateProjectLanguage enforces a safe identifier for the language field,
 // which is embedded in Makefile variable names (MAKE_BUILD_COMMAND_<lang>) and
 // shell/YAML text. An empty language is allowed (it yields no build command).

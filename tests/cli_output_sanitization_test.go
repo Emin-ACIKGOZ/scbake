@@ -28,6 +28,26 @@ func runIssue260(t *testing.T, dir string, args ...string) (stdout, stderr strin
 	return outBuf.String(), errBuf.String(), err
 }
 
+// TestIssue260NewTemplateOnlyRejectsUnsafeName closes the follow-up gap: a
+// template-only `new` skipped language planning, so an unsafe name reached the
+// filesystem. It must now be rejected before creation, with escaped output.
+func TestIssue260NewTemplateOnlyRejectsUnsafeName(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	name := "demo\u202eevil"
+
+	out, err := runCLI("new", name, "--with", "makefile")
+	if err == nil {
+		t.Fatalf("new accepted an unsafe template-only name:\n%s", out)
+	}
+	if strings.ContainsRune(out, '\u202e') {
+		t.Errorf("output contains a raw U+202E:\n%q", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(work, name)); !os.IsNotExist(statErr) {
+		t.Errorf("rejected new left a directory behind (stat err: %v)", statErr)
+	}
+}
+
 // TestIssue260ListUnknownResourceSanitized is the regression for #260: an
 // unknown `list` resource argument used to be echoed raw to stderr and the hint
 // describing valid values used to go to stdout. Both streams are asserted so

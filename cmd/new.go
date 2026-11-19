@@ -128,6 +128,26 @@ func removeFailedProject(projectName string, release func() error) error {
 	return nil
 }
 
+// validateNewTarget checks the selection and the project name before `new`
+// mutates the filesystem. Language runs already rejected an unsafe name in the
+// planner, but a template-only selection skipped that validation and could
+// create a directory with control or bidi characters.
+func validateNewTarget(projectName string) error {
+	if newLangFlag == "" && len(newWithFlag) == 0 {
+		return core.ErrNoSelection
+	}
+	// A template-only selection never reaches language planning, so validate
+	// the name here. Language runs keep the existing plan-time ordering and
+	// its cleanup-path output coverage.
+	if newLangFlag == "" {
+		if err := core.ValidateProjectName(projectName); err != nil {
+			return fmt.Errorf("invalid project name %s: %v",
+				util.Sanitize(projectName), util.SanitizeError(err))
+		}
+	}
+	return nil
+}
+
 // validateNewSelection performs every flag and override-directory check that
 // must fail before `new` mutates the filesystem (SCB-012). It returns the
 // parsed --set values and the resolved template override directory.
@@ -139,8 +159,8 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	if err := core.ValidateSetKeys(newWithFlag, newLangFlag, setVars); err != nil {
 		return nil, "", err
 	}
-	if newLangFlag == "" && len(newWithFlag) == 0 {
-		return nil, "", core.ErrNoSelection
+	if err := validateNewTarget(projectName); err != nil {
+		return nil, "", err
 	}
 	// Check the language toolchain before the directory exists, so a missing
 	// binary (e.g. go) does not leave a directory to be cleaned up. A dry run
