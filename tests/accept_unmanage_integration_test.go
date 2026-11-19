@@ -266,6 +266,10 @@ func TestAcceptRejectsUnsafeInputs(t *testing.T) {
 	parent := filepath.Dir(project)
 	outside := filepath.Join(parent, "outside.go")
 	mustWrite(t, outside, "package outside\n")
+	nested := filepath.Join(project, "nested")
+	if err := os.MkdirAll(nested, 0o750); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
 	manifestBefore := mustRead(t, filepath.Join(project, "scbake.toml"))
 
 	out, err := runCLI("accept", "go.mod")
@@ -278,7 +282,16 @@ func TestAcceptRejectsUnsafeInputs(t *testing.T) {
 	requireAcceptFailure(t, out, err, "outside the project root")
 
 	out, err = runCLI("accept", ".")
-	requireAcceptFailure(t, out, err, "outside the project root")
+	requireAcceptFailure(t, out, err, "managed file path is required")
+	if strings.Contains(out, "outside the project root") {
+		t.Fatalf("accept . classified the project root as outside:\n%s", out)
+	}
+
+	out, err = runCLI("accept", project)
+	requireAcceptFailure(t, out, err, "managed file path is required")
+
+	out, err = runCLI("accept", "nested")
+	requireAcceptFailure(t, out, err, "not recorded in [managed_files]")
 
 	mainGo := filepath.Join(project, "main.go")
 	backup := filepath.Join(project, "main.go.bak")
@@ -422,7 +435,16 @@ func TestUnmanageIdempotentAndAtomic(t *testing.T) {
 	manifestPath := filepath.Join(project, "scbake.toml")
 	manifestBefore := mustRead(t, manifestPath)
 
-	out, err := runCLI("unmanage", "main.go", "go.mod")
+	out, err := runCLI("unmanage", ".")
+	requireAcceptFailure(t, out, err, "managed file path is required")
+	if strings.Contains(out, "outside the project root") {
+		t.Fatalf("unmanage . classified the project root as outside:\n%s", out)
+	}
+
+	out, err = runCLI("unmanage", project)
+	requireAcceptFailure(t, out, err, "managed file path is required")
+
+	out, err = runCLI("unmanage", "main.go", "go.mod")
 	requireAcceptFailure(t, out, err, "not recorded in [managed_files]")
 	if got := mustRead(t, manifestPath); got != manifestBefore {
 		t.Fatalf("atomic unmanage mutated scbake.toml")
