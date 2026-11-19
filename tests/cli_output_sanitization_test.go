@@ -32,7 +32,7 @@ func runIssue260(t *testing.T, dir string, args ...string) (stdout, stderr strin
 // unknown `list` resource argument used to be echoed raw to stderr and the hint
 // describing valid values used to go to stdout. Both streams are asserted so
 // the split cannot regress under `2>/dev/null`.
-func TestIssue260ListUnknownResourceSanitized(t *testing.T) {
+func TestIssue260ListUnknownResourceSanitized(t *testing.T) { //nolint:cyclop // table-driven stream contract
 	tests := []struct {
 		name    string
 		arg     string
