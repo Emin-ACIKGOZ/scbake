@@ -1083,9 +1083,6 @@ func preflightCompliance(rc RunContext) error {
 	license, holder := ComplianceMetadata(rc.License, rc.CopyrightHolder, rc.SetVars)
 	_, setLicense := rc.SetVars["license"]
 	_, setHolder := rc.SetVars["copyright_holder"]
-	if (license != "" || setLicense) && (holder != "" || setHolder) {
-		return CheckCompliancePrerequisites(license, holder)
-	}
 
 	m, root, err := loadManifestForRun(rc)
 	if err != nil {
@@ -1110,18 +1107,24 @@ func hasUnmanagedLicense(m *types.Manifest, root, target string) bool {
 	return listsUnmanagedKey(m, path.Join(rel, "LICENSE"))
 }
 
+// ValidateTemplateNames rejects unknown template selections. It is shared by
+// new and apply so a compliance preflight cannot mask a more fundamental error.
+func ValidateTemplateNames(names []string) error {
+	for _, name := range names {
+		if _, err := templates.GetHandler(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // validateApplySelection rejects an unknown language or template before the
 // compliance preflight can mask a more fundamental input error.
 func validateApplySelection(rc RunContext) error {
 	if err := ValidateLanguageName(rc.LangFlag); err != nil {
 		return err
 	}
-	for _, name := range rc.WithFlag {
-		if _, err := templates.GetHandler(name); err != nil {
-			return err
-		}
-	}
-	return nil
+	return ValidateTemplateNames(rc.WithFlag)
 }
 
 // recordedOr falls back to recorded metadata unless the user explicitly set the

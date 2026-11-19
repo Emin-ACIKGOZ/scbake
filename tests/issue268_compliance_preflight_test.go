@@ -371,3 +371,50 @@ func TestIssue268ApplyUnknownLanguagePrecedesCompliance(t *testing.T) {
 		t.Errorf("compliance preflight masked the unknown-language error:\n%s", out)
 	}
 }
+
+// TestIssue268EmptySetDoesNotDefeatUnmanagedLicense keeps the detached-LICENSE
+// skip effective even when both --set keys are supplied and one is empty.
+func TestIssue268EmptySetDoesNotDefeatUnmanagedLicense(t *testing.T) {
+	root := t.TempDir()
+	skipIfAncestorHasMarker(t, root)
+	t.Chdir(root)
+	if out, err := runCLI("new", "proj", "--with", "compliance",
+		"--license", "MIT", "--copyright-holder", "Test Corp"); err != nil {
+		t.Fatalf("prepare project: %v\n%s", err, out)
+	}
+	project := filepath.Join(root, "proj")
+	t.Chdir(project)
+	if out, err := runCLI("unmanage", "LICENSE"); err != nil {
+		t.Fatalf("unmanage LICENSE: %v\n%s", err, out)
+	}
+	out, err := runCLI("apply", "--with", "compliance",
+		"--set", "license=MIT", "--set", "copyright_holder=")
+	if err != nil {
+		t.Fatalf("apply should skip the unmanaged LICENSE, got %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Skipping unmanaged LICENSE") {
+		t.Errorf("apply did not report the unmanaged LICENSE:\n%s", out)
+	}
+}
+
+// TestIssue268NewUnknownTemplatePrecedesCompliance keeps template-name
+// precedence consistent with apply.
+func TestIssue268NewUnknownTemplatePrecedesCompliance(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+
+	out, err := runCLI("new", "demo", "--with", "bogus,compliance")
+	if err == nil {
+		t.Fatalf("new with an unknown template succeeded:\n%s", out)
+	}
+	line := dryRunErrorLine(out)
+	if !strings.Contains(line, "unknown template") {
+		t.Errorf("expected the unknown-template error, got:\n%s", out)
+	}
+	if strings.Contains(line, "--license") {
+		t.Errorf("compliance preflight masked the unknown-template error:\n%s", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(work, "demo")); !os.IsNotExist(statErr) {
+		t.Errorf("rejected new left a directory behind (stat err: %v)", statErr)
+	}
+}

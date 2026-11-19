@@ -138,7 +138,7 @@ func validateNewTarget(projectName string) error {
 	if err := core.ValidateLanguageName(newLangFlag); err != nil {
 		return err
 	}
-	return nil
+	return core.ValidateTemplateNames(newWithFlag)
 }
 
 // validateNewSelection performs every flag and override-directory check that
