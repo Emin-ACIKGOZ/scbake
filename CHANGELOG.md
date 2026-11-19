@@ -4,6 +4,23 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.16.17] - 2026-11-19
+
+### Bug Fixes
+
+- **manifest:** Reject invalid UTF-8 fields before saving
+- **manifest:** Reject invalid UTF-8 at the save boundary
+
+### Refactor
+
+- **core:** Split manifest field validation helpers
+
+### Testing
+
+- **manifest:** Skip non-UTF-8 names on unrepresentable filesystems
+- **manifest:** Narrow the platform skip and cover fields
+- **manifest:** Probe filesystem capability before skipping
+
 ## [0.16.16] - 2026-11-19
 
 ### Bug Fixes
