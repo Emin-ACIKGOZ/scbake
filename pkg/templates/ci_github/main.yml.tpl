@@ -85,9 +85,9 @@ jobs:
             {{ end }}
             
             {{ if eq .Language "spring" }}
-            # Build Spring Project using Maven Wrapper
+            # Build and Test Spring Project using Maven Wrapper
             cd {{ .Path }}
-            ./mvnw clean package -DskipTests
+            ./mvnw clean verify
             cd -
             {{ end }}
           {{ end }}
