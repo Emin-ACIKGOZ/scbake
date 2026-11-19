@@ -75,7 +75,7 @@ func TestFilterUnmanagedTasks(t *testing.T) {
 
 	m := &types.Manifest{UnmanagedFiles: []string{"main.go", "services/api/LICENSE"}}
 
-	rootPlan := filterUnmanagedTasks(plan, m, ".")
+	rootPlan := filterUnmanagedTasks(plan, m, ".", false)
 	if len(rootPlan) != 2 {
 		t.Fatalf("root filter kept %d tasks, want 2: %T", len(rootPlan), rootPlan)
 	}
@@ -83,7 +83,7 @@ func TestFilterUnmanagedTasks(t *testing.T) {
 		t.Errorf("root filter kept the wrong tasks: %T, %T", rootPlan[0], rootPlan[1])
 	}
 
-	subPlan := filterUnmanagedTasks(plan, m, "services/api")
+	subPlan := filterUnmanagedTasks(plan, m, "services/api", false)
 	if len(subPlan) != 2 {
 		t.Fatalf("subproject filter kept %d tasks, want 2: %T", len(subPlan), subPlan)
 	}
@@ -92,16 +92,39 @@ func TestFilterUnmanagedTasks(t *testing.T) {
 	}
 
 	// A differently-scoped key is a different path: no cross-project filtering.
-	other := filterUnmanagedTasks([]types.Task{create}, m, "services/other")
+	other := filterUnmanagedTasks([]types.Task{create}, m, "services/other", false)
 	if len(other) != 1 {
 		t.Errorf("filtered a same-basename task in another project")
 	}
 
-	if got := filterUnmanagedTasks(plan, nil, "."); len(got) != len(plan) {
+	if got := filterUnmanagedTasks(plan, nil, ".", false); len(got) != len(plan) {
 		t.Errorf("nil manifest filtered tasks")
 	}
-	if got := filterUnmanagedTasks(plan, &types.Manifest{}, "."); len(got) != len(plan) {
+	if got := filterUnmanagedTasks(plan, &types.Manifest{}, ".", false); len(got) != len(plan) {
 		t.Errorf("empty unmanaged list filtered tasks")
+	}
+}
+
+// TestUnmanagedSkipMessageNamesCommandSpecificRoute pins the wording: update
+// cannot re-manage a detached path, so it must not tell the user to pass a flag
+// it already has; it names the documented apply --force route instead.
+func TestUnmanagedSkipMessageNamesCommandSpecificRoute(t *testing.T) {
+	updateMsg := unmanagedSkipMessage("main.go", true)
+	if strings.Contains(updateMsg, "use --force to manage it again") {
+		t.Errorf("update message repeats the already-supplied flag: %q", updateMsg)
+	}
+	for _, want := range []string{"Skipping unmanaged main.go", "remains unmanaged", "apply --force"} {
+		if !strings.Contains(updateMsg, want) {
+			t.Errorf("update message missing %q: %q", want, updateMsg)
+		}
+	}
+
+	applyMsg := unmanagedSkipMessage("main.go", false)
+	if !strings.Contains(applyMsg, "use --force to manage it again") {
+		t.Errorf("apply message lost its --force hint: %q", applyMsg)
+	}
+	if strings.Contains(applyMsg, "remains unmanaged") {
+		t.Errorf("apply message uses update wording: %q", applyMsg)
 	}
 }
 

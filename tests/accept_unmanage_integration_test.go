@@ -639,6 +639,48 @@ func TestUpdateAndRepairNeverReManage(t *testing.T) {
 	}
 }
 
+// TestUpdateForceNeverPrintsReManageHint is the #251 regression: after
+// unmanage, update --force must not advise "use --force" (already supplied) or
+// imply the path was re-managed. It states the path stays unmanaged and names
+// apply --force as the documented re-manage route.
+func TestUpdateForceNeverPrintsReManageHint(t *testing.T) {
+	project := setupAcceptProject(t)
+	mainGo := filepath.Join(project, "main.go")
+	edited := "package main\n\nfunc main() { println(\"detached\") }\n"
+	mustWrite(t, mainGo, edited)
+	if out, err := runCLI("unmanage", "main.go"); err != nil {
+		t.Fatalf("unmanage: %v\n%s", err, out)
+	}
+
+	freezeMtime(t, mainGo)
+	out, err := runCLI("update", "--force")
+	requireAcceptSuccess(t, out, err, "update --force")
+	if strings.Contains(out, "use --force to manage it again") {
+		t.Errorf("update --force repeated the false re-manage hint:\n%s", out)
+	}
+	if !strings.Contains(out, "Skipping unmanaged main.go") {
+		t.Errorf("update --force did not report the skip:\n%s", out)
+	}
+	if !strings.Contains(out, "remains unmanaged") {
+		t.Errorf("update --force did not state that main.go stays unmanaged:\n%s", out)
+	}
+	if !strings.Contains(out, "apply --force") {
+		t.Errorf("update --force did not name apply --force as the re-manage route:\n%s", out)
+	}
+
+	assertNotRewritten(t, mainGo)
+	if got := mustRead(t, mainGo); got != edited {
+		t.Fatalf("update --force rewrote the unmanaged file:\n%s", got)
+	}
+	m := readAcceptManifest(t, project)
+	if m.ManagedFiles["main.go"] != "" {
+		t.Fatalf("update --force silently re-managed main.go")
+	}
+	if !reflect.DeepEqual(m.UnmanagedFiles, []string{"main.go"}) {
+		t.Fatalf("update --force dropped the unmanaged entry: %v", m.UnmanagedFiles)
+	}
+}
+
 // TestUpdateDryRunOmitsUnmanagedTask: the plan filter, not an execution skip,
 // keeps the dry-run preview honest.
 func TestUpdateDryRunOmitsUnmanagedTask(t *testing.T) {
