@@ -127,10 +127,10 @@ func TestMarkerlessListProjectsFlagPlumbing(t *testing.T) {
 	subDir := makeSubdir(t, monoDir, "sub")
 	t.Chdir(subDir)
 
-	if out, err := runCLI("list", "projects"); err != nil {
-		t.Fatalf("list projects failed: %v\nOutput: %s", err, out)
-	} else if !strings.Contains(out, "No projects found.") {
-		t.Errorf("default list adopted the ancestor manifest: %s", out)
+	if out, err := runCLI("list", "projects"); err == nil {
+		t.Fatalf("list projects without a local manifest should fail:\n%s", out)
+	} else if !strings.Contains(out, "no scbake.toml found") {
+		t.Errorf("default list did not report the missing local manifest: %s", out)
 	}
 
 	out, err := runCLI("list", "projects", "--allow-ancestor-search")

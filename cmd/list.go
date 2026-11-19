@@ -6,6 +6,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"scbake/internal/manifest"
 	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
@@ -36,15 +37,27 @@ or the projects currently managed in this repository's ` + fileutil.ManifestFile
 			}
 
 		case "projects":
-			fmt.Printf("Managed Projects (from %s):\n", fileutil.ManifestFileName)
-			// Pass "." as start path, ignore rootPath return
-			m, _, err := manifest.LoadWithOptions(".", manifest.DiscoveryOptions{
+			// Pass "." as start path; rootPath locates the manifest.
+			m, rootPath, err := manifest.LoadWithOptions(".", manifest.DiscoveryOptions{
 				AllowAncestorSearch: allowAncestorSearch,
 			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error loading %s: %v\n", fileutil.ManifestFileName, err)
 				os.Exit(fileutil.ExitError)
 			}
+			manifestPath := filepath.Join(rootPath, fileutil.ManifestFileName)
+			if _, err := os.Stat(manifestPath); err != nil {
+				if os.IsNotExist(err) {
+					fmt.Fprintf(os.Stderr,
+						"Error: no %s found in %s; run 'scbake new' or 'scbake apply' first\n",
+						fileutil.ManifestFileName, util.Sanitize(rootPath))
+				} else {
+					fmt.Fprintf(os.Stderr, "Error: cannot inspect %s: %v\n",
+						util.Sanitize(manifestPath), util.SanitizeError(err))
+				}
+				os.Exit(fileutil.ExitError)
+			}
+			fmt.Printf("Managed Projects (from %s):\n", fileutil.ManifestFileName)
 			if len(m.Projects) == 0 {
 				fmt.Println("  No projects found.")
 				return

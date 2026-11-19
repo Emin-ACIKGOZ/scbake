@@ -21,6 +21,7 @@ import (
 	"scbake/pkg/tasks"
 	"scbake/pkg/templates"
 	"scbake/pkg/templates/compliance"
+	"sort"
 	"strings"
 	"time"
 )
@@ -232,6 +233,17 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 		return err
 	}
 	if lang == "" && len(withTemplates) == 0 {
+		if paths := projectPaths(m); len(paths) > 0 {
+			safePaths := make([]string, 0, len(paths))
+			for _, p := range paths {
+				safePaths = append(safePaths, util.Sanitize(p))
+			}
+			return fmt.Errorf(
+				"%s records no templates for %q; this is a monorepo root. "+
+					"Run 'scbake update <project>' (add --allow-ancestor-search "+
+					"outside a Git work tree) for one of: %s",
+				fileutil.ManifestFileName, util.Sanitize(rc.ManifestPathArg), strings.Join(safePaths, ", "))
+		}
 		return fmt.Errorf("%s records no templates for %q; nothing to update", fileutil.ManifestFileName, rc.ManifestPathArg)
 	}
 
@@ -301,6 +313,28 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 		}
 	}
 	return lang, deduplicateTemplates(with), rel, nil
+}
+
+// projectPaths returns the distinct, sorted project paths recorded in the
+// manifest. It names the subprojects a root-level update cannot select.
+func projectPaths(m *types.Manifest) []string {
+	if m == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(m.Projects))
+	paths := make([]string, 0, len(m.Projects))
+	for _, p := range m.Projects {
+		if p.Path == "" {
+			continue
+		}
+		if _, ok := seen[p.Path]; ok {
+			continue
+		}
+		seen[p.Path] = struct{}{}
+		paths = append(paths, p.Path)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // managedFileWriter marks a task that reconciles a file tracked in the
