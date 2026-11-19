@@ -72,6 +72,33 @@ func TestArchitectureManifestExample(t *testing.T) {
 	}
 }
 
+// TestDocsGuidanceExamples pins the copy-paste contract for guidance that has
+// drifted from the binary and release flow: `list` requires a subcommand, the
+// Spring pack is Java, `--set` examples must use a built-in schema key, and the
+// release footer must not pipe the installer into a shell.
+func TestDocsGuidanceExamples(t *testing.T) {
+	for _, tc := range []struct {
+		file   string
+		absent []string
+	}{
+		{"docs/INSTALLING.md", []string{"\nscbake list\n", "\nscbake list\r\n"}},
+		{"docs/QUICK_START.md", []string{"Python (Spring"}},
+		{".goreleaser.yaml", []string{"install.sh | bash"}},
+		{"README.md", []string{"--set service_id=srv-abc"}},
+	} {
+		doc, err := os.ReadFile(tc.file) //nolint:gosec // fixed repository paths in a test
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.file, err)
+		}
+		text := strings.ReplaceAll(string(doc), "\r\n", "\n")
+		for _, bad := range tc.absent {
+			if strings.Contains(text, bad) {
+				t.Errorf("%s contains stale guidance %q", tc.file, bad)
+			}
+		}
+	}
+}
+
 // exampleRenderData mirrors the additive render-data wrapper supplied by
 // pkg/tasks: embedding *types.Manifest keeps every legacy field available,
 // while Project names the manifest project that owns the template's target.

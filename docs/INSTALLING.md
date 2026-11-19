@@ -224,7 +224,8 @@ After installation:
 
 ```bash
 # View available languages and templates
-scbake list
+scbake list langs
+scbake list templates
 
 # Create your first project
 scbake new my-app --lang go

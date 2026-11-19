@@ -100,5 +100,7 @@ release:
     Install or update with:
 
     ```sh
-    curl -fsSL https://github.com/Emin-ACIKGOZ/scbake/releases/download/{{ .Tag }}/install.sh | bash
+    curl -fsSL -o install.sh https://github.com/Emin-ACIKGOZ/scbake/releases/download/{{ .Tag }}/install.sh
+    less install.sh   # review the pinned script
+    bash install.sh "{{ .Tag }}"
     ```
