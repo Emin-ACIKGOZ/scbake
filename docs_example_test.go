@@ -81,7 +81,8 @@ func TestDocsGuidanceExamples(t *testing.T) {
 		file   string
 		absent []string
 	}{
-		{"docs/INSTALLING.md", []string{"\nscbake list\n", "\nscbake list\r\n"}},
+		{"docs/INSTALLING.md", []string{"\nscbake list\n"}},
+		{"install.sh", []string{"| bash"}},
 		{"docs/QUICK_START.md", []string{"Python (Spring"}},
 		{".goreleaser.yaml", []string{"install.sh | bash"}},
 		{"README.md", []string{"--set service_id=srv-abc"}},
@@ -111,6 +112,7 @@ func TestDocsGuidanceExamples(t *testing.T) {
 		{".goreleaser.yaml", "sha256sum -c -"},
 		{"README.md", "--set module_path=github.com/acme/app"},
 		{"CONTRIBUTING.md", "./scbake list langs"},
+		{"install.sh", "less install.sh && bash install.sh"},
 	} {
 		doc, err := os.ReadFile(tc.file)
 		if err != nil {
