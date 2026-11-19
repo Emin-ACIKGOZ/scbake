@@ -237,6 +237,9 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 		return fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
 	}
 
+	if err := transaction.CheckPending(rootPath); err != nil {
+		return err
+	}
 	lang, withTemplates, relPath, err := resolveUpdateSelection(m, rootPath, rc.TargetPath)
 	if err != nil {
 		return err
@@ -1086,6 +1089,11 @@ func preflightCompliance(rc RunContext) error {
 
 	m, root, err := loadManifestForRun(rc)
 	if err != nil {
+		return err
+	}
+	// A dead journal is an urgent recovery state and must not be masked by an
+	// ordinary flag/toolchain/metadata error.
+	if err := transaction.CheckPending(root); err != nil {
 		return err
 	}
 	if !rc.DryRun {
