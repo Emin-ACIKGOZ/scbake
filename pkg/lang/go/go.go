@@ -172,6 +172,16 @@ func appendTidyTask(plan []types.Task, seq *types.PrioritySequence, desc string,
 func moduleNameFor(targetPath string, vars map[string]string) (string, error) {
 	explicit := vars["module_path"]
 	if explicit == "" {
+		// A real `new` run plans from inside the project it just created, so
+		// its target is ".". Resolve that reserved segment to the directory it
+		// names before deriving the module name; a bare "/" still fails.
+		if targetPath == "." {
+			abs, err := filepath.Abs(targetPath)
+			if err != nil {
+				return "", fmt.Errorf("resolving target path: %w", err)
+			}
+			targetPath = abs
+		}
 		return util.SanitizeModuleName(targetPath)
 	}
 

@@ -1009,13 +1009,15 @@ func containsTemplate(names []string, name string) bool {
 
 // projectNameSource returns the value a generated manifest's project name is
 // derived from. For `new`, the manifest path stays "." while the directory
-// being created supplies the name; a real run has changed into it, and a dry
-// run plans against the relative project name. Otherwise the name comes from
-// the resolved target, so a spelling such as "..", "./svc", or an absolute
-// path yields the target directory's base name instead of the literal argument.
+// being created supplies the name; rootPath is that directory's resolved
+// absolute path for both a real run and a dry run, so a reserved TargetPath
+// such as "." is never passed to the name sanitizer. Otherwise the name comes
+// from the resolved target, so a spelling such as "..", "./svc", or an
+// absolute path yields the target directory's base name instead of the literal
+// argument.
 func projectNameSource(rc RunContext, rootPath, projectPath string) string {
 	if rc.NewProject {
-		return rc.TargetPath
+		return rootPath
 	}
 	if projectPath == "." {
 		return rootPath
