@@ -23,6 +23,9 @@ const (
 
 // SpinnerReporter provides an interactive terminal UI with an animated spinner.
 type SpinnerReporter struct {
+	// lifecycleMu serializes TaskStart and TaskEnd so concurrent callers cannot
+	// overwrite each other's lifecycle fields or orphan a renderer.
+	lifecycleMu   sync.Mutex
 	mu            sync.Mutex
 	currentStep   int
 	totalSteps    int
@@ -62,6 +65,9 @@ func (r *SpinnerReporter) SetTotalSteps(total int) {
 
 // TaskStart initiates the spinner animation for a specific sub-task in a separate goroutine.
 func (r *SpinnerReporter) TaskStart(desc string, curr, total int) {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
+
 	// A previous task that was never ended is superseded here. Join it before
 	// installing the new state so no stale renderer can write after this task's
 	// TaskEnd returns.
@@ -104,6 +110,9 @@ func (r *SpinnerReporter) stopActiveSpinner() {
 	if cancel != nil {
 		cancel()
 	}
+	// A renderer already blocked in a stdout write cannot observe cancellation;
+	// this join waits for that write to drain. A bounded wait would permit a
+	// write after TaskEnd returns, which the no-late-output contract forbids.
 	<-stopped
 }
 
@@ -133,6 +142,9 @@ func (r *SpinnerReporter) animate(ctx context.Context, done <-chan struct{}, sto
 // TaskEnd stops the active spinner goroutine and prints a final success or failure indicator.
 // It is idempotent: once a task has ended, further calls are no-ops.
 func (r *SpinnerReporter) TaskEnd(err error) {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
+
 	r.mu.Lock()
 	done := r.done
 	stopped := r.spinnerStopped
@@ -158,6 +170,9 @@ func (r *SpinnerReporter) TaskEnd(err error) {
 	if cancel != nil {
 		cancel()
 	}
+	// A renderer already blocked in a stdout write cannot observe cancellation;
+	// this join waits for that write to drain. A bounded wait would permit a
+	// write after TaskEnd returns, which the no-late-output contract forbids.
 	<-stopped
 
 	outputMux.Lock()

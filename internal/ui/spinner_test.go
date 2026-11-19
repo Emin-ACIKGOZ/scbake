@@ -6,7 +6,9 @@ package ui
 import (
 	"errors"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -80,6 +82,31 @@ func TestSpinnerReporterSupersedeJoinsPrevious(t *testing.T) { //nolint:cyclop /
 		}
 		t.Fatalf("a superseded spinner wrote after TaskEnd returned; output = %q", got.String())
 	case <-time.After(2 * spinnerDelay):
+	}
+}
+
+// TestSpinnerReporterConcurrentLifecyclesDoNotOrphan covers concurrent callers:
+// every renderer must be joined or canceled, with no goroutine left behind.
+func TestSpinnerReporterConcurrentLifecyclesDoNotOrphan(t *testing.T) {
+	baseline := runtime.NumGoroutine()
+	r := NewSpinnerReporter(40)
+	var wg sync.WaitGroup
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			r.TaskStart("step", i+1, 40)
+			r.TaskEnd(nil)
+		}(i)
+	}
+	wg.Wait()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > baseline+2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > baseline+2 {
+		t.Fatalf("renderers were orphaned: %d goroutines, baseline %d", got, baseline)
 	}
 }
 
