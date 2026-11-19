@@ -439,6 +439,30 @@ func taskContextWithTimeout(rc RunContext) (context.Context, context.CancelFunc)
 	return context.WithTimeout(parent, defaultTimeout)
 }
 
+// applyContextMetadata merges the flags and --set values into the future
+// manifest with one precedence rule shared with preflight.
+func applyContextMetadata(m *types.Manifest, rc RunContext) {
+	if rc.License == "" && rc.CopyrightHolder == "" && len(rc.SetVars) == 0 {
+		return
+	}
+	if m.Metadata == nil {
+		m.Metadata = make(map[string]string)
+	}
+	license, holder := ComplianceMetadata(rc.License, rc.CopyrightHolder, rc.SetVars)
+	if license != "" {
+		m.Metadata["license"] = license
+	}
+	if holder != "" {
+		m.Metadata["copyright_holder"] = holder
+	}
+	for k, v := range rc.SetVars {
+		if k == "license" || k == "copyright_holder" {
+			continue
+		}
+		m.Metadata[k] = v
+	}
+}
+
 // buildTaskContext constructs future manifest state and validates template schemas against metadata.
 func buildTaskContext(
 	rc RunContext,
@@ -450,21 +474,7 @@ func buildTaskContext(
 	// Deep copy manifest to ensure modifications don't affect original until finalization
 	futureManifest := m.DeepCopy()
 
-	// Update metadata from context if provided
-	if rc.License != "" || rc.CopyrightHolder != "" || len(rc.SetVars) > 0 {
-		if futureManifest.Metadata == nil {
-			futureManifest.Metadata = make(map[string]string)
-		}
-		if rc.License != "" {
-			futureManifest.Metadata["license"] = rc.License
-		}
-		if rc.CopyrightHolder != "" {
-			futureManifest.Metadata["copyright_holder"] = rc.CopyrightHolder
-		}
-		for k, v := range rc.SetVars {
-			futureManifest.Metadata[k] = v
-		}
-	}
+	applyContextMetadata(futureManifest, rc)
 
 	applyManifestChanges(futureManifest, changes)
 
