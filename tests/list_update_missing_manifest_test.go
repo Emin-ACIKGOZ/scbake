@@ -79,3 +79,32 @@ func TestRootUpdateNamesMonorepoProjects(t *testing.T) {
 		}
 	}
 }
+
+// TestRootUpdateSanitizesManifestPaths pins the escaping of control characters
+// in the monorepo hint. The manifest path is untrusted and is printed before
+// validateManifestFields runs, so the command must render it safely.
+func TestRootUpdateSanitizesManifestPaths(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	body := `scbake_version = "v0.3.0"
+
+[[projects]]
+  name = "api"
+  path = "services/\u001b[31mapi"
+  language = "go"
+`
+	if err := os.WriteFile(filepath.Join(work, "scbake.toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	out, err := runCLI("update")
+	if err == nil {
+		t.Fatalf("root update should exit non-zero:\n%s", out)
+	}
+	if strings.ContainsRune(out, '\x1b') {
+		t.Errorf("output contains a raw ESC byte:\n%q", out)
+	}
+	if !strings.Contains(out, `services/\x1b[31mapi`) {
+		t.Errorf("output does not contain the escaped project path:\n%s", out)
+	}
+}
