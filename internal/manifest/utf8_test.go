@@ -24,10 +24,16 @@ func TestSaveRejectsInvalidUTF8(t *testing.T) {
 	}{
 		{name: "version", m: &types.Manifest{SbakeVersion: bad}, want: "scbake_version"},
 		{name: "project name", m: &types.Manifest{Projects: []types.Project{{Name: bad}}}, want: "projects[0].name"},
+		{name: "project path", m: &types.Manifest{Projects: []types.Project{{Path: bad}}}, want: "projects[0].path"},
+		{name: "project language", m: &types.Manifest{Projects: []types.Project{{Language: bad}}}, want: "projects[0].language"},
+		{name: "project template", m: &types.Manifest{Projects: []types.Project{{Templates: []string{bad}}}}, want: "projects[0].templates[0]"},
+		{name: "template name", m: &types.Manifest{Templates: []types.Template{{Name: bad, Path: "."}}}, want: "templates[0].name"},
 		{name: "template path", m: &types.Manifest{Templates: []types.Template{{Name: "x", Path: bad}}}, want: "templates[0].path"},
 		{name: "metadata key", m: &types.Manifest{Metadata: map[string]string{bad: "v"}}, want: "metadata key"},
 		{name: "metadata value", m: &types.Manifest{Metadata: map[string]string{"k": bad}}, want: `metadata "k"`},
 		{name: "managed key", m: &types.Manifest{ManagedFiles: map[string]string{bad: "hash"}}, want: "managed_files key"},
+		{name: "managed value", m: &types.Manifest{ManagedFiles: map[string]string{"k": bad}}, want: `managed_files "k"`},
+		{name: "accepted key", m: &types.Manifest{AcceptedFiles: map[string]string{bad: "hash"}}, want: "accepted_files key"},
 		{name: "accepted value", m: &types.Manifest{AcceptedFiles: map[string]string{"k": bad}}, want: `accepted_files "k"`},
 		{name: "unmanaged entry", m: &types.Manifest{UnmanagedFiles: []string{bad}}, want: "unmanaged_files[0]"},
 	}

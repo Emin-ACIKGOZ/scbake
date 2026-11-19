@@ -6,6 +6,7 @@ package integration
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -65,9 +66,12 @@ func TestApplyRejectsInvalidUTF8TemplatePath(t *testing.T) {
 	manifestPath := writeMinimalManifest(t, work)
 	badDir := "\x82"
 	if err := os.Mkdir(filepath.Join(work, badDir), 0o750); err != nil {
-		// Filesystems such as APFS store names as Unicode and cannot represent
-		// this byte sequence, so the reported defect is unreachable there.
-		t.Skipf("filesystem cannot create a non-UTF-8 name: %v", err)
+		if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+			// These filesystems store names as Unicode and may reject the byte
+			// sequence, so the reported defect is unreachable there.
+			t.Skipf("filesystem cannot create a non-UTF-8 name on %s: %v", runtime.GOOS, err)
+		}
+		t.Fatalf("mkdir bad dir: %v", err)
 	}
 
 	out, err := runCLI("apply", badDir, "--with", "compliance",
