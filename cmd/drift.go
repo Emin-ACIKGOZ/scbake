@@ -51,6 +51,9 @@ edits it does not clear drift; use 'overwrite' to force restoration. On a clean
 tree, 'overwrite' also re-records a missing base; 'merge' does not backfill it.`,
 	Args:         cobra.MaximumNArgs(1),
 	SilenceUsage: true,
+	PreRunE: func(*cobra.Command, []string) error {
+		return types.ValidateConflictStrategy(driftStrategyFlag)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		manifestPathArg := "."
 		targetPath := "."

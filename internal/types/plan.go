@@ -5,6 +5,7 @@ package types
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"scbake/internal/filesystem/transaction"
 	"strings"
@@ -20,6 +21,28 @@ const (
 	// falling back to an artifact when no base exists or the merge conflicts.
 	ConflictMerge = "merge"
 )
+
+// ConflictStrategies returns the conflict resolution strategies accepted by
+// --conflict-strategy, in the order they are documented.
+func ConflictStrategies() []string {
+	return []string{ConflictMerge, ConflictFail, ConflictOverwrite, ConflictArtifact, ConflictKeepLocal}
+}
+
+// ValidateConflictStrategy reports whether strategy is an accepted
+// --conflict-strategy value. The error names every accepted value so a typo is
+// rejected instead of being treated as one of the strategies.
+func ValidateConflictStrategy(strategy string) error {
+	switch strategy {
+	case ConflictMerge, ConflictFail, ConflictOverwrite, ConflictArtifact, ConflictKeepLocal:
+		return nil
+	default:
+		return fmt.Errorf(
+			"invalid conflict strategy %q: must be one of: %s",
+			strategy,
+			strings.Join(ConflictStrategies(), ", "),
+		)
+	}
+}
 
 // TaskContext holds all the data a Task needs to run.
 type TaskContext struct {
