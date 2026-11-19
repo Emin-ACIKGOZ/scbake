@@ -74,14 +74,18 @@ func (r *SpinnerReporter) TaskStart(desc string, curr, total int) {
 
 	// A previous task that was never ended is superseded here. Join it before
 	// installing the new state so no stale renderer can write after this task's
-	// TaskEnd returns.
-	r.stopActiveSpinner()
+	// TaskEnd returns. This join is unbounded by design; a renderer blocked in a
+	// stalled stdout write delays TaskStart until the write drains.
+	if previous, ok := r.detachTask(); ok {
+		r.stopTask(previous)
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Create context with timeout to prevent goroutine leaks if TaskEnd() is never called
-	ctx, cancel := context.WithTimeout(context.Background(), spinnerTimeout)
+	// Create context with timeout to prevent goroutine leaks if TaskEnd() is never called.
+	// cancel is stored on the reporter and invoked by stopTask.
+	ctx, cancel := context.WithTimeout(context.Background(), spinnerTimeout) //nolint:gosec // cancel is retained and called by stopTask
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 
@@ -95,29 +99,49 @@ func (r *SpinnerReporter) TaskStart(desc string, curr, total int) {
 	go r.animate(ctx, done, stopped, desc, curr, total)
 }
 
-// stopActiveSpinner cancels and joins the active renderer, if any. It clears
-// the lifecycle fields for the superseded renderer so it cannot be joined again.
-func (r *SpinnerReporter) stopActiveSpinner() {
+// spinnerTask is a detached task lifecycle.
+type spinnerTask struct {
+	done    chan struct{}
+	stopped chan struct{}
+	cancel  context.CancelFunc
+	desc    string
+	index   int
+	total   int
+}
+
+// detachTask atomically clears and returns the active task state. It returns
+// false when no task is active, making repeated TaskEnd calls no-ops.
+func (r *SpinnerReporter) detachTask() (spinnerTask, bool) {
 	r.mu.Lock()
-	done := r.done
-	stopped := r.spinnerStopped
-	cancel := r.spinnerCancel
+	defer r.mu.Unlock()
+	if r.done == nil {
+		return spinnerTask{}, false
+	}
+	task := spinnerTask{
+		done:    r.done,
+		stopped: r.spinnerStopped,
+		cancel:  r.spinnerCancel,
+		desc:    r.activeDesc,
+		index:   r.activeIndex,
+		total:   r.activeTotal,
+	}
 	r.done = nil
 	r.spinnerStopped = nil
 	r.spinnerCancel = nil
-	r.mu.Unlock()
+	return task, true
+}
 
-	if done == nil {
-		return
+// stopTask signals and joins a detached renderer. The join has no timeout: a
+// renderer already blocked in a stdout write cannot observe cancellation, and a
+// bounded wait would permit output after the caller believes the task ended.
+// This means a stalled stdout delays both TaskEnd and a superseding TaskStart
+// until the write drains.
+func (r *SpinnerReporter) stopTask(task spinnerTask) {
+	close(task.done)
+	if task.cancel != nil {
+		task.cancel()
 	}
-	close(done)
-	if cancel != nil {
-		cancel()
-	}
-	// A renderer already blocked in a stdout write cannot observe cancellation;
-	// this join waits for that write to drain. A bounded wait would permit a
-	// write after TaskEnd returns, which the no-late-output contract forbids.
-	<-stopped
+	<-task.stopped
 }
 
 // animate handles the ticker logic and ANSI escape sequences for the spinner animation.
@@ -152,43 +176,19 @@ func (r *SpinnerReporter) TaskEnd(err error) {
 	r.lifecycleMu.Lock()
 	defer r.lifecycleMu.Unlock()
 
-	r.mu.Lock()
-	done := r.done
-	stopped := r.spinnerStopped
-	cancel := r.spinnerCancel
-	desc := r.activeDesc
-	index := r.activeIndex
-	total := r.activeTotal
-	// Mark the task as ended. A repeated TaskEnd, or a TaskEnd before TaskStart,
-	// then observes nil and returns without touching the closed channel.
-	r.done = nil
-	r.spinnerStopped = nil
-	r.spinnerCancel = nil
-	r.mu.Unlock()
-
-	if done == nil {
+	task, ok := r.detachTask()
+	if !ok {
 		return
 	}
-
-	// Signal the goroutine with both mechanisms, then join it so it cannot write
-	// after TaskEnd returns. Closing done and canceling the context make the
-	// select observe an exit at its next iteration; the join still waits for any
-	// in-flight print.
-	close(done)
-	if cancel != nil {
-		cancel()
-	}
-	// A renderer already blocked in a stdout write cannot observe cancellation;
-	// this join waits for that write to drain. A bounded wait would permit a
-	// write after TaskEnd returns, which the no-late-output contract forbids.
-	<-stopped
+	// Join before printing so no spinner write can follow the final indicator.
+	r.stopTask(task)
 
 	outputMux.Lock()
 	defer outputMux.Unlock()
-	prefix := fmt.Sprintf("[%d/%d]", index, total)
+	prefix := fmt.Sprintf("[%d/%d]", task.index, task.total)
 	if err != nil {
-		fmt.Printf("\r%s ❌ %s\n", prefix, desc)
+		fmt.Printf("\r%s ❌ %s\n", prefix, task.desc)
 		return
 	}
-	fmt.Printf("\r%s ✅ %s\n", prefix, desc)
+	fmt.Printf("\r%s ✅ %s\n", prefix, task.desc)
 }
