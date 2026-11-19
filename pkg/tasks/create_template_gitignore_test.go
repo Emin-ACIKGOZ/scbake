@@ -684,6 +684,120 @@ func TestEnsureInternalStateIgnored_UnwritableRootGitIgnoreIsBestEffort(t *testi
 	})
 }
 
+// TestWriteBaseShadow_RecordsOwnedGitIgnoreAsManaged is the unit regression
+// test for issue #250: a tooling-only project has no language template that owns
+// the root .gitignore, so the internal-state helper creates it. Those bytes are
+// entirely scbake's, so the helper must record the file in the managed_files
+// ledger and store its pristine base; otherwise a later language render treats
+// the file as user drift.
+func TestWriteBaseShadow_RecordsOwnedGitIgnoreAsManaged(t *testing.T) { //nolint:cyclop // two seeded cases with shared assertions
+	tests := []struct {
+		name      string
+		seedEmpty bool
+	}{
+		{name: "missing file"},
+		{name: "empty file", seedEmpty: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.seedEmpty {
+				if err := os.WriteFile(filepath.Join(root, fileutil.GitIgnore), nil, fileutil.FilePerms); err != nil {
+					t.Fatalf("seed empty .gitignore: %v", err)
+				}
+			}
+
+			tx, err := transaction.New(root)
+			if err != nil {
+				t.Fatalf("transaction.New() failed: %v", err)
+			}
+			manifest := &types.Manifest{}
+			tc := types.TaskContext{TargetPath: root, Manifest: manifest, Tx: tx}
+
+			// A Makefile base shadow is the tooling-only path that triggers the
+			// universal internal-state helper on a project with no language pack.
+			if err := writeBaseShadow(tc, "Makefile", []byte("all:\n")); err != nil {
+				t.Fatalf("writeBaseShadow() failed: %v", err)
+			}
+
+			onDisk := readGitIgnore(t, root)
+			requireCommittedBaseBlock(t, onDisk)
+			if got, want := manifest.ManagedFiles[fileutil.GitIgnore], HashContent([]byte(onDisk)); got != want {
+				t.Fatalf("managed_files[%q] = %q, want on-disk hash %q", fileutil.GitIgnore, got, want)
+			}
+			base, err := ReadBaseShadow(root, fileutil.GitIgnore)
+			if err != nil {
+				t.Fatalf("recorded .gitignore has no pristine base: %v", err)
+			}
+			if string(base) != onDisk {
+				t.Fatalf("pristine base = %q, want on-disk bytes %q", base, onDisk)
+			}
+
+			// A later language render must reconcile the managed file instead of
+			// failing with a drift conflict.
+			goRender := "*.exe\n*.test\n*.out\ngo.work\n" + onDisk
+			if err := WriteManagedFile(tc, fileutil.GitIgnore, []byte(goRender), fileutil.FilePerms); err != nil {
+				t.Fatalf("language render on the tooling-only project failed: %v", err)
+			}
+			rendered := readGitIgnore(t, root)
+			if rendered != goRender {
+				t.Fatalf(".gitignore = %q, want the language render %q", rendered, goRender)
+			}
+			if got, want := manifest.ManagedFiles[fileutil.GitIgnore], HashContent([]byte(rendered)); got != want {
+				t.Fatalf("language render left managed_files[%q] = %q, want %q", fileutil.GitIgnore, got, want)
+			}
+			base, err = ReadBaseShadow(root, fileutil.GitIgnore)
+			if err != nil {
+				t.Fatalf("language render lost the pristine base: %v", err)
+			}
+			if string(base) != rendered {
+				t.Fatalf("language render base = %q, want %q", base, rendered)
+			}
+		})
+	}
+}
+
+// TestWriteBaseShadow_LeavesUserGitIgnoreUnmanaged covers the other half of the
+// issue #250 policy: a pre-existing .gitignore that scbake only appends to stays
+// user-owned. Recording it as managed would let a later apply overwrite the
+// user's rules, so the helper must warn and leave the ledger and base untouched.
+func TestWriteBaseShadow_LeavesUserGitIgnoreUnmanaged(t *testing.T) {
+	root := t.TempDir()
+	const initial = "node_modules\n"
+	if err := os.WriteFile(filepath.Join(root, fileutil.GitIgnore), []byte(initial), fileutil.FilePerms); err != nil {
+		t.Fatalf("seed .gitignore: %v", err)
+	}
+
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+	manifest := &types.Manifest{}
+	tc := types.TaskContext{TargetPath: root, Manifest: manifest, Tx: tx}
+
+	var writeErr error
+	out := captureStderr(t, func() {
+		writeErr = writeBaseShadow(tc, "Makefile", []byte("all:\n"))
+	})
+	if writeErr != nil {
+		t.Fatalf("writeBaseShadow() failed: %v", writeErr)
+	}
+	if _, ok := manifest.ManagedFiles[fileutil.GitIgnore]; ok {
+		t.Fatalf("pre-existing .gitignore was recorded as managed: %v", manifest.ManagedFiles)
+	}
+	if _, err := ReadBaseShadow(root, fileutil.GitIgnore); !os.IsNotExist(err) {
+		t.Fatalf("pre-existing .gitignore got a pristine base (err: %v)", err)
+	}
+	if !strings.Contains(out, "left the file unmanaged") {
+		t.Fatalf("warning does not disclose that .gitignore stays unmanaged:\n%s", out)
+	}
+	want := initial + internalStateIgnoreEntry + "\n" + committedBaseIgnoreBlock
+	if got := readGitIgnore(t, root); got != want {
+		t.Fatalf(".gitignore = %q, want the user content plus the appended block %q", got, want)
+	}
+}
+
 // TestWriteBaseShadow_RollbackRestoresGitIgnore verifies the .gitignore change
 // participates in the transaction: a new file is removed, an edited file is
 // restored byte-for-byte.

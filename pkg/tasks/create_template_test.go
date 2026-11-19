@@ -641,8 +641,11 @@ func TestWriteManagedFile_ManagedFilesScopedByProject(t *testing.T) {
 	if got := manifest.ManagedFiles[keyB]; got != HashContent(contentB) {
 		t.Errorf("ManagedFiles[%q] = %q, want hash of B's content", keyB, got)
 	}
-	if len(manifest.ManagedFiles) != 2 {
-		t.Errorf("expected 2 distinct ledger entries, got %d: %v", len(manifest.ManagedFiles), manifest.ManagedFiles)
+	// The universal internal-state helper also owns the root .gitignore on this
+	// fixture, so assert the scoping property directly instead of the total
+	// entry count: no unscoped "LICENSE" key may survive.
+	if _, ok := manifest.ManagedFiles["LICENSE"]; ok {
+		t.Errorf("expected project-scoped keys only, found legacy \"LICENSE\": %v", manifest.ManagedFiles)
 	}
 
 	// Re-applying subproject A with NEW content must not report drift. Before
