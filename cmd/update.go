@@ -13,9 +13,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// runUpdateTotalSteps mirrors the milestones of an update run: load manifest,
-// plan, execute, persist manifest, commit.
-const runUpdateTotalSteps = 5
+// runUpdateTotalSteps is the number of milestones an update run emits: load
+// manifest, plan, execute, persist manifest, commit. Update reports the load
+// step itself and then runs the shared apply phases without repeating it, so
+// the total matches the apply run (#271).
+const runUpdateTotalSteps = runApplyTotalSteps
 
 var updateConflictStrategyFlag string
 
@@ -27,8 +29,15 @@ bringing a generated project up to date without clobbering local edits.
 
 With no template change the command is a no-op, so it is safe to run repeatedly.
 A managed LICENSE that already matches its recorded hash is not re-rendered; use
-apply --with compliance to change license terms.`,
+apply --with compliance to change license terms.
+
+Paths detached with 'scbake unmanage' stay unmanaged: update does not re-manage
+them, not even with --force. Re-manage one by running 'scbake apply --force'
+with the same language/template selection and path.`,
 	Args: cobra.MaximumNArgs(1),
+	PreRunE: func(*cobra.Command, []string) error {
+		return types.ValidateConflictStrategy(updateConflictStrategyFlag)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		manifestPathArg := "."
 		targetPath := "."

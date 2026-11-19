@@ -368,10 +368,15 @@ func handleConflict(absFinalPath, outputRelPath, strategy string) (string, error
 	case types.ConflictKeepLocal:
 		fmt.Fprintf(os.Stderr, "⚠️  Conflict in %s (user modifications detected). Skipping update (--strategy=keep-local).\n", outputRelPath)
 		return "", nil // Signal to skip
-	case types.ConflictFail:
-		fallthrough
-	default:
+	case types.ConflictFail, "":
+		// An empty strategy is the zero TaskContext value used by direct
+		// library callers; it keeps the documented default of failing.
 		return "", fmt.Errorf("file %s has manual modifications (drift detected). Use --conflict-strategy to resolve", outputRelPath)
+	default:
+		// Fail closed: an unknown strategy must not silently behave as fail.
+		// Command entry validates the flag, but direct callers can construct a
+		// TaskContext themselves.
+		return "", types.ValidateConflictStrategy(strategy)
 	}
 }
 
