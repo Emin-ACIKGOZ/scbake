@@ -14,6 +14,7 @@ import (
 	"scbake/internal/templateregistry"
 	"scbake/internal/types"
 	"scbake/internal/ui"
+	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"strings"
 
@@ -59,7 +60,7 @@ var newCmd = &cobra.Command{
 			fmt.Println("✅ Dry run complete; no changes written.")
 			return nil
 		}
-		fmt.Printf("✅ Success! New project '%s' created.\n", projectName)
+		fmt.Printf("✅ Success! New project '%s' created.\n", util.Sanitize(projectName))
 		return nil
 	},
 }
@@ -69,27 +70,30 @@ var newCmd = &cobra.Command{
 // another scbake process has started using. If locking is unavailable for a
 // reason other than busy, cleanup proceeds as before.
 func cleanupFailedProject(projectName string) {
+	// The project name comes from the command line and may carry terminal
+	// controls, so escape it once for every message printed below.
+	displayName := util.Sanitize(projectName)
 	lock, err := transaction.AcquireRootLock(projectName, false)
 	if err == nil {
 		defer func() { _ = lock.Release() }()
-		fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
+		fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", displayName)
 		if err := removeFailedProject(projectName, lock.Release); err != nil {
-			fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", projectName, err)
+			fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", displayName, util.SanitizeError(err))
 		}
 		return
 	}
 	if errors.Is(err, transaction.ErrBusy) {
-		fmt.Fprintf(os.Stderr, "Not removing '%s': another scbake process is using it.\n", projectName)
+		fmt.Fprintf(os.Stderr, "Not removing '%s': another scbake process is using it.\n", displayName)
 		return
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "Locking '%s' for cleanup failed: %v\n", projectName, err)
-	fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
+	fmt.Fprintf(os.Stderr, "Locking '%s' for cleanup failed: %v\n", displayName, util.SanitizeError(err))
+	fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", displayName)
 	if removeErr := removeFailedProject(projectName, nil); removeErr != nil {
-		fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", projectName, removeErr)
+		fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", displayName, util.SanitizeError(removeErr))
 	}
 }
 
@@ -252,22 +256,22 @@ func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporte
 	restoreWD := func() { _ = os.Chdir(cwd) }
 
 	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
-		return nil, fmt.Errorf("directory '%s' already exists", projectName)
+		return nil, fmt.Errorf("directory '%s' already exists", util.Sanitize(projectName))
 	}
 
-	step := "Creating directory: " + projectName
+	step := "Creating directory: " + util.Sanitize(projectName)
 	if dryRun {
-		step = "Would create directory: " + projectName
+		step = "Would create directory: " + util.Sanitize(projectName)
 	}
 	reporter.Step("📁", step)
 	if !dryRun {
 		if err := os.Mkdir(projectName, fileutil.DirPerms); err != nil {
-			return nil, err
+			return nil, util.SanitizeError(err)
 		}
 		*dirCreated = true
 
 		if err := os.Chdir(projectName); err != nil {
-			return nil, err
+			return nil, util.SanitizeError(err)
 		}
 
 		if err := os.WriteFile(fileutil.ManifestFileName, []byte(""), fileutil.PrivateFilePerms); err != nil {
