@@ -16,7 +16,7 @@ help:
 	@echo "  lint-fix      : Runs linting/formatting with auto-fix on all tracked projects."
 	@echo "  help          : Show this help message."
 	@echo "------------------------------------------------------------------"
-	
+
 # --- Main Build Target ---
 build:
 {{- range .Projects }}
