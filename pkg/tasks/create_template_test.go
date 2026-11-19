@@ -613,7 +613,7 @@ func TestWriteManagedFile_RollbackRemovesMissingTargetSubdir(t *testing.T) {
 // SCB-057: two monorepo subprojects that generate the same relative filename
 // must get distinct managed_files entries, so re-applying one does not report
 // the other subproject's content as drift.
-func TestWriteManagedFile_ManagedFilesScopedByProject(t *testing.T) {
+func TestWriteManagedFile_ManagedFilesScopedByProject(t *testing.T) { //nolint:cyclop // multi-step scoping regression
 	root := t.TempDir()
 	tx, err := transaction.New(root)
 	if err != nil {
@@ -641,8 +641,19 @@ func TestWriteManagedFile_ManagedFilesScopedByProject(t *testing.T) {
 	if got := manifest.ManagedFiles[keyB]; got != HashContent(contentB) {
 		t.Errorf("ManagedFiles[%q] = %q, want hash of B's content", keyB, got)
 	}
-	if len(manifest.ManagedFiles) != 2 {
-		t.Errorf("expected 2 distinct ledger entries, got %d: %v", len(manifest.ManagedFiles), manifest.ManagedFiles)
+	// The universal internal-state helper also owns the root .gitignore on this
+	// fixture, so assert the exact expected set and that no unscoped "LICENSE"
+	// key survives.
+	if len(manifest.ManagedFiles) != 3 {
+		t.Errorf("managed_files = %v, want exactly the two scoped LICENSE keys and .gitignore", manifest.ManagedFiles)
+	}
+	for _, key := range []string{keyA, keyB, fileutil.GitIgnore} {
+		if _, ok := manifest.ManagedFiles[key]; !ok {
+			t.Errorf("managed_files is missing %q: %v", key, manifest.ManagedFiles)
+		}
+	}
+	if _, ok := manifest.ManagedFiles["LICENSE"]; ok {
+		t.Errorf("expected project-scoped keys only, found legacy \"LICENSE\": %v", manifest.ManagedFiles)
 	}
 
 	// Re-applying subproject A with NEW content must not report drift. Before

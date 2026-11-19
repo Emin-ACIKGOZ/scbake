@@ -215,6 +215,8 @@ func normalizeEOL(content []byte) []byte {
 // outputRelPath is the target-relative path used to read the file; ledgerKey is
 // the project-scoped managed_files key used for state lookup; newContent is the
 // pristine render the template is trying to write.
+//
+//nolint:cyclop // strategy decision matrix over force, state, and content
 func checkReconciliation(
 	absFinalPath, outputRelPath, ledgerKey, newContentHash string,
 	newContent []byte,
@@ -247,7 +249,10 @@ func checkReconciliation(
 	// so the file is adopted (ledger entry and pristine base) without a
 	// conflict or an artifact.
 	if originalHash == "" {
-		if existingHash == newContentHash {
+		// A converged render, or a legacy tooling-only project whose .gitignore
+		// is exactly scbake's canonical block with no ledger entry, can be
+		// written and adopted without a false drift conflict.
+		if existingHash == newContentHash || ownsInternalStateIgnore(ledgerKey, existingContent) {
 			return absFinalPath, nil, nil
 		}
 		p, cErr := handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
@@ -937,11 +942,8 @@ func trackBaseAncestors(tc types.TaskContext, absPath string) error {
 // normalization applies only to hashing and merge inputs. It is tracked by the
 // transaction so a rollback removes or restores it alongside the file it mirrors.
 func writeBaseShadow(tc types.TaskContext, ledgerKey string, content []byte) error {
-	if tc.Tx == nil || tc.DryRun || ledgerKey == "" {
-		return nil
-	}
-	root := tc.Tx.Root()
-	if root == "" {
+	root, ok := baseShadowRoot(tc, ledgerKey)
+	if !ok {
 		return nil
 	}
 	if err := validateCommittedBaseTree(root, ledgerKey); err != nil {
@@ -960,7 +962,33 @@ func writeBaseShadow(tc types.TaskContext, ledgerKey string, content []byte) err
 	if err := writeBaseFile(absPath, content); err != nil {
 		return err
 	}
+	if !shouldEnsureInternalState(tc, ledgerKey) {
+		return nil
+	}
 	return ensureInternalStateIgnored(tc, root)
+}
+
+// baseShadowRoot returns the transaction root a base shadow belongs to, or
+// ok=false when the caller must skip the write (no transaction, dry run, or no
+// ledger key).
+func baseShadowRoot(tc types.TaskContext, ledgerKey string) (string, bool) {
+	if tc.Tx == nil || tc.DryRun || ledgerKey == "" {
+		return "", false
+	}
+	root := tc.Tx.Root()
+	return root, root != ""
+}
+
+// shouldEnsureInternalState reports whether a base-shadow write must also run
+// the internal-state ignore guarantee. A root .gitignore render owns its block
+// itself; an unmanaged .gitignore written through this path must not be claimed
+// while writing its own base. A managed .gitignore still runs the guarantee so a
+// legacy render missing the block warns.
+func shouldEnsureInternalState(tc types.TaskContext, ledgerKey string) bool {
+	if ledgerKey != fileutil.GitIgnore {
+		return true
+	}
+	return tc.Manifest != nil && tc.Manifest.ManagedFiles[ledgerKey] != ""
 }
 
 // internalStateIgnoreEntry is the standalone .gitignore line that keeps the
@@ -987,6 +1015,10 @@ var committedBaseIgnoreEntries = []string{"!.scbake-base/", "!.scbake-base/**", 
 //
 // It is idempotent with language-provided ignore entries and records the
 // change through the transaction so rollback restores or removes the file.
+// A root .gitignore that scbake creates (or that was empty) is recorded in the
+// managed_files ledger together with its pristine shadow, so a later language
+// render reconciles it normally. A pre-existing file with user content is only
+// appended to and stays unmanaged.
 func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 	if tc.Tx == nil || tc.DryRun {
 		return nil
@@ -1015,10 +1047,37 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 		return nil
 	}
 	if gitignoreIgnoresInternalState(existing) && gitignoreAllowsCommittedBase(existing) {
+		// A legacy tooling-only project can already contain exactly scbake's
+		// block but no ledger entry. Adopt it when the whole file is that block:
+		// there are no user rules to protect, and leaving it unmanaged would
+		// preserve the false-clean drift result this issue reports.
+		if isOwnedInternalStateIgnore(existing) {
+			key := managedFilesKey(tc, absPath, relPath)
+			return recordCanonicalWrite(tc, key, HashContent(existing), existing)
+		}
+		// The block is present but the file also carries user rules. It stays
+		// user-owned; say so rather than silently reporting a clean tree.
+		warnInternalStateUnmanaged(tc, relPath, false)
 		return nil
 	}
 
 	return applyInternalStateIgnore(tc, root, relPath, absPath, existing)
+}
+
+// ownsInternalStateIgnore reports whether the root .gitignore is exactly the
+// canonical block, so scbake may adopt it without touching user rules.
+func ownsInternalStateIgnore(ledgerKey string, content []byte) bool {
+	return ledgerKey == fileutil.GitIgnore && isOwnedInternalStateIgnore(content)
+}
+
+// isOwnedInternalStateIgnore reports whether content is exactly the canonical
+// scbake block, so scbake can claim the file without overwriting user rules.
+// The comparison is EOL-insensitive because a legacy file may use CRLF.
+func isOwnedInternalStateIgnore(content []byte) bool {
+	if len(content) == 0 {
+		return false
+	}
+	return bytes.Equal(normalizeEOL(content), normalizeEOL(appendInternalStateIgnore(nil)))
 }
 
 // checkManagedGitignore warns when a managed root .gitignore no longer exists or
@@ -1069,12 +1128,46 @@ func readRootGitignore(root, relPath string) ([]byte, error) {
 // backup that cannot be restored. Pre-write failures are best-effort and only
 // warn; write failures propagate so the caller's transaction rolls back the
 // possibly truncated file.
+//
+// When scbake wrote the whole file (it did not exist, or was empty), the
+// appended bytes are recorded as managed with their pristine shadow, so a later
+// language render reconciles instead of treating scbake's own append as user
+// drift. A pre-existing non-empty file stays user-owned: appending to it must
+// never let a later apply overwrite the user's rules, so it is left unmanaged
+// with a warning.
 func applyInternalStateIgnore(tc types.TaskContext, root, relPath, absPath string, existing []byte) error {
 	if err := checkIgnoredFileWritable(root, relPath); err != nil {
 		warnInternalStateIgnore(relPath, err)
 		return nil
 	}
-	return trackAndWrite(tc, absPath, appendInternalStateIgnore(existing), fileutil.FilePerms)
+	content := appendInternalStateIgnore(existing)
+	if err := trackAndWrite(tc, absPath, content, fileutil.FilePerms); err != nil {
+		return err
+	}
+	if len(existing) > 0 {
+		warnInternalStateUnmanaged(tc, relPath, true)
+		return nil
+	}
+	return recordCanonicalWrite(tc, managedFilesKey(tc, absPath, relPath), HashContent(content), content)
+}
+
+// warnInternalStateUnmanaged reports that a user-owned .gitignore stays
+// unmanaged, distinguishing a file scbake appended to from one that already
+// carried the block alongside user rules. Recording either would let a later
+// apply overwrite rules scbake did not write.
+func warnInternalStateUnmanaged(tc types.TaskContext, relPath string, appended bool) {
+	if tc.Manifest == nil {
+		return
+	}
+	detail := "already contains scbake's ignore rules alongside user rules"
+	if appended {
+		detail = "already existed; appended scbake's ignore rules"
+	}
+	fmt.Fprintf(
+		os.Stderr,
+		"⚠️  %s %s but stays unmanaged. A later language apply may fail or write %s.scbake-new.\n",
+		relPath, detail, relPath,
+	)
 }
 
 // checkIgnoredFileWritable fails early when an existing ignore file cannot be

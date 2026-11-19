@@ -278,6 +278,154 @@ func TestManagedRootGitIgnoreHashMatchesDisk(t *testing.T) {
 	requireNoDrift(t, project)
 }
 
+// TestLegacyToolingProjectGitIgnoreAdoptsOnLanguageApply covers a project
+// created by an older binary: the root .gitignore is exactly scbake's canonical
+// block, but the ledger and base have no entry. A language apply must recognize
+// the owned block, reconcile it, and adopt the rendered result instead of
+// reporting a false drift conflict.
+func TestLegacyToolingProjectGitIgnoreAdoptsOnLanguageApply(t *testing.T) {
+	testLegacyGitignoreAdoption(t, false)
+}
+
+func TestLegacyCRLFToolingProjectGitIgnoreAdoptsOnLanguageApply(t *testing.T) {
+	testLegacyGitignoreAdoption(t, true)
+}
+
+func testLegacyGitignoreAdoption(t *testing.T, crlf bool) { //nolint:cyclop // multi-step legacy-state fixture
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+
+	work := t.TempDir()
+	t.Chdir(work)
+	if out, err := runCLI("new", "demo", "--with", "makefile"); err != nil {
+		t.Fatalf("new failed: %v\n%s", err, out)
+	}
+	project := filepath.Join(work, "demo")
+	gitignorePath := filepath.Join(project, fileutil.GitIgnore)
+	block := mustRead(t, gitignorePath)
+	if crlf {
+		block = strings.ReplaceAll(block, "\n", "\r\n")
+		if err := os.WriteFile(gitignorePath, []byte(block), 0o600); err != nil {
+			t.Fatalf("rewrite CRLF .gitignore: %v", err)
+		}
+	}
+
+	// Remove only the .gitignore ledger entry and its base, leaving the
+	// canonical block on disk: the legacy state this issue describes.
+	manifestPath := filepath.Join(project, fileutil.ManifestFileName)
+	raw := mustRead(t, manifestPath)
+	var kept []string
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.Contains(line, `".gitignore" =`) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if err := os.WriteFile(manifestPath, []byte(strings.Join(kept, "\n")), 0o600); err != nil {
+		t.Fatalf("rewrite manifest: %v", err)
+	}
+	if err := os.Remove(filepath.Join(project, tasks.BaseShadowRelPath(fileutil.GitIgnore))); err != nil {
+		t.Fatalf("remove base: %v", err)
+	}
+
+	out, err := runCLI("apply", "--lang", "go", project)
+	if err != nil {
+		t.Fatalf("legacy language apply failed: %v\n%s", err, out)
+	}
+	rendered := mustRead(t, gitignorePath)
+	if !strings.Contains(rendered, "*.exe") || !strings.Contains(rendered, "go.work") {
+		t.Fatalf(".gitignore lacks the Go rules:\n%s", rendered)
+	}
+	if strings.Contains(rendered, block+"\n"+block) {
+		t.Fatalf(".gitignore duplicated the internal-state block")
+	}
+	if _, statErr := os.Stat(gitignorePath + ".scbake-new"); !os.IsNotExist(statErr) {
+		t.Errorf("legacy apply wrote an artifact (stat err: %v)", statErr)
+	}
+	manifest := decodeManifest(t, project)
+	if got, want := manifest.ManagedFiles[fileutil.GitIgnore], tasks.HashContent([]byte(rendered)); got != want {
+		t.Fatalf("legacy apply did not adopt .gitignore: got %q, want %q", got, want)
+	}
+	requireNoDrift(t, project)
+}
+
+// TestToolingOnlyProjectGitIgnoreReconcilesWithLanguage is the end-to-end
+// regression test for issue #250: `new --with makefile` creates the root
+// .gitignore through the internal-state helper, which must record it as managed
+// with its pristine base. A later `apply --lang go` then reconciles normally,
+// writes the Go rules, leaves no artifact, and drift tells the truth.
+func TestToolingOnlyProjectGitIgnoreReconcilesWithLanguage(t *testing.T) { //nolint:cyclop // assertion-heavy regression test
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+
+	work := t.TempDir()
+	t.Chdir(work)
+
+	out, err := runCLI("new", "demo", "--with", "makefile")
+	if err != nil {
+		t.Fatalf("new failed: %v\n%s", err, out)
+	}
+
+	project := filepath.Join(work, "demo")
+	gitignorePath := filepath.Join(project, fileutil.GitIgnore)
+	toolingIgnore := mustRead(t, gitignorePath)
+	requireCommittedBaseBlock(t, project)
+
+	manifest := decodeManifest(t, project)
+	if got, want := manifest.ManagedFiles[fileutil.GitIgnore], tasks.HashContent([]byte(toolingIgnore)); got != want {
+		t.Fatalf("new did not record .gitignore as managed: got %q, want on-disk hash %q\nmanaged_files: %v",
+			got, want, manifest.ManagedFiles)
+	}
+	basePath := filepath.Join(project, tasks.BaseShadowRelPath(fileutil.GitIgnore))
+	if base := mustRead(t, basePath); base != toolingIgnore {
+		t.Fatalf("pristine .gitignore base = %q, want %q", base, toolingIgnore)
+	}
+	requireNoDrift(t, project)
+
+	// Pre-fix this fails because the unmanaged .gitignore is treated as drift.
+	out, err = runCLI("apply", "demo", "--lang", "go")
+	if err != nil {
+		t.Fatalf("apply --lang go on the tooling-only project failed: %v\n%s", err, out)
+	}
+
+	applied := mustRead(t, gitignorePath)
+	for _, rule := range []string{"*.exe", "*.test", "*.out", "go.work"} {
+		if !strings.Contains(applied, rule) {
+			t.Fatalf(".gitignore is missing the Go rule %q:\n%s", rule, applied)
+		}
+	}
+	requireSingleInternalStateIgnore(t, project)
+	requireCommittedBaseBlock(t, project)
+
+	if _, statErr := os.Stat(gitignorePath + ".scbake-new"); !os.IsNotExist(statErr) {
+		t.Fatalf("apply left a .gitignore.scbake-new artifact (stat err: %v)", statErr)
+	}
+
+	manifest = decodeManifest(t, project)
+	if got, want := manifest.ManagedFiles[fileutil.GitIgnore], tasks.HashContent([]byte(applied)); got != want {
+		t.Fatalf("apply desynchronized managed_files[%q]: got %q, want %q", fileutil.GitIgnore, got, want)
+	}
+	if base := mustRead(t, basePath); base != applied {
+		t.Fatalf("apply left a stale .gitignore base: got %q, want %q", base, applied)
+	}
+	requireNoDrift(t, project)
+
+	// Drift is clean only while the real file matches the recorded render.
+	mustWrite(t, gitignorePath, applied+"local-only-rule/\n")
+	out, err = runCLI("drift", project)
+	if err == nil {
+		t.Fatalf("drift reported clean for a modified .gitignore:\n%s", out)
+	}
+	if !strings.Contains(out, fileutil.GitIgnore) {
+		t.Fatalf("drift did not name the modified .gitignore:\n%s", out)
+	}
+
+	mustWrite(t, gitignorePath, applied)
+	requireNoDrift(t, project)
+}
+
 // TestManagedRootGitIgnoreStaleEntryDoesNotCreateDrift covers a legacy managed
 // root .gitignore whose recorded hash matches a render without .scbake/. The
 // helper must warn with regeneration guidance and leave the file untouched, so
