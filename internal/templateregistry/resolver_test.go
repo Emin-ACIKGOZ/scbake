@@ -459,3 +459,46 @@ func TestLookupPath_EmptyArgs(t *testing.T) {
 		t.Errorf("expected empty for empty registryName, got %q", result)
 	}
 }
+
+// TestLookupPath_RejectsEscapingPaths is a regression test for #262: LookupPath
+// must confine tplPath to <cacheDir>/<registryName> and reject absolute inputs.
+// Before the fix it joined ../ segments and returned paths outside the cache.
+func TestLookupPath_RejectsEscapingPaths(t *testing.T) {
+	base := t.TempDir()
+	cacheDir := filepath.Join(base, "cache")
+	registryDir := filepath.Join(cacheDir, "acme")
+
+	// Files planted outside the registry directory, both inside and outside the
+	// cache root, must never be returned.
+	writeTestFile(t, filepath.Join(cacheDir, "outside-registry.tpl"), "secret")
+	writeTestFile(t, filepath.Join(base, "outside-cache.tpl"), "secret")
+
+	nested := filepath.Join(registryDir, "templates", "main.go.tpl")
+	writeTestFile(t, nested, "content")
+
+	tests := []struct {
+		name         string
+		registryName string
+		tplPath      string
+		want         string
+	}{
+		{name: "parent segment", registryName: "acme", tplPath: ".."},
+		{name: "escape to cache root", registryName: "acme", tplPath: "../outside-registry.tpl"},
+		{name: "escape out of cache", registryName: "acme", tplPath: "../../outside-cache.tpl"},
+		{name: "escape after cleaning", registryName: "acme", tplPath: "templates/../../outside-registry.tpl"},
+		{name: "absolute path", registryName: "acme", tplPath: filepath.Join(base, "outside-cache.tpl")},
+		{name: "absolute root path", registryName: "acme", tplPath: "/etc/passwd"},
+		{name: "current directory", registryName: "acme", tplPath: "."},
+		{name: "escape via registry name", registryName: "..", tplPath: "outside-cache.tpl"},
+		{name: "valid nested path", registryName: "acme", tplPath: "templates/main.go.tpl", want: nested},
+		{name: "valid nested dot path", registryName: "acme", tplPath: "templates/./main.go.tpl", want: nested},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LookupPath(cacheDir, tt.registryName, tt.tplPath)
+			if got != tt.want {
+				t.Errorf("LookupPath(%q, %q, %q) = %q, want %q", cacheDir, tt.registryName, tt.tplPath, got, tt.want)
+			}
+		})
+	}
+}

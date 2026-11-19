@@ -164,12 +164,21 @@ func resolveInRegistry(cacheDir, registryDir, templateName, cleanPath string) st
 }
 
 // LookupPath returns the full path to a template file in the cache for a
-// specific registry. Returns empty string if not found.
+// specific registry. Returns empty string if not found, if registryName is not a
+// safe single path segment, or if tplPath is absolute or resolves outside
+// <cacheDir>/<registryName>.
 func LookupPath(cacheDir, registryName, tplPath string) string {
-	if cacheDir == "" || registryName == "" {
+	if cacheDir == "" || ValidateName(registryName) != nil {
 		return ""
 	}
-	candidate := filepath.Join(cacheDir, registryName, filepath.Clean(tplPath))
+	if filepath.IsAbs(tplPath) {
+		return ""
+	}
+	registryDir := filepath.Join(cacheDir, registryName)
+	candidate := filepath.Join(registryDir, filepath.Clean(tplPath))
+	if ensureStrictlyWithin(registryDir, candidate) != nil {
+		return ""
+	}
 	if _, err := os.Stat(candidate); err != nil {
 		return ""
 	}
