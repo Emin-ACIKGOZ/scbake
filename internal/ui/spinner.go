@@ -62,14 +62,13 @@ func (r *SpinnerReporter) SetTotalSteps(total int) {
 
 // TaskStart initiates the spinner animation for a specific sub-task in a separate goroutine.
 func (r *SpinnerReporter) TaskStart(desc string, curr, total int) {
+	// A previous task that was never ended is superseded here. Join it before
+	// installing the new state so no stale renderer can write after this task's
+	// TaskEnd returns.
+	r.stopActiveSpinner()
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	// Cancel any spinner that was not ended explicitly. It captures its own
-	// context and done channel, so it can exit without touching this task's state.
-	if r.spinnerCancel != nil {
-		r.spinnerCancel()
-	}
 
 	// Create context with timeout to prevent goroutine leaks if TaskEnd() is never called
 	ctx, cancel := context.WithTimeout(context.Background(), spinnerTimeout)
@@ -84,6 +83,28 @@ func (r *SpinnerReporter) TaskStart(desc string, curr, total int) {
 	r.activeTotal = total
 
 	go r.animate(ctx, done, stopped, desc, curr, total)
+}
+
+// stopActiveSpinner cancels and joins the active renderer, if any. It clears
+// the lifecycle fields so a later TaskEnd for the superseded task is a no-op.
+func (r *SpinnerReporter) stopActiveSpinner() {
+	r.mu.Lock()
+	done := r.done
+	stopped := r.spinnerStopped
+	cancel := r.spinnerCancel
+	r.done = nil
+	r.spinnerStopped = nil
+	r.spinnerCancel = nil
+	r.mu.Unlock()
+
+	if done == nil {
+		return
+	}
+	close(done)
+	if cancel != nil {
+		cancel()
+	}
+	<-stopped
 }
 
 // animate handles the ticker logic and ANSI escape sequences for the spinner animation.

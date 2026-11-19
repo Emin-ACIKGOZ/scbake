@@ -22,6 +22,67 @@ func TestSpinnerReporterSequentialTaskLifecycle(_ *testing.T) {
 	}
 }
 
+// TestSpinnerReporterSupersedeJoinsPrevious covers a start without a prior
+// end: the superseded renderer must be joined before TaskEnd returns.
+func TestSpinnerReporterSupersedeJoinsPrevious(t *testing.T) { //nolint:cyclop // pipe reader/join assertions
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe failed: %v", err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = writer
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+		_ = writer.Close()
+		_ = reader.Close()
+	})
+
+	chunks := make(chan []byte, 16)
+	go func() {
+		defer close(chunks)
+		chunk := make([]byte, 256)
+		for {
+			n, readErr := reader.Read(chunk)
+			if n > 0 {
+				out := make([]byte, n)
+				copy(out, chunk[:n])
+				chunks <- out
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+
+	r := NewSpinnerReporter(2)
+	r.TaskStart("first", 1, 2)
+	r.TaskStart("second", 2, 2)
+	r.TaskEnd(nil)
+
+	const finalLine = "[2/2] ✅ second\n"
+	var got strings.Builder
+	deadline := time.After(2 * time.Second)
+	for !strings.HasSuffix(got.String(), finalLine) {
+		select {
+		case chunk, ok := <-chunks:
+			if !ok {
+				t.Fatalf("stdout closed before the final indicator; output = %q", got.String())
+			}
+			got.Write(chunk)
+		case <-deadline:
+			t.Fatalf("timed out waiting for the final indicator; output = %q", got.String())
+		}
+	}
+	select {
+	case chunk, ok := <-chunks:
+		if ok {
+			got.Write(chunk)
+		}
+		t.Fatalf("a superseded spinner wrote after TaskEnd returned; output = %q", got.String())
+	case <-time.After(2 * spinnerDelay):
+	}
+}
+
 // TestSpinnerReporterTaskEndIsIdempotent is a regression test for #255: ending a
 // task twice must be a no-op instead of panicking on a closed channel.
 func TestSpinnerReporterTaskEndIsIdempotent(_ *testing.T) {
