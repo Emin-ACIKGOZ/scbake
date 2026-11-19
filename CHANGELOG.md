@@ -4,6 +4,25 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.16.20] - 2026-11-19
+
+### Bug Fixes
+
+- **ui:** Synchronize the spinner lifecycle under the mutex
+- **ui:** Join a superseded spinner before starting
+- **ui:** Serialize spinner lifecycle transitions
+
+### Refactor
+
+- **ui:** Cancel the spinner before joining it
+- **ui:** Share the spinner lifecycle stop helper
+
+### Testing
+
+- **ui:** Prove the join with an in-flight renderer
+- **ui:** Require zero leaked spinner renderers exactly
+- **ui:** Verify supersede waits for an in-flight renderer
+
 ## [0.16.19] - 2026-11-19
 
 ### Bug Fixes
