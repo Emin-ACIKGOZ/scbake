@@ -278,6 +278,64 @@ func TestManagedRootGitIgnoreHashMatchesDisk(t *testing.T) {
 	requireNoDrift(t, project)
 }
 
+// TestLegacyToolingProjectGitIgnoreAdoptsOnLanguageApply covers a project
+// created by an older binary: the root .gitignore is exactly scbake's canonical
+// block, but the ledger and base have no entry. A language apply must recognize
+// the owned block, reconcile it, and adopt the rendered result instead of
+// reporting a false drift conflict.
+func TestLegacyToolingProjectGitIgnoreAdoptsOnLanguageApply(t *testing.T) { //nolint:cyclop // multi-step legacy-state fixture
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+
+	work := t.TempDir()
+	t.Chdir(work)
+	if out, err := runCLI("new", "demo", "--with", "makefile"); err != nil {
+		t.Fatalf("new failed: %v\n%s", err, out)
+	}
+	project := filepath.Join(work, "demo")
+	gitignorePath := filepath.Join(project, fileutil.GitIgnore)
+	block := mustRead(t, gitignorePath)
+
+	// Remove only the .gitignore ledger entry and its base, leaving the
+	// canonical block on disk: the legacy state this issue describes.
+	manifestPath := filepath.Join(project, fileutil.ManifestFileName)
+	raw := mustRead(t, manifestPath)
+	var kept []string
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.Contains(line, `".gitignore" =`) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if err := os.WriteFile(manifestPath, []byte(strings.Join(kept, "\n")), 0o600); err != nil {
+		t.Fatalf("rewrite manifest: %v", err)
+	}
+	if err := os.Remove(filepath.Join(project, tasks.BaseShadowRelPath(fileutil.GitIgnore))); err != nil {
+		t.Fatalf("remove base: %v", err)
+	}
+
+	out, err := runCLI("apply", "--lang", "go", project)
+	if err != nil {
+		t.Fatalf("legacy language apply failed: %v\n%s", err, out)
+	}
+	rendered := mustRead(t, gitignorePath)
+	if !strings.Contains(rendered, "*.exe") || !strings.Contains(rendered, "go.work") {
+		t.Fatalf(".gitignore lacks the Go rules:\n%s", rendered)
+	}
+	if strings.Contains(rendered, block+"\n"+block) {
+		t.Fatalf(".gitignore duplicated the internal-state block")
+	}
+	if _, statErr := os.Stat(gitignorePath + ".scbake-new"); !os.IsNotExist(statErr) {
+		t.Errorf("legacy apply wrote an artifact (stat err: %v)", statErr)
+	}
+	manifest := decodeManifest(t, project)
+	if got, want := manifest.ManagedFiles[fileutil.GitIgnore], tasks.HashContent([]byte(rendered)); got != want {
+		t.Fatalf("legacy apply did not adopt .gitignore: got %q, want %q", got, want)
+	}
+	requireNoDrift(t, project)
+}
+
 // TestToolingOnlyProjectGitIgnoreReconcilesWithLanguage is the end-to-end
 // regression test for issue #250: `new --with makefile` creates the root
 // .gitignore through the internal-state helper, which must record it as managed

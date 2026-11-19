@@ -215,6 +215,8 @@ func normalizeEOL(content []byte) []byte {
 // outputRelPath is the target-relative path used to read the file; ledgerKey is
 // the project-scoped managed_files key used for state lookup; newContent is the
 // pristine render the template is trying to write.
+//
+//nolint:cyclop // strategy decision matrix over force, state, and content
 func checkReconciliation(
 	absFinalPath, outputRelPath, ledgerKey, newContentHash string,
 	newContent []byte,
@@ -247,7 +249,10 @@ func checkReconciliation(
 	// so the file is adopted (ledger entry and pristine base) without a
 	// conflict or an artifact.
 	if originalHash == "" {
-		if existingHash == newContentHash {
+		// A converged render, or a legacy tooling-only project whose .gitignore
+		// is exactly scbake's canonical block with no ledger entry, can be
+		// written and adopted without a false drift conflict.
+		if existingHash == newContentHash || ownsInternalStateIgnore(ledgerKey, existingContent) {
 			return absFinalPath, nil, nil
 		}
 		p, cErr := handleConflict(absFinalPath, outputRelPath, tc.ConflictStrategy)
@@ -1047,11 +1052,17 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 		}
 		// The block is present but the file also carries user rules. It stays
 		// user-owned; say so rather than silently reporting a clean tree.
-		warnInternalStateUnmanaged(tc, relPath)
+		warnInternalStateUnmanaged(tc, relPath, false)
 		return nil
 	}
 
 	return applyInternalStateIgnore(tc, root, relPath, absPath, existing)
+}
+
+// ownsInternalStateIgnore reports whether the root .gitignore is exactly the
+// canonical block, so scbake may adopt it without touching user rules.
+func ownsInternalStateIgnore(ledgerKey string, content []byte) bool {
+	return ledgerKey == fileutil.GitIgnore && isOwnedInternalStateIgnore(content)
 }
 
 // isOwnedInternalStateIgnore reports whether content is exactly the canonical
@@ -1129,24 +1140,28 @@ func applyInternalStateIgnore(tc types.TaskContext, root, relPath, absPath strin
 		return err
 	}
 	if len(existing) > 0 {
-		warnInternalStateUnmanaged(tc, relPath)
+		warnInternalStateUnmanaged(tc, relPath, true)
 		return nil
 	}
 	return recordCanonicalWrite(tc, managedFilesKey(tc, absPath, relPath), HashContent(content), content)
 }
 
-// warnInternalStateUnmanaged reports that scbake appended its ignore rules to a
-// pre-existing user-owned .gitignore without claiming ownership. Recording the
-// whole file would let a later apply overwrite rules scbake did not write, so
-// the ledger stays untouched and the file remains user-managed.
-func warnInternalStateUnmanaged(tc types.TaskContext, relPath string) {
+// warnInternalStateUnmanaged reports that a user-owned .gitignore stays
+// unmanaged, distinguishing a file scbake appended to from one that already
+// carried the block alongside user rules. Recording either would let a later
+// apply overwrite rules scbake did not write.
+func warnInternalStateUnmanaged(tc types.TaskContext, relPath string, appended bool) {
 	if tc.Manifest == nil {
 		return
 	}
+	detail := "already contains scbake's ignore rules alongside user rules"
+	if appended {
+		detail = "already existed; appended scbake's ignore rules"
+	}
 	fmt.Fprintf(
 		os.Stderr,
-		"⚠️  %s already existed; appended scbake's ignore rules but left the file unmanaged. A later language apply may fail or write %s.scbake-new.\n",
-		relPath, relPath,
+		"⚠️  %s %s but stays unmanaged. A later language apply may fail or write %s.scbake-new.\n",
+		relPath, detail, relPath,
 	)
 }
 

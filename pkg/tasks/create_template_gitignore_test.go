@@ -841,7 +841,7 @@ func TestEnsureInternalStateWarnsForUserRules(t *testing.T) {
 	if got := readGitIgnore(t, root); got != content {
 		t.Fatalf(".gitignore was rewritten: %q", got)
 	}
-	if !strings.Contains(out, "left the file unmanaged") {
+	if !strings.Contains(out, "stays unmanaged") {
 		t.Fatalf("block-plus-rules case did not warn:\n%s", out)
 	}
 }
@@ -877,7 +877,7 @@ func TestWriteBaseShadow_LeavesUserGitIgnoreUnmanaged(t *testing.T) {
 	if _, err := ReadBaseShadow(root, fileutil.GitIgnore); !os.IsNotExist(err) {
 		t.Fatalf("pre-existing .gitignore got a pristine base (err: %v)", err)
 	}
-	if !strings.Contains(out, "left the file unmanaged") {
+	if !strings.Contains(out, "stays unmanaged") {
 		t.Fatalf("warning does not disclose that .gitignore stays unmanaged:\n%s", out)
 	}
 	want := initial + internalStateIgnoreEntry + "\n" + committedBaseIgnoreBlock
