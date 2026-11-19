@@ -17,14 +17,14 @@ GITHUB_REPO="Emin-ACIKGOZ/scbake"
 GITHUB_API_URL="https://api.github.com/repos/${GITHUB_REPO}"
 RELEASE_URL="https://github.com/${GITHUB_REPO}/releases/download"
 
-# Parse arguments - simple positional
-VERSION="${1:-latest}"
-INSTALL_DIR="${2:-}"
+# Quiet mode may come from the environment (QUIET=1) or from a --quiet/-q
+# argument. Detect the flag up front so the color setup below can honor it; the
+# positional arguments are parsed after the helpers, where die() exists.
 QUIET="${QUIET:-0}"
-
-# Check for --quiet flag anywhere in args
 for arg in "$@"; do
-    [[ "$arg" == "--quiet" || "$arg" == "-q" ]] && QUIET=1
+    case "$arg" in
+        --quiet|-q) QUIET=1 ;;
+    esac
 done
 
 # Color codes for output (disabled in quiet mode)
@@ -46,15 +46,21 @@ NC='\033[0m' # No Color
 # =============================================================================
 
 log_info() {
-    [ "$QUIET" -eq 0 ] && echo -e "${BLUE}ℹ${NC} $*"
+    if [ "$QUIET" -eq 0 ]; then
+        echo -e "${BLUE}ℹ${NC} $*"
+    fi
 }
 
 log_success() {
-    [ "$QUIET" -eq 0 ] && echo -e "${GREEN}✓${NC} $*"
+    if [ "$QUIET" -eq 0 ]; then
+        echo -e "${GREEN}✓${NC} $*"
+    fi
 }
 
 log_warn() {
-    [ "$QUIET" -eq 0 ] && echo -e "${YELLOW}⚠${NC} $*"
+    if [ "$QUIET" -eq 0 ]; then
+        echo -e "${YELLOW}⚠${NC} $*"
+    fi
 }
 
 log_error() {
@@ -83,13 +89,37 @@ progress_step() {
     local msg=$3
     local percent=$((step * 100 / total))
 
-    [ "$QUIET" -eq 0 ] && printf "${BLUE}[%3d%%]${NC} %s\n" "$percent" "$msg"
+    if [ "$QUIET" -eq 0 ]; then
+        printf "${BLUE}[%3d%%]${NC} %s\n" "$percent" "$msg"
+    fi
 }
 
 die() {
     log_error "$*"
     exit 1
 }
+
+# Parse arguments: [version] [install-dir] [--quiet|-q]. Flags may appear
+# anywhere and are removed before assigning the positional slots, so `--quiet`
+# can never become the version or the install directory. Bash 3 (macOS)
+# compatible: no arrays, no mapfile.
+VERSION=""
+INSTALL_DIR=""
+positional=0
+for arg in "$@"; do
+    case "$arg" in
+        --quiet|-q) continue ;;
+    esac
+    positional=$((positional + 1))
+    case "$positional" in
+        1) VERSION="$arg" ;;
+        2) INSTALL_DIR="$arg" ;;
+        *) die "Too many arguments. Usage: bash install.sh [version] [install-dir] [--quiet]" ;;
+    esac
+done
+if [ -z "$VERSION" ]; then
+    VERSION="latest"
+fi
 
 # Detect OS and architecture
 detect_system() {
@@ -459,7 +489,49 @@ main() {
     make_executable "$binary_name"
 
     log_info "Installing to system..."
-    mkdir -p "$INSTALL_DIR" || die "Failed to create install directory"
+
+    # Creating the directory needs the same privilege handling as writing into
+    # it: a new path under a protected parent (e.g. /opt/scbake) cannot be
+    # created unprivileged. Try it first so writable installs never prompt, and
+    # only escalate when that fails. Windows never escalates: it used to fail
+    # here, and now it fails with the captured detail.
+    local use_sudo=0
+    local mkdir_err=""
+    if ! mkdir_err=$(LC_ALL=C mkdir -p "$INSTALL_DIR" 2>&1); then
+        if [[ "$os_arch" == *"windows"* ]]; then
+            die "Failed to create install directory '$INSTALL_DIR': $mkdir_err"
+        fi
+
+        # Not every mkdir failure is a privilege problem: an existing regular
+        # file at the path, a read-only filesystem, or an invalid name all fail
+        # the same way. mkdir's own diagnostic (captured above under LC_ALL=C)
+        # tells those apart from a permission problem, so report it instead of
+        # prompting for a password sudo cannot use.
+        if [[ "$mkdir_err" == *"Read-only file system"* ]]; then
+            die "Failed to create install directory '$INSTALL_DIR': $mkdir_err"
+        fi
+
+        # Walk up to the nearest existing ancestor; if that is writable, the
+        # user has permission there and sudo cannot help, so report the real
+        # failure instead of prompting for a password.
+        local probe="$INSTALL_DIR"
+        while [ ! -d "$probe" ] && [ "$probe" != "/" ] && [ "$probe" != "." ]; do
+            probe=$(dirname "$probe")
+        done
+        if [ -d "$probe" ] && [ -w "$probe" ]; then
+            die "Failed to create install directory '$INSTALL_DIR': $mkdir_err"
+        fi
+
+        log_warn "Directory '$INSTALL_DIR' requires elevated privileges"
+        log_info "Password prompt coming up (or use ~/.local/bin to avoid sudo)"
+
+        if ! sudo -v >/dev/null 2>&1; then
+            die "sudo authentication failed. Try: bash install.sh latest ~/.local/bin"
+        fi
+
+        sudo mkdir -p "$INSTALL_DIR" || die "Failed to create install directory '$INSTALL_DIR': $mkdir_err"
+        use_sudo=1
+    fi
 
     # Use sudo if necessary, with user warning
     if [[ "$os_arch" == *"windows"* ]]; then
@@ -468,7 +540,9 @@ main() {
         fi
     fi
 
-    if [ ! -w "$INSTALL_DIR" ]; then
+    # Skip the second sudo -v when the directory was just created with sudo:
+    # credentials are already cached, and re-checking only risks another prompt.
+    if [ "$use_sudo" -eq 0 ] && [ ! -w "$INSTALL_DIR" ]; then
         log_warn "Directory '$INSTALL_DIR' requires elevated privileges"
         log_info "Password prompt coming up (or use ~/.local/bin to avoid sudo)"
 
@@ -476,6 +550,10 @@ main() {
             die "sudo authentication failed. Try: bash install.sh latest ~/.local/bin"
         fi
 
+        use_sudo=1
+    fi
+
+    if [ "$use_sudo" -eq 1 ]; then
         sudo mv "$binary_name" "$INSTALL_DIR/$binary_name" || die "Failed to install"
     else
         mv "$binary_name" "$INSTALL_DIR/$binary_name" || die "Failed to install"
@@ -510,4 +588,4 @@ main() {
 # Entry Point
 # =============================================================================
 
-main "$@"
+main

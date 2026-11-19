@@ -17,10 +17,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"scbake/internal/types"
+	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
 )
@@ -83,8 +86,12 @@ type Finding struct {
 // Missing when the path does not exist. The hash is EOL-insensitive for NUL-free
 // content, so an EOL-only change is not drift. Legacy entries written before
 // managed_files keys were scoped per project are resolved against the manifest's
-// project paths using the same content-matching rule as the write path, so
-// detection never reports false drift for a file scbake still manages.
+// project paths using the same content-matching rule as the write path, so an
+// unscoped legacy entry that resolves through a project path is not reported as
+// drift. Scoped keys are deliberately not probed across projects (see
+// inspectLegacy), so a pre-SCBF-057 flat key whose leading directory coincides
+// with another project's declared path is treated as scoped and may be reported
+// Missing. That narrow trade-off is accepted to keep the scan linear.
 //
 // For every current key the committed base under .scbake-base is also compared
 // with the recorded hash: absent is BaseMissing, and a hash mismatch is
@@ -119,6 +126,7 @@ func Detect(m *types.Manifest, root string) ([]Finding, error) {
 // detection never reports a false clean.
 func collectFindings(m *types.Manifest, root string) ([]Finding, error) {
 	findings := make([]Finding, 0, len(m.ManagedFiles))
+	scope := projectScope(m)
 	for key, recorded := range m.ManagedFiles {
 		baseline := recorded
 		accepted := false
@@ -126,7 +134,7 @@ func collectFindings(m *types.Manifest, root string) ([]Finding, error) {
 			baseline = h
 			accepted = true
 		}
-		finding, drifted, legacyResolved, err := inspect(m, root, key, recorded, baseline, accepted)
+		finding, drifted, legacyResolved, err := inspect(m, root, key, recorded, baseline, accepted, scope)
 		if err != nil {
 			return nil, err
 		}
@@ -152,7 +160,7 @@ func collectFindings(m *types.Manifest, root string) ([]Finding, error) {
 // project path, so it has no committed base key to validate. A non-nil error
 // means detection could not be completed and must fail closed rather than report
 // a false clean.
-func inspect(m *types.Manifest, root, key, recorded, baseline string, accepted bool) (finding Finding, drifted, legacyResolved bool, err error) {
+func inspect(m *types.Manifest, root, key, recorded, baseline string, accepted bool, scope map[string]struct{}) (finding Finding, drifted, legacyResolved bool, err error) {
 	data, readErr := fileutil.SafeReadFile(root, filepath.FromSlash(key))
 	switch {
 	case readErr == nil:
@@ -168,9 +176,14 @@ func inspect(m *types.Manifest, root, key, recorded, baseline string, accepted b
 		}
 		return Finding{}, false, false, nil
 	case errors.Is(readErr, fs.ErrNotExist):
-		return inspectLegacy(m, root, key, recorded, baseline, accepted)
+		return inspectLegacy(m, root, key, recorded, baseline, accepted, scope)
 	default:
-		return Finding{}, false, false, fmt.Errorf("inspecting managed file %q: %w", key, readErr)
+		// readErr is a *fs.PathError carrying the manifest-derived key, so it
+		// can hold raw terminal controls. The error is already known not to be
+		// ENOENT here; wrap a sanitized view so the control bytes cannot reach
+		// stderr while errors.Is/errors.As can still inspect the original.
+		return Finding{}, false, false, fmt.Errorf("inspecting managed file %q: %w",
+			key, util.SanitizeError(readErr))
 	}
 }
 
@@ -185,7 +198,25 @@ func inspect(m *types.Manifest, root, key, recorded, baseline string, accepted b
 // A match through a project path reports legacyResolved: the key is a pre-scope
 // flat key, and no version wrote a base at the corresponding root-relative base
 // path, so base validation must be skipped to avoid a permanent false finding.
-func inspectLegacy(m *types.Manifest, root, key, recorded, baseline string, accepted bool) (finding Finding, drifted, legacyResolved bool, err error) {
+//
+// A key that is already scoped under a project path is treated as Missing
+// without probing. Mirroring a scoped key beneath another project is irrelevant
+// for current keys and was the source of the quadratic scan. The accepted
+// trade-off is that a pre-SCBF-057 flat key whose leading directory coincides
+// with another project's declared path is classified as scoped and may be
+// reported Missing where the legacy probe could have found a copy. Such a key
+// is Missing immediately (with legacyResolved false, so its committed base is
+// still validated).
+func inspectLegacy(m *types.Manifest, root, key, recorded, baseline string, accepted bool, scope map[string]struct{}) (finding Finding, drifted, legacyResolved bool, err error) {
+	if isProjectScoped(key, scope) {
+		return Finding{
+			Path:     key,
+			Kind:     Missing,
+			Recorded: recorded,
+			Baseline: baseline,
+			Accepted: accepted,
+		}, true, false, nil
+	}
 	keyPath := filepath.FromSlash(key)
 	var matched bool
 	for _, p := range m.Projects {
@@ -222,13 +253,59 @@ func inspectLegacy(m *types.Manifest, root, key, recorded, baseline string, acce
 	}, true, false, nil
 }
 
+// projectScope precomputes the normalized, slash-cleaned, de-duplicated project
+// paths used to detect keys that are already scoped to a project. Empty and
+// root (".") project paths are skipped: they are the manifest root rather than
+// a prefix. Computing the set once per scan keeps the scoped check out of the
+// per-key project loop.
+func projectScope(m *types.Manifest) map[string]struct{} {
+	if len(m.Projects) == 0 {
+		return nil
+	}
+	scope := make(map[string]struct{}, len(m.Projects))
+	for _, p := range m.Projects {
+		prefix := cleanManifestPath(p.Path)
+		if prefix == "." {
+			continue
+		}
+		scope[prefix] = struct{}{}
+	}
+	return scope
+}
+
+// cleanManifestPath normalizes a slash-separated manifest path for prefix
+// comparison only. The original key is still used for reads and findings.
+func cleanManifestPath(p string) string {
+	return path.Clean(filepath.ToSlash(p))
+}
+
+// isProjectScoped reports whether key equals a project path or lies beneath
+// one. It walks the key's slash-separated ancestors, so the cost depends on the
+// key depth rather than the number of projects.
+func isProjectScoped(key string, scope map[string]struct{}) bool {
+	if len(scope) == 0 {
+		return false
+	}
+	for cleaned := cleanManifestPath(key); ; {
+		if _, ok := scope[cleaned]; ok {
+			return true
+		}
+		i := strings.LastIndexByte(cleaned, '/')
+		if i < 0 {
+			return false
+		}
+		cleaned = cleaned[:i]
+	}
+}
+
 // inspectBase validates the committed base shadow for a current ledger key.
 // baseDrifted is false when the base matches the recorded hash. A missing base
-// is BaseMissing; any other read error is returned so detection fails closed
-// instead of hiding an I/O or containment problem as content drift.
+// is BaseMissing; any other error, including a redirected base tree (symlinked
+// or non-directory component), is returned so detection fails closed instead of
+// hiding a containment problem as content drift.
 func inspectBase(root, key, recorded string) (Finding, bool, error) {
 	relPath := tasks.BaseShadowRelPath(key)
-	base, err := fileutil.SafeReadFile(root, relPath)
+	base, err := tasks.ReadBaseShadow(root, key)
 	switch {
 	case err == nil:
 		if tasks.BaseMatchesRecordedHash(base, recorded) {
@@ -249,6 +326,10 @@ func inspectBase(root, key, recorded string) (Finding, bool, error) {
 			BasePath: filepath.ToSlash(relPath),
 		}, true, nil
 	default:
-		return Finding{}, false, fmt.Errorf("inspecting committed base for %q: %w", key, err)
+		// As in inspect, the PathError embeds the key that a cloned manifest
+		// controls. Classify it first, then wrap a sanitized view that keeps the
+		// original error available to errors.Is/errors.As.
+		return Finding{}, false, fmt.Errorf("inspecting committed base for %q: %w",
+			key, util.SanitizeError(err))
 	}
 }
