@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,11 +199,70 @@ func refuseHardlinkedTarget(path string) error {
 	return nil
 }
 
+// rejectNonRegular fails when path exists and is neither a regular file nor a
+// symlink. A missing path is allowed: callers may be about to create it. A
+// symlinked leaf is also allowed here because openNoFollow rejects it, keeping
+// the existing symlink diagnostics.
+//
+// Opening a FIFO blocks until a peer appears, so a managed path (or a backup
+// source, base shadow, or lock/journal path) replaced by a FIFO would otherwise
+// hang a read or write and make signals unable to interrupt it. Rejecting every
+// other non-regular mode (directories, devices, sockets, FIFOs) fails fast
+// before any blocking open.
+func rejectNonRegular(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
+	if !info.Mode().IsRegular() {
+		return &nonRegularError{path: path}
+	}
+	return nil
+}
+
+// errNotRegular is the cause reported by nonRegularError.
+var errNotRegular = errors.New("not a regular file")
+
+// nonRegularError reports an existing path that is not a regular file. It
+// displays the path with %q so control characters cannot reach a terminal
+// unescaped, while Unwrap keeps a *fs.PathError in the chain for callers that
+// inspect the underlying filesystem failure with errors.As.
+type nonRegularError struct {
+	path string
+}
+
+// Error renders the rejected path with Go quoting, which escapes any control
+// characters the path may contain.
+func (e *nonRegularError) Error() string {
+	return fmt.Sprintf("%q is not a regular file", e.path)
+}
+
+// Unwrap exposes the filesystem error shape that the replaced open would have
+// returned.
+func (e *nonRegularError) Unwrap() error {
+	return &fs.PathError{Op: "open", Path: e.path, Err: errNotRegular}
+}
+
 // SafeReadFile validates targetPath containment inside baseDir then reads the
 // file without following a symlinked final component.
+//
+// Only regular files are opened; non-regular paths (FIFOs, directories,
+// devices, sockets) are rejected with a clear error. A missing path returns the
+// Lstat error unchanged so callers can keep using os.IsNotExist/errors.Is with
+// fs.ErrNotExist.
 func SafeReadFile(baseDir, targetPath string) ([]byte, error) {
 	safePath, err := SafePath(baseDir, targetPath)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := rejectNonRegular(safePath); err != nil {
 		return nil, err
 	}
 
@@ -216,11 +276,16 @@ func SafeReadFile(baseDir, targetPath string) ([]byte, error) {
 }
 
 // SafeOpenFile validates targetPath containment inside baseDir then opens the
-// file without following a symlinked final component. Writes additionally
-// refuse a hard-linked target (SCB-003).
+// file without following a symlinked final component. Non-regular files are
+// rejected before opening, so a read or write never blocks on a FIFO. Writes
+// additionally refuse a hard-linked target (SCB-003).
 func SafeOpenFile(baseDir, targetPath string, flag int, perm os.FileMode) (*os.File, error) {
 	safePath, err := SafePath(baseDir, targetPath)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := rejectNonRegular(safePath); err != nil {
 		return nil, err
 	}
 
@@ -234,11 +299,16 @@ func SafeOpenFile(baseDir, targetPath string, flag int, perm os.FileMode) (*os.F
 }
 
 // SafeWriteFile validates targetPath containment inside baseDir then writes the
-// file without following a symlinked final component. A hard-linked target is
-// refused (SCB-003).
+// file without following a symlinked final component. Non-regular files are
+// rejected before opening (a FIFO write would block), and a hard-linked target
+// is refused (SCB-003).
 func SafeWriteFile(baseDir, targetPath string, data []byte, perm os.FileMode) error {
 	safePath, err := SafePath(baseDir, targetPath)
 	if err != nil {
+		return err
+	}
+
+	if err := rejectNonRegular(safePath); err != nil {
 		return err
 	}
 

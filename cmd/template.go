@@ -21,11 +21,13 @@ var templateCmd = &cobra.Command{
 	Long: `Manage remote template registries and pull templates.
 Registries are named sources of template overrides that supplement
 the embedded templates and --template-dir overrides.`,
+	RunE: helpOnNoArgs,
 }
 
 var registryCmd = &cobra.Command{
 	Use:   "registry",
 	Short: "Manage template registries",
+	RunE:  helpOnNoArgs,
 }
 
 var (

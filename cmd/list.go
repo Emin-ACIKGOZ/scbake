@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"scbake/internal/manifest"
+	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/lang"
 	"scbake/pkg/templates"
@@ -49,7 +50,8 @@ or the projects currently managed in this repository's ` + fileutil.ManifestFile
 				return
 			}
 			for _, p := range m.Projects {
-				fmt.Printf("  - %s (lang: %s, path: %s)\n", p.Name, p.Language, p.Path)
+				fmt.Printf("  - %s (lang: %s, path: %s)\n",
+					util.Sanitize(p.Name), util.Sanitize(p.Language), util.Sanitize(p.Path))
 			}
 
 		default:
