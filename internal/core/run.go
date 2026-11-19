@@ -233,7 +233,10 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 		return err
 	}
 	if lang == "" && len(withTemplates) == 0 {
-		if paths := projectPaths(m); len(paths) > 0 {
+		// Only a target that is the manifest root is a monorepo root. From a
+		// subdirectory the recorded paths are still useful context, but saying
+		// "this is a monorepo root" would misdescribe the target.
+		if paths := projectPaths(m); relPath == "." && len(paths) > 0 {
 			safePaths := make([]string, 0, len(paths))
 			for _, p := range paths {
 				safePaths = append(safePaths, util.Sanitize(p))
@@ -324,7 +327,7 @@ func projectPaths(m *types.Manifest) []string {
 	seen := make(map[string]struct{}, len(m.Projects))
 	paths := make([]string, 0, len(m.Projects))
 	for _, p := range m.Projects {
-		if p.Path == "" {
+		if p.Path == "" || p.Path == "." {
 			continue
 		}
 		if _, ok := seen[p.Path]; ok {

@@ -121,7 +121,8 @@ func TestMarkerlessApplyOptInUsesCentralManifest(t *testing.T) {
 }
 
 // TestMarkerlessListProjectsFlagPlumbing proves `list projects` forwards the
-// flag to root discovery: without it the local (absent) manifest is empty.
+// flag to root discovery: without it the absent local manifest is an error,
+// and with it the ancestor manifest is listed.
 func TestMarkerlessListProjectsFlagPlumbing(t *testing.T) {
 	monoDir := setupMarkerlessMonorepo(t, "[[projects]]\nname = \"api\"\npath = \"services/api\"\nlanguage = \"go\"\n")
 	subDir := makeSubdir(t, monoDir, "sub")

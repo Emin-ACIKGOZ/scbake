@@ -63,6 +63,10 @@ func TestRootUpdateNamesMonorepoProjects(t *testing.T) {
   name = "web"
   path = "apps/web"
   language = "svelte"
+
+[[projects]]
+  name = "root"
+  path = "."
 `
 	if err := os.WriteFile(filepath.Join(work, "scbake.toml"), []byte(body), 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
@@ -77,6 +81,28 @@ func TestRootUpdateNamesMonorepoProjects(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("root update error does not contain %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "for one of: .") {
+		t.Errorf("root update suggested the root project as a subproject target:\n%s", out)
+	}
+}
+
+// TestSubdirUpdateDoesNotClaimMonorepoRoot keeps the hint accurate when the
+// target is a subdirectory of a markerless monorepo: it is not the root.
+func TestSubdirUpdateDoesNotClaimMonorepoRoot(t *testing.T) {
+	mono := setupMarkerlessMonorepo(t, "[[projects]]\nname = \"api\"\npath = \"services/api\"\nlanguage = \"go\"\n")
+	sub := makeSubdir(t, mono, "docs")
+	t.Chdir(sub)
+
+	out, err := runCLI("update", "--allow-ancestor-search")
+	if err == nil {
+		t.Fatalf("subdirectory update should fail with no templates:\n%s", out)
+	}
+	if strings.Contains(out, "monorepo root") {
+		t.Errorf("subdirectory update misidentified the target as the monorepo root:\n%s", out)
+	}
+	if !strings.Contains(out, "nothing to update") {
+		t.Errorf("subdirectory update did not give the ordinary no-templates error:\n%s", out)
 	}
 }
 
