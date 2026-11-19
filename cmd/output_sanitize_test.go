@@ -609,6 +609,7 @@ var unsafeProjectNameVectors = []unsafeProjectNameVector{
 	{name: "right-to-left override", raw: "demo\u202eevil", escaped: `demo\u202eevil`, unsafe: '\u202e'},
 	{name: "line separator", raw: "demo\u2028evil", escaped: `demo\u2028evil`, unsafe: '\u2028'},
 	{name: "bidi isolate", raw: "demo\u2066evil", escaped: `demo\u2066evil`, unsafe: '\u2066'},
+	{name: "C1 control", raw: "demo\u009bevil", escaped: `demo\x9bevil`, unsafe: '\u009b'},
 }
 
 // assertUnsafeNameEscapedOnce rejects a raw format control or a double-escaped

@@ -28,6 +28,49 @@ func runIssue260(t *testing.T, dir string, args ...string) (stdout, stderr strin
 	return outBuf.String(), errBuf.String(), err
 }
 
+// TestIssue260RegistryErrorsEscapeNames closes the remaining same-class paths:
+// unknown --with and --lang names are echoed by the registries before any
+// template renders, so they must be escaped there too.
+func TestIssue260RegistryErrorsEscapeNames(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		raw  []rune
+		want string
+	}{
+		{
+			name: "unknown template",
+			args: []string{"new", "demo", "--with", "bogus\x1b]0;x\x07"},
+			raw:  []rune{'\x1b', '\x07'},
+			want: `bogus\x1b]0;x\x07`,
+		},
+		{
+			name: "unknown language",
+			args: []string{"new", "demo", "--lang", "go\u009bX"},
+			raw:  []rune{'\u009b'},
+			want: `go\x9bX`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			work := t.TempDir()
+			t.Chdir(work)
+			out, err := runCLI(tt.args...)
+			if err == nil {
+				t.Fatalf("expected an unknown-name error:\n%s", out)
+			}
+			for _, r := range tt.raw {
+				if strings.ContainsRune(out, r) {
+					t.Errorf("output emitted raw %U:\n%q", r, out)
+				}
+			}
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("output does not contain the escaped name %q:\n%s", tt.want, out)
+			}
+		})
+	}
+}
+
 // TestIssue260NewTemplateOnlyRejectsUnsafeName closes the follow-up gap: a
 // template-only `new` skipped language planning, so an unsafe name reached the
 // filesystem. It must now be rejected before creation, with escaped output.
