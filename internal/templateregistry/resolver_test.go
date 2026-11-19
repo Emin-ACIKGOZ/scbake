@@ -508,10 +508,15 @@ func TestLookupPath_RejectsDirectoryCandidate(t *testing.T) {
 // contract on the production resolver.
 func TestResolveCacheEntryRejectsDirectoryCandidate(t *testing.T) {
 	cacheDir := t.TempDir()
-	dir := filepath.Join(cacheDir, "acme", "tmpl", "nested")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	tplDir := filepath.Join(cacheDir, "acme", "tmpl")
+	if err := os.MkdirAll(filepath.Join(tplDir, "nested"), 0o750); err != nil {
 		t.Fatalf("mkdir nested: %v", err)
 	}
+	// A valid manifest and a regular sibling are required to reach candidate
+	// resolution; otherwise the resolver returns before the file-type check.
+	writeTestFile(t, filepath.Join(tplDir, "ok.tpl"), "content")
+	writeValidManifest(t, tplDir, "tmpl")
+
 	if got, reg := ResolveCacheEntry(cacheDir, "tmpl", "nested", []string{"acme"}); got != "" || reg != "" {
 		t.Errorf("ResolveCacheEntry returned a directory: (%q, %q)", got, reg)
 	}
