@@ -149,9 +149,9 @@ func TestIssue268UpdateFailsBeforeExecutingWhenMetadataMissing(t *testing.T) { /
 	if strings.Contains(output, "Executing plan") {
 		t.Errorf("update executed the plan before validating metadata:\n%s", output)
 	}
-	for _, flag := range []string{"--license", "--copyright-holder"} {
-		if !strings.Contains(output, flag) {
-			t.Errorf("error does not name %s:\n%s", flag, output)
+	for _, want := range []string{"--license", "--copyright-holder", "scbake apply --with compliance"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("error does not contain %q:\n%s", want, output)
 		}
 	}
 }

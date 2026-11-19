@@ -244,7 +244,9 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 	// values, but a hand-edited or truncated manifest can reach it.
 	if containsTemplate(withTemplates, complianceTemplateName) {
 		if err := CheckCompliancePrerequisites(m.Metadata["license"], m.Metadata["copyright_holder"]); err != nil {
-			return err
+			return fmt.Errorf(
+				"compliance is recorded but its metadata is missing; run "+
+					"'scbake apply --with compliance --license <id> --copyright-holder <name>': %w", err)
 		}
 	}
 	if lang == "" && len(withTemplates) == 0 {
