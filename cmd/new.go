@@ -125,10 +125,8 @@ func removeFailedProject(projectName string, release func() error) error {
 	return nil
 }
 
-// validateNewTarget preserves the existing-directory precedence: an impossible
-// target is reported before flag-specific preflight errors and before anything
-// is created.
-func validateNewTarget(_ string) error {
+// requireNewSelection rejects a new run with neither a language nor a template.
+func requireNewSelection() error {
 	if newLangFlag == "" && len(newWithFlag) == 0 {
 		return core.ErrNoSelection
 	}
@@ -176,7 +174,7 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	if err := core.ValidateSetKeys(newWithFlag, newLangFlag, setVars); err != nil {
 		return nil, "", err
 	}
-	if err := validateNewTarget(projectName); err != nil {
+	if err := requireNewSelection(); err != nil {
 		return nil, "", err
 	}
 	// Check the language toolchain before the directory exists, so a missing

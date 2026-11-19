@@ -105,9 +105,10 @@ type manifestChanges struct {
 
 // RunApply orchestrates the template application process.
 func RunApply(rc RunContext, reporter types.Reporter) error {
-	// Template prerequisites are checked before the root lock so a missing
-	// identity, skip decision, or required metadata fails before lock
-	// acquisition creates .scbake or any task writes. The checks are read-only.
+	// The Git preflight is read-only and runs before the lock so a missing
+	// identity or skip decision fails without creating .scbake. Compliance
+	// metadata is decided inside the lock so a busy run keeps ErrBusy
+	// precedence and the metadata read cannot race a writer.
 	if err := preflightGit(rc); err != nil {
 		return err
 	}
@@ -1070,14 +1071,19 @@ func CheckCompliancePrerequisites(license, copyrightHolder string) error {
 }
 
 // preflightCompliance enforces the compliance template's required metadata
-// before RunApply acquires the root lock, so a missing value fails before any
-// write. `apply` may reuse metadata recorded by an earlier compliance run; the
-// manifest is read here only to decide that, while runApply performs the
-// authoritative load under the lock. `update` reads recorded metadata and never
-// takes these flags, so it is exempt.
+// inside the root lock, before any plan or task write. `apply` may reuse
+// metadata recorded by an earlier compliance run; the manifest is read here only
+// to decide that, while runApply performs the authoritative load under the same
+// lock. `update` reads recorded metadata and never takes these flags, so it is
+// exempt.
 func preflightCompliance(rc RunContext) error {
 	if rc.Update || !containsTemplate(rc.WithFlag, complianceTemplateName) {
 		return nil
+	}
+	if !rc.DryRun {
+		if err := CheckLangPrerequisites(rc.LangFlag); err != nil {
+			return err
+		}
 	}
 	license, holder := ComplianceMetadata(rc.License, rc.CopyrightHolder, rc.SetVars)
 	_, setLicense := rc.SetVars["license"]

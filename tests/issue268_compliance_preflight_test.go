@@ -439,3 +439,29 @@ func TestIssue268ApplyLoadErrorPrecedesSelection(t *testing.T) {
 		t.Errorf("selection validation masked the manifest error:\n%s", out)
 	}
 }
+
+// TestIssue268ApplyToolchainErrorPrecedesCompliance keeps the baseline
+// diagnostic order: a missing language toolchain is reported before missing
+// compliance flags.
+func TestIssue268ApplyToolchainErrorPrecedesCompliance(t *testing.T) {
+	root := t.TempDir()
+	skipIfAncestorHasMarker(t, root)
+	t.Chdir(root)
+	if out, err := runCLI("new", "proj", "--with", "makefile"); err != nil {
+		t.Fatalf("prepare project: %v\n%s", err, out)
+	}
+	t.Chdir(filepath.Join(root, "proj"))
+	t.Setenv("PATH", t.TempDir())
+
+	out, err := runCLI("apply", "--lang", "svelte", "--with", "compliance")
+	if err == nil {
+		t.Fatalf("apply without npm succeeded:\n%s", out)
+	}
+	line := dryRunErrorLine(out)
+	if !strings.Contains(line, "npm") {
+		t.Errorf("expected the npm prerequisite error, got:\n%s", out)
+	}
+	if strings.Contains(line, "--license") {
+		t.Errorf("compliance preflight masked the toolchain error:\n%s", out)
+	}
+}
