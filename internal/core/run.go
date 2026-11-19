@@ -111,6 +111,9 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	if err := preflightGit(rc); err != nil {
 		return err
 	}
+	if err := validateApplySelection(rc); err != nil {
+		return err
+	}
 	if err := preflightCompliance(rc); err != nil {
 		return err
 	}
@@ -1077,28 +1080,48 @@ func preflightCompliance(rc RunContext) error {
 	if rc.Update || !containsTemplate(rc.WithFlag, complianceTemplateName) {
 		return nil
 	}
-	license, copyrightHolder, err := withRecordedCompliance(rc)
-	if err != nil {
-		return err
-	}
-	return CheckCompliancePrerequisites(license, copyrightHolder)
-}
-
-// withRecordedCompliance fills missing values from the manifest, except when the
-// user supplied an explicit --set (including an empty one).
-func withRecordedCompliance(rc RunContext) (string, string, error) {
 	license, holder := ComplianceMetadata(rc.License, rc.CopyrightHolder, rc.SetVars)
 	_, setLicense := rc.SetVars["license"]
 	_, setHolder := rc.SetVars["copyright_holder"]
 	if (license != "" || setLicense) && (holder != "" || setHolder) {
-		return license, holder, nil
+		return CheckCompliancePrerequisites(license, holder)
 	}
-	m, _, err := loadManifestForRun(rc)
+
+	m, root, err := loadManifestForRun(rc)
 	if err != nil {
-		return "", "", err
+		return err
 	}
-	return recordedOr(license, setLicense, m.Metadata, "license"),
-		recordedOr(holder, setHolder, m.Metadata, "copyright_holder"), nil
+	// A detached LICENSE will be filtered from the plan, so its metadata is not
+	// required. --force re-manages the file, so keep the requirement then.
+	if !rc.Force && hasUnmanagedLicense(m, root, rc.TargetPath) {
+		return nil
+	}
+	license = recordedOr(license, setLicense, m.Metadata, "license")
+	holder = recordedOr(holder, setHolder, m.Metadata, "copyright_holder")
+	return CheckCompliancePrerequisites(license, holder)
+}
+
+// hasUnmanagedLicense reports whether the target project's LICENSE is detached.
+func hasUnmanagedLicense(m *types.Manifest, root, target string) bool {
+	rel, err := repoRelativeProjectPath(root, target)
+	if err != nil {
+		return false
+	}
+	return listsUnmanagedKey(m, path.Join(rel, "LICENSE"))
+}
+
+// validateApplySelection rejects an unknown language or template before the
+// compliance preflight can mask a more fundamental input error.
+func validateApplySelection(rc RunContext) error {
+	if err := ValidateLanguageName(rc.LangFlag); err != nil {
+		return err
+	}
+	for _, name := range rc.WithFlag {
+		if _, err := templates.GetHandler(name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // recordedOr falls back to recorded metadata unless the user explicitly set the

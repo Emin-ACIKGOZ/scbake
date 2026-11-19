@@ -304,3 +304,70 @@ unmanaged_files = ["services/api/LICENSE"]
 		t.Errorf("update did not report the unmanaged subproject LICENSE:\n%s", out)
 	}
 }
+
+// TestIssue268ApplyAllowsUnmanagedLicense keeps apply consistent with update
+// when the LICENSE writer will be filtered as unmanaged.
+func TestIssue268ApplyAllowsUnmanagedLicense(t *testing.T) {
+	root := t.TempDir()
+	skipIfAncestorHasMarker(t, root)
+	t.Chdir(root)
+	if out, err := runCLI("new", "proj", "--with", "compliance",
+		"--license", "MIT", "--copyright-holder", "Test Corp"); err != nil {
+		t.Fatalf("prepare project: %v\n%s", err, out)
+	}
+	project := filepath.Join(root, "proj")
+	t.Chdir(project)
+	if out, err := runCLI("unmanage", "LICENSE"); err != nil {
+		t.Fatalf("unmanage LICENSE: %v\n%s", err, out)
+	}
+
+	manifestPath := filepath.Join(project, "scbake.toml")
+	data, err := os.ReadFile(manifestPath) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var kept []string
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "license =") ||
+			strings.HasPrefix(trimmed, "copyright_holder =") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if err := os.WriteFile(manifestPath, []byte(strings.Join(kept, "\n")), 0o600); err != nil { //nolint:gosec // test-controlled path
+		t.Fatalf("rewrite manifest: %v", err)
+	}
+
+	out, err := runCLI("apply", "--with", "compliance")
+	if err != nil {
+		t.Fatalf("apply should skip the unmanaged LICENSE, got %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Skipping unmanaged LICENSE") {
+		t.Errorf("apply did not report the unmanaged LICENSE:\n%s", out)
+	}
+}
+
+// TestIssue268ApplyUnknownLanguagePrecedesCompliance mirrors the new-side
+// precedence fix for apply.
+func TestIssue268ApplyUnknownLanguagePrecedesCompliance(t *testing.T) {
+	root := t.TempDir()
+	skipIfAncestorHasMarker(t, root)
+	t.Chdir(root)
+	if out, err := runCLI("new", "proj", "--with", "makefile"); err != nil {
+		t.Fatalf("prepare project: %v\n%s", err, out)
+	}
+	t.Chdir(filepath.Join(root, "proj"))
+
+	out, err := runCLI("apply", "--lang", "bogus", "--with", "compliance")
+	if err == nil {
+		t.Fatalf("apply with an unknown language succeeded:\n%s", out)
+	}
+	line := dryRunErrorLine(out)
+	if !strings.Contains(line, "unknown language") {
+		t.Errorf("expected the unknown-language error, got:\n%s", out)
+	}
+	if strings.Contains(line, "--license") {
+		t.Errorf("compliance preflight masked the unknown-language error:\n%s", out)
+	}
+}
