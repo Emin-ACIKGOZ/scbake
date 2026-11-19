@@ -810,7 +810,7 @@ func TestRunUnmanageRootGitignoreRefused(t *testing.T) {
 // root (spelled ".", absolutely, or with a trailing separator) is classified as
 // the root rather than an escape, while outside paths and ordinary directories
 // keep their existing meaning.
-func TestResolveManagedKeyRootClassification(t *testing.T) {
+func TestResolveManagedKeyRootClassification(t *testing.T) { //nolint:cyclop // table-driven path classification
 	root := t.TempDir()
 	outside := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o750); err != nil {
@@ -868,7 +868,7 @@ func TestResolveManagedKeyRootClassification(t *testing.T) {
 // both commands reject the project root with the root classification, leave the
 // manifest untouched, still reject an ordinary unmanaged directory, and accept
 // a valid managed file.
-func TestRunAcceptUnmanageRootPathInvariant(t *testing.T) {
+func TestRunAcceptUnmanageRootPathInvariant(t *testing.T) { //nolint:cyclop // multi-step command invariant
 	for _, accept := range []bool{true, false} {
 		name := "unmanage"
 		if accept {
