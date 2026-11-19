@@ -764,7 +764,7 @@ func ValidateProjectDirectoryName(name string) error {
 		return errors.New("name must not be empty")
 	}
 	if util.Sanitize(name) != name {
-		return errors.New("name contains terminal control or format characters")
+		return errors.New("name contains terminal control, format, or invalid UTF-8 characters")
 	}
 	return nil
 }
