@@ -102,10 +102,10 @@ func TestSpinnerReporterConcurrentLifecyclesDoNotOrphan(t *testing.T) {
 	wg.Wait()
 
 	deadline := time.Now().Add(2 * time.Second)
-	for runtime.NumGoroutine() > baseline+1 && time.Now().Before(deadline) {
+	for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if got := runtime.NumGoroutine(); got > baseline+1 {
+	if got := runtime.NumGoroutine(); got > baseline {
 		t.Fatalf("renderers were orphaned: %d goroutines, baseline %d", got, baseline)
 	}
 }
