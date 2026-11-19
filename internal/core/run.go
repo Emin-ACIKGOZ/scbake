@@ -760,6 +760,21 @@ func ValidateProjectName(name string) error {
 	return validateProjectName(name)
 }
 
+// ValidateProjectDirectoryName checks a name used only as a project directory
+// (a template-only `new`). Language runs normalize names before identifier
+// validation, but a template-only run has no project record to normalize, so it
+// only needs the directory-safe and terminal-safe rules: spaces and ordinary
+// Unicode are allowed, while control, bidi, and invalid UTF-8 are rejected.
+func ValidateProjectDirectoryName(name string) error {
+	if name == "" {
+		return errors.New("name must not be empty")
+	}
+	if util.Sanitize(name) != name {
+		return errors.New("name contains terminal control or format characters")
+	}
+	return nil
+}
+
 // validateProjectLanguage enforces a safe identifier for the language field,
 // which is embedded in Makefile variable names (MAKE_BUILD_COMMAND_<lang>) and
 // shell/YAML text. An empty language is allowed (it yields no build command).

@@ -140,7 +140,7 @@ func validateNewTarget(projectName string) error {
 	// the name here. Language runs keep the existing plan-time ordering and
 	// its cleanup-path output coverage.
 	if newLangFlag == "" {
-		if err := core.ValidateProjectName(projectName); err != nil {
+		if err := core.ValidateProjectDirectoryName(projectName); err != nil {
 			return fmt.Errorf("invalid project name %s: %v",
 				util.Sanitize(projectName), util.SanitizeError(err))
 		}

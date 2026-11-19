@@ -28,6 +28,24 @@ func runIssue260(t *testing.T, dir string, args ...string) (stdout, stderr strin
 	return outBuf.String(), errBuf.String(), err
 }
 
+// TestIssue260TemplateOnlyAllowsPathSafeNames preserves the pre-fix behavior for
+// template-only projects: spaces and ordinary Unicode are valid directory names
+// even though language runs normalize/validate them differently.
+func TestIssue260TemplateOnlyAllowsPathSafeNames(t *testing.T) {
+	for _, name := range []string{"my project", "café"} {
+		t.Run(name, func(t *testing.T) {
+			work := t.TempDir()
+			t.Chdir(work)
+			if out, err := runCLI("new", name, "--with", "makefile"); err != nil {
+				t.Fatalf("template-only new rejected path-safe name %q: %v\n%s", name, err, out)
+			}
+			if _, err := os.Stat(filepath.Join(work, name)); err != nil {
+				t.Errorf("project directory %q was not created: %v", name, err)
+			}
+		})
+	}
+}
+
 // TestIssue260RegistryErrorsEscapeNames closes the remaining same-class paths:
 // unknown --with and --lang names are echoed by the registries before any
 // template renders, so they must be escaped there too.
