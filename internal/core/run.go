@@ -242,7 +242,8 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 	// must fail before the plan executes, the same invariant apply enforces.
 	// Normally this is unreachable because a successful apply recorded both
 	// values, but a hand-edited or truncated manifest can reach it.
-	if containsTemplate(withTemplates, complianceTemplateName) && !listsUnmanagedKey(m, "LICENSE") {
+	licenseKey := path.Join(relPath, "LICENSE")
+	if containsTemplate(withTemplates, complianceTemplateName) && !listsUnmanagedKey(m, licenseKey) {
 		if err := CheckCompliancePrerequisites(m.Metadata["license"], m.Metadata["copyright_holder"]); err != nil {
 			return fmt.Errorf(
 				"compliance is recorded but its metadata is missing; from the affected "+

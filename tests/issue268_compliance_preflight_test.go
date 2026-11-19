@@ -270,3 +270,37 @@ func TestIssue268UpdateAllowsUnmanagedLicense(t *testing.T) {
 		t.Errorf("update did not report the unmanaged LICENSE:\n%s", out)
 	}
 }
+
+// TestIssue268UpdateUsesProjectScopedLicenseKey covers a monorepo subproject
+// whose LICENSE is detached: the guard must use services/api/LICENSE, not the
+// root LICENSE key, so update remains viable.
+func TestIssue268UpdateUsesProjectScopedLicenseKey(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	body := `scbake_version = "v0.3.0"
+unmanaged_files = ["services/api/LICENSE"]
+
+[[projects]]
+  name = "api"
+  path = "services/api"
+  language = "go"
+
+[[templates]]
+  name = "compliance"
+  path = "services/api"
+`
+	if err := os.WriteFile(filepath.Join(work, "scbake.toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(work, "services", "api"), 0o750); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	out, err := runCLI("update", "services/api", "--allow-ancestor-search", "--dry-run")
+	if err != nil {
+		t.Fatalf("update should skip the unmanaged subproject LICENSE: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Skipping unmanaged services/api/LICENSE") {
+		t.Errorf("update did not report the unmanaged subproject LICENSE:\n%s", out)
+	}
+}
