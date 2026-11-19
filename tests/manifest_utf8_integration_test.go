@@ -65,7 +65,9 @@ func TestApplyRejectsInvalidUTF8TemplatePath(t *testing.T) {
 	manifestPath := writeMinimalManifest(t, work)
 	badDir := "\x82"
 	if err := os.Mkdir(filepath.Join(work, badDir), 0o750); err != nil {
-		t.Fatalf("mkdir bad dir: %v", err)
+		// Filesystems such as APFS store names as Unicode and cannot represent
+		// this byte sequence, so the reported defect is unreachable there.
+		t.Skipf("filesystem cannot create a non-UTF-8 name: %v", err)
 	}
 
 	out, err := runCLI("apply", badDir, "--with", "compliance",
