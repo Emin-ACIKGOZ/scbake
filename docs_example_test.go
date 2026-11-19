@@ -110,6 +110,7 @@ func TestDocsGuidanceExamples(t *testing.T) {
 		{"docs/QUICK_START.md", "Java (Spring"},
 		{".goreleaser.yaml", `bash install.sh "{{ .Tag }}"`},
 		{".goreleaser.yaml", "sha256sum -c -"},
+		{".goreleaser.yaml", "set -e"},
 		{"README.md", "--set module_path=github.com/acme/app"},
 		{"CONTRIBUTING.md", "./scbake list langs"},
 		{"install.sh", "less install.sh && bash install.sh"},
