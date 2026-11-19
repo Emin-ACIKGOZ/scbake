@@ -47,7 +47,7 @@ const (
 // directory, because a real `new` run plans from inside the project it just
 // created. Other spellings are returned unchanged.
 func ResolveModuleNameTarget(path string) (string, error) {
-	if path != "." {
+	if path == "" || filepath.Clean(path) != "." {
 		return path, nil
 	}
 	abs, err := filepath.Abs(path)

@@ -37,12 +37,14 @@ func TestModuleNameForDotUsesInvocationDirectory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(original) })
 
-	name, err := moduleNameFor(".", nil)
-	if err != nil {
-		t.Fatalf("moduleNameFor(\".\") failed: %v", err)
-	}
 	want := strings.ToLower(filepath.Base(dir))
-	if name != want {
-		t.Errorf("moduleNameFor(\".\") = %q, want %q", name, want)
+	for _, target := range []string{".", "./", ".//", "./."} {
+		name, err := moduleNameFor(target, nil)
+		if err != nil {
+			t.Fatalf("moduleNameFor(%q) failed: %v", target, err)
+		}
+		if name != want {
+			t.Errorf("moduleNameFor(%q) = %q, want %q", target, name, want)
+		}
 	}
 }
