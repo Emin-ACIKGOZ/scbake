@@ -102,11 +102,62 @@ func TestSpinnerReporterConcurrentLifecyclesDoNotOrphan(t *testing.T) {
 	wg.Wait()
 
 	deadline := time.Now().Add(2 * time.Second)
-	for runtime.NumGoroutine() > baseline+2 && time.Now().Before(deadline) {
+	for runtime.NumGoroutine() > baseline+1 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if got := runtime.NumGoroutine(); got > baseline+2 {
+	if got := runtime.NumGoroutine(); got > baseline+1 {
 		t.Fatalf("renderers were orphaned: %d goroutines, baseline %d", got, baseline)
+	}
+}
+
+// TestSpinnerReporterTaskEndJoinsInFlightRenderer makes the join observable:
+// block the renderer at the start of a tick and require TaskEnd to wait for it.
+// Removing the join returns immediately and fails this test.
+func TestSpinnerReporterTaskEndJoinsInFlightRenderer(t *testing.T) { //nolint:cyclop // deterministic join seam
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	spinnerTickHook = func() {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+	}
+	t.Cleanup(func() {
+		spinnerTickHook = nil
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	r := NewSpinnerReporter(1)
+	r.TaskStart("step", 1, 1)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("renderer never reached a tick")
+	}
+
+	ended := make(chan struct{})
+	go func() {
+		r.TaskEnd(nil)
+		close(ended)
+	}()
+
+	select {
+	case <-ended:
+		t.Fatal("TaskEnd returned while the renderer was still in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("TaskEnd did not return after the renderer was released")
 	}
 }
 

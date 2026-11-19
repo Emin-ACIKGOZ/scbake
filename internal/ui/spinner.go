@@ -21,6 +21,10 @@ const (
 	spinnerTimeout = 30 * time.Minute
 )
 
+// spinnerTickHook is a test seam invoked when a ticker frame is selected,
+// before it takes the output mutex. It is nil in production.
+var spinnerTickHook func()
+
 // SpinnerReporter provides an interactive terminal UI with an animated spinner.
 type SpinnerReporter struct {
 	// lifecycleMu serializes TaskStart and TaskEnd so concurrent callers cannot
@@ -92,7 +96,7 @@ func (r *SpinnerReporter) TaskStart(desc string, curr, total int) {
 }
 
 // stopActiveSpinner cancels and joins the active renderer, if any. It clears
-// the lifecycle fields so a later TaskEnd for the superseded task is a no-op.
+// the lifecycle fields for the superseded renderer so it cannot be joined again.
 func (r *SpinnerReporter) stopActiveSpinner() {
 	r.mu.Lock()
 	done := r.done
@@ -130,6 +134,9 @@ func (r *SpinnerReporter) animate(ctx context.Context, done <-chan struct{}, sto
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if spinnerTickHook != nil {
+				spinnerTickHook()
+			}
 			outputMux.Lock()
 			prefix := fmt.Sprintf("[%d/%d]", index, total)
 			fmt.Printf("\r%s %s %s", prefix, spinnerChars[i%len(spinnerChars)], desc)
@@ -164,8 +171,9 @@ func (r *SpinnerReporter) TaskEnd(err error) {
 	}
 
 	// Signal the goroutine with both mechanisms, then join it so it cannot write
-	// after TaskEnd returns. Canceling first makes the select observe ctx.Done
-	// at its next iteration; the join still waits for any in-flight print.
+	// after TaskEnd returns. Closing done and canceling the context make the
+	// select observe an exit at its next iteration; the join still waits for any
+	// in-flight print.
 	close(done)
 	if cancel != nil {
 		cancel()
