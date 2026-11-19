@@ -1037,10 +1037,28 @@ func ensureInternalStateIgnored(tc types.TaskContext, root string) error {
 		return nil
 	}
 	if gitignoreIgnoresInternalState(existing) && gitignoreAllowsCommittedBase(existing) {
+		// A legacy tooling-only project can already contain exactly scbake's
+		// block but no ledger entry. Adopt it when the whole file is that block:
+		// there are no user rules to protect, and leaving it unmanaged would
+		// preserve the false-clean drift result this issue reports.
+		if isOwnedInternalStateIgnore(existing) {
+			key := managedFilesKey(tc, absPath, relPath)
+			return recordCanonicalWrite(tc, key, HashContent(existing), existing)
+		}
 		return nil
 	}
 
 	return applyInternalStateIgnore(tc, root, relPath, absPath, existing)
+}
+
+// isOwnedInternalStateIgnore reports whether content is exactly the canonical
+// scbake block, so scbake can claim the file without overwriting user rules.
+// The comparison is EOL-insensitive because a legacy file may use CRLF.
+func isOwnedInternalStateIgnore(content []byte) bool {
+	if len(content) == 0 {
+		return false
+	}
+	return bytes.Equal(normalizeEOL(content), normalizeEOL(appendInternalStateIgnore(nil)))
 }
 
 // checkManagedGitignore warns when a managed root .gitignore no longer exists or
@@ -1124,7 +1142,7 @@ func warnInternalStateUnmanaged(tc types.TaskContext, relPath string) {
 	}
 	fmt.Fprintf(
 		os.Stderr,
-		"⚠️  %s already existed; appended scbake's ignore rules but left the file unmanaged. A later language apply may report %s drift.\n",
+		"⚠️  %s already existed; appended scbake's ignore rules but left the file unmanaged. A later language apply may fail or write %s.scbake-new.\n",
 		relPath, relPath,
 	)
 }

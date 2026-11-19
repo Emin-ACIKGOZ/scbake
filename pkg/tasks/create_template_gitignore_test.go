@@ -758,6 +758,39 @@ func TestWriteBaseShadow_RecordsOwnedGitIgnoreAsManaged(t *testing.T) { //nolint
 	}
 }
 
+// TestEnsureInternalStateAdoptsLegacyBlock covers the policy case where a
+// project created by an older binary already contains exactly scbake's ignore
+// block but no ledger entry. There are no user rules to protect, so the file
+// must be adopted instead of staying unmanaged and producing a false-clean
+// drift result.
+func TestEnsureInternalStateAdoptsLegacyBlock(t *testing.T) {
+	root := t.TempDir()
+	block := string(appendInternalStateIgnore(nil))
+	if err := os.WriteFile(filepath.Join(root, fileutil.GitIgnore), []byte(block), fileutil.FilePerms); err != nil {
+		t.Fatalf("seed legacy .gitignore: %v", err)
+	}
+	tx, err := transaction.New(root)
+	if err != nil {
+		t.Fatalf("transaction.New() failed: %v", err)
+	}
+	manifest := &types.Manifest{}
+	tc := types.TaskContext{TargetPath: root, Manifest: manifest, Tx: tx}
+
+	if err := ensureInternalStateIgnored(tc, root); err != nil {
+		t.Fatalf("ensureInternalStateIgnored() failed: %v", err)
+	}
+	if got, want := manifest.ManagedFiles[fileutil.GitIgnore], HashContent([]byte(block)); got != want {
+		t.Fatalf("legacy block not adopted: managed hash %q, want %q", got, want)
+	}
+	base, err := ReadBaseShadow(root, fileutil.GitIgnore)
+	if err != nil {
+		t.Fatalf("adopted .gitignore has no pristine base: %v", err)
+	}
+	if string(base) != block {
+		t.Fatalf("pristine base = %q, want the legacy block", base)
+	}
+}
+
 // TestWriteBaseShadow_LeavesUserGitIgnoreUnmanaged covers the other half of the
 // issue #250 policy: a pre-existing .gitignore that scbake only appends to stays
 // user-owned. Recording it as managed would let a later apply overwrite the
