@@ -104,6 +104,7 @@ asset (their `install.sh` URL 404s). Use the **latest** tag from
 <https://github.com/Emin-ACIKGOZ/scbake/releases/latest>:
 
 ```bash
+( set -e
 # Set TAG to a release that ships install.sh. Use the latest release tag
 # (see https://github.com/Emin-ACIKGOZ/scbake/releases/latest) — older tags
 # do not contain the installer asset.
@@ -118,6 +119,7 @@ grep 'install.sh$' SHA256SUMS | sha256sum -c -
 
 # Run the installer, pinned to the same tag
 bash install.sh "${TAG}"
+)
 ```
 
 The installer detects your OS/architecture and installs that release's binary to
@@ -173,7 +175,7 @@ scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spd
 | `--license`          | SPDX License ID (required for `compliance`; embedded, works offline) | `--license MIT`             |
 | `--copyright-holder` | Copyright holder name (required for `compliance`) | `--copyright-holder "Acme Corp"` |
 | `--template-dir`     | Directory with custom template overrides         | `--template-dir ./my-tpls`  |
-| `--set`              | Set template variable (`key=value`, can be repeated) | `--set service_id=srv-abc` |
+| `--set`              | Set template variable (`key=value`, can be repeated) | `--lang go --set module_path=github.com/acme/app` |
 | `--conflict-strategy`| How to resolve file drift: `merge`, `fail`, `overwrite`, `artifact`, `keep-local` | `--conflict-strategy overwrite` |
 
 **Example:**
@@ -236,11 +238,29 @@ run repeatedly:
 - **Policy.** `--conflict-strategy` accepts `merge` (default), `fail`,
   `overwrite`, `artifact`, and `keep-local`.
 
+**Exit contract:**
+
+`update` exits 0 when it completes, including when blocking drift remains because
+`--conflict-strategy merge` preserved local edits. Exit 0 therefore means “the
+command ran”, not “the tree is clean”.
+
+| Outcome | Exit |
+| :------ | :--- |
+| No changes needed, or the tree is clean after the update | 0 |
+| Completed with residual drift (for example, merge preserved local edits) | 0 |
+| Load, plan, write, or commit failure | non-zero |
+
+Run `scbake drift` as the gate: it exits 1 while blocking drift remains. For an
+intentional local edit, record a new baseline with
+[`scbake accept`](#accept-rebaseline-a-managed-file); then `drift` is clean
+without discarding the edit.
+
 **Example:**
 
 ```bash
 cd my-backend
 scbake update
+scbake drift   # the authoritative clean/dirty gate
 ```
 
 `scbake.toml` may also record two additive fields. `[accepted_files]` stores a
@@ -385,6 +405,21 @@ Exit behavior:
 combined with `--repair`. A concurrent `update` can momentarily expose a
 partially written base, so detection remains lock-free and may report a
 transient `base-invalid` rather than taking the project lock.
+
+`--repair` follows the same completion contract as `update`:
+
+| `--repair` outcome | Exit |
+| :----------------- | :--- |
+| Completed, including residual drift that it reports | 0 |
+| Repair failed (load, render, write, or re-check) | non-zero |
+
+It exits 0 after reports such as
+`Repair finished; N managed file(s) still drifted`, because `merge`
+deliberately preserves local edits. The repair did run; the tree is not
+necessarily clean. Use `drift` to gate, `--conflict-strategy overwrite` to
+force generated content back, or
+[`accept`](#accept-rebaseline-a-managed-file) to keep an intentional edit as the
+new baseline.
 
 **Example:**
 

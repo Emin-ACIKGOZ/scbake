@@ -27,7 +27,11 @@ bringing a generated project up to date without clobbering local edits.
 
 With no template change the command is a no-op, so it is safe to run repeatedly.
 A managed LICENSE that already matches its recorded hash is not re-rendered; use
-apply --with compliance to change license terms.`,
+apply --with compliance to change license terms.
+
+Paths detached with 'scbake unmanage' stay unmanaged: update does not re-manage
+them, not even with --force. Re-manage one by running 'scbake apply --force'
+with the same language/template selection and path.`,
 	Args: cobra.MaximumNArgs(1),
 	PreRunE: func(*cobra.Command, []string) error {
 		return types.ValidateConflictStrategy(updateConflictStrategyFlag)

@@ -4,6 +4,42 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.16.15] - 2026-11-19
+
+### Bug Fixes
+
+- **core:** Classify the project root for accept and unmanage
+
+### Testing
+
+- **core:** Annotate root-path regressions for lint
+
+## [0.16.14] - 2026-11-19
+
+### Bug Fixes
+
+- **update:** Stop promising --force re-manages paths
+
+### Documentation
+
+- Correct list, set, Spring, and release examples
+- **install:** Stop advertising the curl-to-bash pipe
+- **release:** Verify the installer checksum in notes
+- **release:** Stop execution after a checksum failure
+- **release:** Keep checksum gating inside a subshell
+- Document the residual-drift exit contract and accept
+
+### Testing
+
+- **docs:** Remove a stale unused gosec lint directive
+- **docs:** Pin installer header and drop dead check
+- **docs:** Correct CONTRIBUTING pattern and set example
+- **docs:** Validate installer snippets with the shell
+- **docs:** Silence fixed-path lint in snippet test
+- **docs:** Pin exit values and post-repair drift
+- **docs:** Pin every documented exit-contract table row
+- **docs:** Scope README contract checks to sections
+
 ## [0.16.13] - 2026-11-19
 
 ### Bug Fixes
