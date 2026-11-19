@@ -991,7 +991,17 @@ func buildPlan(rc RunContext, rootPath, projectPath string) (*types.Plan, string
 	return plan, commitMessage, changes, nil
 }
 
-// CheckLangPrerequisites validates that required binaries are available for the language.
+// ValidateLanguageName rejects an unknown language pack before other
+// flag-specific preflight checks, keeping diagnostics predictable.
+func ValidateLanguageName(name string) error {
+	if name == "" {
+		return nil
+	}
+	_, err := lang.GetHandler(name)
+	return err
+}
+
+// CheckLangPrerequisites validates the required binaries for a language pack.
 func CheckLangPrerequisites(langFlag string) error {
 	switch langFlag {
 	case "go":

@@ -135,6 +135,9 @@ func validateNewTarget(projectName string) error {
 	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
 		return fmt.Errorf("directory '%s' already exists", util.Sanitize(projectName))
 	}
+	if err := core.ValidateLanguageName(newLangFlag); err != nil {
+		return err
+	}
 	return nil
 }
 

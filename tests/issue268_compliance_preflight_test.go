@@ -202,3 +202,25 @@ func TestIssue268ExplicitEmptySetOverrideIsHonored(t *testing.T) {
 		t.Errorf("error does not name --license:\n%s", out)
 	}
 }
+
+// TestIssue268UnknownLanguagePrecedesCompliance keeps the diagnostics order
+// predictable when both the language and compliance flags are wrong.
+func TestIssue268UnknownLanguagePrecedesCompliance(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+
+	out, err := runCLI("new", "demo", "--lang", "bogus", "--with", "compliance")
+	if err == nil {
+		t.Fatalf("new with an unknown language succeeded:\n%s", out)
+	}
+	line := dryRunErrorLine(out)
+	if !strings.Contains(line, "unknown language") {
+		t.Errorf("expected the unknown-language error, got:\n%s", out)
+	}
+	if strings.Contains(line, "--license") {
+		t.Errorf("compliance preflight masked the unknown-language error:\n%s", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(work, "demo")); !os.IsNotExist(statErr) {
+		t.Errorf("rejected new left a directory behind (stat err: %v)", statErr)
+	}
+}
