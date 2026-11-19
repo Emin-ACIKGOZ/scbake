@@ -85,6 +85,7 @@ func TestDocsGuidanceExamples(t *testing.T) {
 		{"docs/QUICK_START.md", []string{"Python (Spring"}},
 		{".goreleaser.yaml", []string{"install.sh | bash"}},
 		{"README.md", []string{"--set service_id=srv-abc"}},
+		{"CONTRIBUTING.md", []string{"| ./scbake list |"}},
 	} {
 		doc, err := os.ReadFile(tc.file)
 		if err != nil {
@@ -95,6 +96,28 @@ func TestDocsGuidanceExamples(t *testing.T) {
 			if strings.Contains(text, bad) {
 				t.Errorf("%s contains stale guidance %q", tc.file, bad)
 			}
+		}
+	}
+
+	// Absence alone would also pass if the guidance were deleted; require the
+	// corrected forms to be present.
+	for _, tc := range []struct {
+		file string
+		want string
+	}{
+		{"docs/INSTALLING.md", "scbake list langs"},
+		{"docs/QUICK_START.md", "Java (Spring"},
+		{".goreleaser.yaml", `bash install.sh "{{ .Tag }}"`},
+		{".goreleaser.yaml", "sha256sum -c -"},
+		{"README.md", "--set module_path=github.com/acme/app"},
+		{"CONTRIBUTING.md", "./scbake list langs"},
+	} {
+		doc, err := os.ReadFile(tc.file)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.file, err)
+		}
+		if !strings.Contains(string(doc), tc.want) {
+			t.Errorf("%s does not contain corrected guidance %q", tc.file, tc.want)
 		}
 	}
 }
