@@ -154,10 +154,9 @@ serialize. A second mutator fails fast with exit 75 (`EX_TEMPFAIL`) before any
 project mutation; callers should retry after the active run finishes.
 `apply --with git` is the exception: its read-only Git preflight runs before the
 lock, so a missing identity exits 1 without a lock attempt, while a usable
-identity with a busy lock still exits 75. `apply --with compliance` also performs
-a read-only preflight before the lock; when it reuses recorded metadata it reads
-`scbake.toml` at that stage, and the authoritative load still happens under the
-lock. `new` preflights Git, then creates the
+identity with a busy lock still exits 75. `apply --with compliance` decides its
+required metadata under the same root lock, so a busy run still reports
+`EX_TEMPFAIL` before any manifest decision. `new` preflights Git, then creates the
 directory and empty manifest before taking the lock, so a missing identity exits
 1 before the directory exists but a busy failure can leave that bootstrap
 residue. Existing-project

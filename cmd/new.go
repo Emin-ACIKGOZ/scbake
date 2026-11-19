@@ -128,17 +128,41 @@ func removeFailedProject(projectName string, release func() error) error {
 // validateNewTarget preserves the existing-directory precedence: an impossible
 // target is reported before flag-specific preflight errors and before anything
 // is created.
-func validateNewTarget(projectName string) error {
+func validateNewTarget(_ string) error {
 	if newLangFlag == "" && len(newWithFlag) == 0 {
 		return core.ErrNoSelection
 	}
-	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
-		return fmt.Errorf("directory '%s' already exists", util.Sanitize(projectName))
+	return nil
+}
+
+// validatePostGitSelection keeps the baseline ordering for an impossible
+// target, then validates the selection and compliance metadata before bootstrap.
+func validatePostGitSelection(projectName string, setVars map[string]string) error {
+	if err := validateTargetAvailable(projectName); err != nil {
+		return err
 	}
+	if err := validateSelectionNames(); err != nil {
+		return err
+	}
+	return validateComplianceSelection(setVars)
+}
+
+// validateSelectionNames rejects an unknown language or template before the
+// compliance preflight can mask it.
+func validateSelectionNames() error {
 	if err := core.ValidateLanguageName(newLangFlag); err != nil {
 		return err
 	}
 	return core.ValidateTemplateNames(newWithFlag)
+}
+
+// validateTargetAvailable rejects an existing target, preserving the baseline
+// error precedence for an impossible project.
+func validateTargetAvailable(projectName string) error {
+	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
+		return fmt.Errorf("directory '%s' already exists", util.Sanitize(projectName))
+	}
+	return nil
 }
 
 // validateNewSelection performs every flag and override-directory check that
@@ -153,13 +177,6 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 		return nil, "", err
 	}
 	if err := validateNewTarget(projectName); err != nil {
-		return nil, "", err
-	}
-	// The compliance template cannot generate LICENSE without both values.
-	// Validate here, before bootstrapProjectDir creates the directory, so a
-	// missing flag is an argument error rather than a late task failure that
-	// has to clean up a partially written project.
-	if err := validateComplianceSelection(setVars); err != nil {
 		return nil, "", err
 	}
 	// Check the language toolchain before the directory exists, so a missing
@@ -186,6 +203,11 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	// the post-chdir apply share one skip/identity decision. An existing work
 	// tree needs no identity because the template will be skipped.
 	if err := validateGitSelection(projectName); err != nil {
+		return nil, "", err
+	}
+	// Preserve the baseline existing-directory precedence: this check used to
+	// run in bootstrap after the toolchain, template-dir, and Git preflights.
+	if err := validatePostGitSelection(projectName, setVars); err != nil {
 		return nil, "", err
 	}
 	return setVars, resolved, nil

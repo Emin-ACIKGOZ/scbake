@@ -111,10 +111,12 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	if err := preflightGit(rc); err != nil {
 		return err
 	}
-	if err := preflightCompliance(rc); err != nil {
-		return err
-	}
 	return withRootLock(rc, func() error {
+		// Decide compliance metadata under the root lock so a busy run keeps
+		// ErrBusy precedence and the metadata read cannot race a writer.
+		if err := preflightCompliance(rc); err != nil {
+			return err
+		}
 		return runApply(rc, reporter)
 	})
 }
@@ -246,9 +248,9 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 	if containsTemplate(withTemplates, complianceTemplateName) && !listsUnmanagedKey(m, licenseKey) {
 		if err := CheckCompliancePrerequisites(m.Metadata["license"], m.Metadata["copyright_holder"]); err != nil {
 			return fmt.Errorf(
-				"compliance is recorded but its metadata is missing; from the affected "+
+				"compliance is recorded for %q but its metadata is missing; from the affected "+
 					"project directory run 'scbake apply --with compliance --license <id> "+
-					"--copyright-holder <name> --allow-ancestor-search': %w", err)
+					"--copyright-holder <name> --allow-ancestor-search': %w", relPath, err)
 		}
 	}
 	if lang == "" && len(withTemplates) == 0 {
