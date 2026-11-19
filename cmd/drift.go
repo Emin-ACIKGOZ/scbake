@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"scbake/internal/core"
@@ -83,11 +82,12 @@ tree, 'overwrite' also re-records a missing base; 'merge' does not backfill it.`
 		// is absent. For drift that would report a missing project as clean, so
 		// fail closed at the discovered root instead.
 		manifestPath := filepath.Join(rootPath, fileutil.ManifestFileName)
-		if _, statErr := os.Stat(manifestPath); statErr != nil {
-			if os.IsNotExist(statErr) {
-				return fmt.Errorf("no %s found at %s", fileutil.ManifestFileName, rootPath)
-			}
+		exists, statErr := manifest.Exists(rootPath)
+		if statErr != nil {
 			return fmt.Errorf("failed to inspect %s: %w", manifestPath, statErr)
+		}
+		if !exists {
+			return fmt.Errorf("no %s found at %s", fileutil.ManifestFileName, rootPath)
 		}
 
 		// An interrupted run leaves a journal that a plain drift scan cannot

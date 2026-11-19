@@ -205,13 +205,14 @@ func loadManageManifest(rc RunContext) (*types.Manifest, string, error) {
 	}
 
 	manifestPath := filepath.Join(root, fileutil.ManifestFileName)
-	if _, err := os.Stat(manifestPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil, "", fmt.Errorf("no %s found at %s",
-				fileutil.ManifestFileName, util.Sanitize(root))
-		}
+	exists, statErr := manifest.Exists(root)
+	if statErr != nil {
 		return nil, "", fmt.Errorf("failed to inspect %s: %w",
-			util.Sanitize(manifestPath), util.SanitizeError(err))
+			util.Sanitize(manifestPath), util.SanitizeError(statErr))
+	}
+	if !exists {
+		return nil, "", fmt.Errorf("no %s found at %s",
+			fileutil.ManifestFileName, util.Sanitize(root))
 	}
 	return m, root, nil
 }

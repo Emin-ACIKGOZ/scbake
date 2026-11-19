@@ -46,15 +46,16 @@ or the projects currently managed in this repository's ` + fileutil.ManifestFile
 				os.Exit(fileutil.ExitError)
 			}
 			manifestPath := filepath.Join(rootPath, fileutil.ManifestFileName)
-			if _, err := os.Stat(manifestPath); err != nil {
-				if os.IsNotExist(err) {
-					fmt.Fprintf(os.Stderr,
-						"Error: no %s found in %s; run 'scbake new' or 'scbake apply' first\n",
-						fileutil.ManifestFileName, util.Sanitize(rootPath))
-				} else {
-					fmt.Fprintf(os.Stderr, "Error: cannot inspect %s: %v\n",
-						util.Sanitize(manifestPath), util.SanitizeError(err))
-				}
+			exists, statErr := manifest.Exists(rootPath)
+			if statErr != nil {
+				fmt.Fprintf(os.Stderr, "Error: cannot inspect %s: %v\n",
+					util.Sanitize(manifestPath), util.SanitizeError(statErr))
+				os.Exit(fileutil.ExitError)
+			}
+			if !exists {
+				fmt.Fprintf(os.Stderr,
+					"Error: no %s found in %s; run 'scbake new' or 'scbake apply' first\n",
+					fileutil.ManifestFileName, util.Sanitize(rootPath))
 				os.Exit(fileutil.ExitError)
 			}
 			fmt.Printf("Managed Projects (from %s):\n", fileutil.ManifestFileName)
