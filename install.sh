@@ -1,7 +1,7 @@
 #!/bin/bash
 # scbake installer - Cross-platform, production-grade installation script
-# Usage: curl -fsSL https://github.com/Emin-ACIKGOZ/scbake/releases/download/<tag>/install.sh | bash
-# Or:    bash install.sh [version] [install-dir] [--quiet]
+# Usage: curl -fsSL -o install.sh https://github.com/Emin-ACIKGOZ/scbake/releases/download/<tag>/install.sh
+#        less install.sh && bash install.sh [version] [install-dir] [--quiet]
 # Examples:
 #   bash install.sh                          # Latest version, interactive
 #   bash install.sh vX.Y.Z /opt/scbake       # Specific version to custom path
