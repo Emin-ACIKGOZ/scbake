@@ -6,20 +6,13 @@ package util
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
 func TestSanitizeModuleName(t *testing.T) {
-	// Dynamically determine the current directory name to verify the "." case
-	// This ensures the test works even if the folder isn't named "util"
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("setup failed: could not get current working directory: %v", err)
-	}
-	expectedCurrentDirName := filepath.Base(cwd)
-
+	// Regression for #263: on the unmodified baseline, "/" and ".." came back
+	// as themselves and "." and "" resolved to the current directory name, all
+	// with a nil error. Reserved segments must be rejected instead.
 	tests := []struct {
 		name     string
 		input    string
@@ -45,10 +38,39 @@ func TestSanitizeModuleName(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name:     "Handle Current Directory (.)",
-			input:    ".",
-			expected: expectedCurrentDirName, // Likely "util"
-			wantErr:  false,
+			name:     "Spaces to Hyphens Single Word",
+			input:    "my app",
+			expected: "my-app",
+		},
+		{
+			name:    "Filesystem Root",
+			input:   "/",
+			wantErr: true,
+		},
+		{
+			name:    "Parent Segment",
+			input:   "..",
+			wantErr: true,
+		},
+		{
+			name:    "Parent Segment After Base",
+			input:   "some/..",
+			wantErr: true,
+		},
+		{
+			name:    "Current Directory",
+			input:   ".",
+			wantErr: true,
+		},
+		{
+			name:    "Current Directory with Slash",
+			input:   "./",
+			wantErr: true,
+		},
+		{
+			name:    "Empty",
+			input:   "",
+			wantErr: true,
 		},
 		{
 			name:    "Leading Dash",

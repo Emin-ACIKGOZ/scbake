@@ -938,3 +938,31 @@ func TestLocateXMLElement_UndeclaredPrefixRejected(t *testing.T) {
 		t.Errorf("declared prefix must still resolve: %v", err)
 	}
 }
+
+// TestInsertXMLElement_NoWhitespaceOnlyLine pins the generated-output contract:
+// the original indentation before the closing tag must become the closing tag's
+// indent, not a whitespace-only line (or trailing spaces on the snippet's last
+// line).
+func TestInsertXMLElement_NoWhitespaceOnlyLine(t *testing.T) {
+	const file = "<project>\n  <build>\n    <plugins>\n    </plugins>\n  </build>\n</project>\n"
+	const snippet = "<plugin>\n<groupId>com.example</groupId>\n</plugin>"
+
+	out, err := insertXMLElement(file, "/project/build/plugins", snippet)
+	if err != nil {
+		t.Fatalf("insertXMLElement failed: %v", err)
+	}
+	for i, line := range strings.Split(out, "\n") {
+		if line != "" && strings.TrimSpace(line) == "" {
+			t.Errorf("line %d is whitespace-only: %q", i+1, line)
+		}
+		if strings.HasSuffix(line, " ") || strings.HasSuffix(line, "\t") {
+			t.Errorf("line %d has trailing whitespace: %q", i+1, line)
+		}
+	}
+	if !strings.Contains(out, "    </plugins>") {
+		t.Errorf("closing tag indent was not preserved:\n%s", out)
+	}
+	if err := validateXML(out); err != nil {
+		t.Errorf("insertion produced invalid XML: %v\n%s", err, out)
+	}
+}

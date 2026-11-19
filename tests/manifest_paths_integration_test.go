@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"scbake/internal/types"
+	"scbake/internal/util/fileutil"
 )
 
 // This file is the independent regression matrix for issue #134: every accepted
@@ -331,6 +332,11 @@ func TestManifestRecordsRootRelativePaths(t *testing.T) { //nolint:cyclop // ass
 
 			if wantPath == "svc" {
 				for key := range m.ManagedFiles {
+					// The root .gitignore carries scbake's internal-state block and
+					// is owned at the manifest root, outside the subproject.
+					if key == fileutil.GitIgnore {
+						continue
+					}
 					if !strings.HasPrefix(key, "svc/") {
 						t.Errorf("managed key %q is not under svc/", key)
 					}
@@ -352,8 +358,11 @@ func TestManifestRecordsRootRelativePaths(t *testing.T) { //nolint:cyclop // ass
 				if err != nil {
 					t.Fatalf("reading committed base: %v", err)
 				}
-				if len(baseEntries) != 1 || baseEntries[0].Name() != "svc" {
-					t.Errorf("committed base entries = %v, want only svc", baseEntries)
+				if len(baseEntries) != 2 ||
+					baseEntries[0].Name() != fileutil.GitIgnore+fileutil.BaseShadowSuffix ||
+					baseEntries[1].Name() != "svc" {
+					t.Errorf("committed base entries = %v, want %s and svc",
+						baseEntries, fileutil.GitIgnore+fileutil.BaseShadowSuffix)
 				}
 			} else {
 				requireNoArtifactsIn(t, repo, "scbake.toml", "main.go", "Makefile", ".editorconfig", "go.mod", ".github", ".scbake", ".scbake-base")

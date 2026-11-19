@@ -42,6 +42,9 @@ var newCmd = &cobra.Command{
 	Short: "Create a new standalone project",
 	Long:  `Creates a new directory and applies the specified language pack and templates.`,
 	Args:  cobra.ExactArgs(1),
+	PreRunE: func(*cobra.Command, []string) error {
+		return types.ValidateConflictStrategy(newConflictStrategyFlag)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		projectName := args[0]
 		dirCreated := false
@@ -332,7 +335,7 @@ func init() {
 	newCmd.Flags().StringVar(&newLangFlag, "lang", "", "Language project pack to apply")
 	newCmd.Flags().StringSliceVar(&newWithFlag, "with", []string{}, "Tooling template(s) to apply")
 	newCmd.Flags().StringArrayVar(&newSetFlag, "set", []string{}, "Set template variable (key=value, can be repeated)")
-	newCmd.Flags().StringVar(&newConflictStrategyFlag, "conflict-strategy", "fail", "Conflict resolution strategy: fail, overwrite, artifact, keep-local")
+	newCmd.Flags().StringVar(&newConflictStrategyFlag, "conflict-strategy", "fail", "Conflict resolution strategy: merge, fail, overwrite, artifact, keep-local")
 	newCmd.Flags().StringVar(&newLicenseFlag, "license", "", "SPDX License ID (required for compliance)")
 	newCmd.Flags().StringVar(&newCopyrightHolderFlag, "copyright-holder", "", "Copyright holder name (required for compliance)")
 }
