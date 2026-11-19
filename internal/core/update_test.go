@@ -46,8 +46,16 @@ func TestRunUpdateEmitsManifestLoadOnce(t *testing.T) {
 		ManifestPathArg:  ".",
 		ConflictStrategy: types.ConflictMerge,
 	}
-	if err := RunUpdate(rc, reporter); err != nil {
-		t.Fatalf("RunUpdate failed: %v", err)
+	loadCalls := 0
+	load := func(rc RunContext) (*types.Manifest, string, error) {
+		loadCalls++
+		return loadManifestForRun(rc)
+	}
+	if err := runUpdateWith(rc, reporter, load); err != nil {
+		t.Fatalf("runUpdateWith failed: %v", err)
+	}
+	if loadCalls != 1 {
+		t.Fatalf("manifest loaded %d times, want exactly 1", loadCalls)
 	}
 
 	want := []string{

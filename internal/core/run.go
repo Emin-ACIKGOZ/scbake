@@ -226,13 +226,21 @@ func RunUpdate(rc RunContext, reporter types.Reporter) error {
 	})
 }
 
+// manifestLoader loads the manifest for an update. It is a seam so a test can
+// assert the update path performs exactly one load.
+type manifestLoader func(RunContext) (*types.Manifest, string, error)
+
 // runUpdate is RunUpdate without the root lock. It loads the manifest once,
 // reports that phase itself, and hands the loaded manifest to the shared apply
 // pipeline so the run reads and prints the load step exactly once (#271).
 func runUpdate(rc RunContext, reporter types.Reporter) error {
+	return runUpdateWith(rc, reporter, loadManifestForRun)
+}
+
+func runUpdateWith(rc RunContext, reporter types.Reporter, load manifestLoader) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
-	m, rootPath, err := loadManifestForRun(rc)
+	m, rootPath, err := load(rc)
 	if err != nil {
 		return err
 	}
