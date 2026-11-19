@@ -135,8 +135,8 @@ func loadManifestForRun(rc RunContext) (*types.Manifest, string, error) {
 	return m, root, nil
 }
 
-// runApply is RunApply without the root lock so RunUpdate can share one lock
-// around the initial manifest load and the apply run.
+// runApply is RunApply without the root lock, so callers that already hold the
+// lock can run the apply pipeline.
 func runApply(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
@@ -145,7 +145,18 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 	if err != nil {
 		return err
 	}
+	return runApplyWithManifest(rc, reporter, m, rootPath)
+}
 
+// runApplyWithManifest continues the apply pipeline with a manifest the caller
+// already loaded and reported. It emits no load step, so a caller that shares
+// this pipeline (update) reports the load phase exactly once (#271).
+func runApplyWithManifest(
+	rc RunContext,
+	reporter types.Reporter,
+	m *types.Manifest,
+	rootPath string,
+) error {
 	// Compute the canonical root-relative path of the target once from
 	// TargetPath, resolving it against the process working directory when it is
 	// relative. Both the project and template entries use this value, so every
@@ -216,16 +227,23 @@ func RunUpdate(rc RunContext, reporter types.Reporter) error {
 	})
 }
 
-// runUpdate is RunUpdate without the root lock; it calls runApply so the
-// update's initial manifest load and the apply run under the same lock.
+// manifestLoader loads the manifest for an update. It is a seam so a test can
+// assert the update path performs exactly one load.
+type manifestLoader func(RunContext) (*types.Manifest, string, error)
+
+// runUpdate is RunUpdate without the root lock. It loads the manifest once,
+// reports that phase itself, and hands the loaded manifest to the shared apply
+// pipeline so the run reads and prints the load step exactly once (#271).
 func runUpdate(rc RunContext, reporter types.Reporter) error {
+	return runUpdateWith(rc, reporter, loadManifestForRun)
+}
+
+func runUpdateWith(rc RunContext, reporter types.Reporter, load manifestLoader) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
-	m, rootPath, err := manifest.LoadWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
-		AllowAncestorSearch: rc.AllowAncestorSearch,
-	})
+	m, rootPath, err := load(rc)
 	if err != nil {
-		return fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
+		return err
 	}
 
 	lang, withTemplates, relPath, err := resolveUpdateSelection(m, rootPath, rc.TargetPath)
@@ -241,7 +259,7 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 	rc.ManifestPathArg = relPath
 	rc.Update = true
 
-	return runApply(rc, reporter)
+	return runApplyWithManifest(rc, reporter, m, rootPath)
 }
 
 // withRootLock serializes mutating runs against the same project root. Only
