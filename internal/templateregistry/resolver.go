@@ -165,8 +165,10 @@ func resolveInRegistry(cacheDir, registryDir, templateName, cleanPath string) st
 
 // LookupPath returns the full path to a template file in the cache for a
 // specific registry. Returns empty string if not found, if registryName is not a
-// safe single path segment, or if tplPath is absolute or resolves outside
-// <cacheDir>/<registryName>.
+// safe single path segment, if the registry entry is not a real directory (both
+// inward- and outward-pointing symlinks are rejected, matching
+// ResolveCacheEntry), or if tplPath is absolute, escapes
+// <cacheDir>/<registryName>, or names a directory.
 func LookupPath(cacheDir, registryName, tplPath string) string {
 	if cacheDir == "" || ValidateName(registryName) != nil {
 		return ""
