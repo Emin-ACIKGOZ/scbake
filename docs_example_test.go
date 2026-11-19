@@ -72,6 +72,30 @@ func TestArchitectureManifestExample(t *testing.T) {
 	}
 }
 
+// TestReadmeResidualDriftContract pins the documented exit contract for the
+// commands that can complete with residual drift. The behavior is unchanged;
+// the README must state that exit 0 means "completed", that drift is the gate,
+// and that accept is how an intentional edit becomes the new baseline.
+func TestReadmeResidualDriftContract(t *testing.T) {
+	doc, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	text := strings.ReplaceAll(string(doc), "\r\n", "\n")
+	for _, want := range []string{
+		"`update` exits 0 when it completes",
+		"| Completed with residual drift",
+		"Run `scbake drift` as the gate",
+		"`--repair` follows the same completion contract as `update`",
+		"Repair finished; N managed file(s) still drifted",
+		"[`scbake accept`](#accept-rebaseline-a-managed-file)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("README.md does not document %q", want)
+		}
+	}
+}
+
 // exampleRenderData mirrors the additive render-data wrapper supplied by
 // pkg/tasks: embedding *types.Manifest keeps every legacy field available,
 // while Project names the manifest project that owns the template's target.
