@@ -283,7 +283,15 @@ func TestManagedRootGitIgnoreHashMatchesDisk(t *testing.T) {
 // block, but the ledger and base have no entry. A language apply must recognize
 // the owned block, reconcile it, and adopt the rendered result instead of
 // reporting a false drift conflict.
-func TestLegacyToolingProjectGitIgnoreAdoptsOnLanguageApply(t *testing.T) { //nolint:cyclop // multi-step legacy-state fixture
+func TestLegacyToolingProjectGitIgnoreAdoptsOnLanguageApply(t *testing.T) {
+	testLegacyGitignoreAdoption(t, false)
+}
+
+func TestLegacyCRLFToolingProjectGitIgnoreAdoptsOnLanguageApply(t *testing.T) {
+	testLegacyGitignoreAdoption(t, true)
+}
+
+func testLegacyGitignoreAdoption(t *testing.T, crlf bool) { //nolint:cyclop // multi-step legacy-state fixture
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not installed")
 	}
@@ -296,6 +304,12 @@ func TestLegacyToolingProjectGitIgnoreAdoptsOnLanguageApply(t *testing.T) { //no
 	project := filepath.Join(work, "demo")
 	gitignorePath := filepath.Join(project, fileutil.GitIgnore)
 	block := mustRead(t, gitignorePath)
+	if crlf {
+		block = strings.ReplaceAll(block, "\n", "\r\n")
+		if err := os.WriteFile(gitignorePath, []byte(block), 0o600); err != nil {
+			t.Fatalf("rewrite CRLF .gitignore: %v", err)
+		}
+	}
 
 	// Remove only the .gitignore ledger entry and its base, leaving the
 	// canonical block on disk: the legacy state this issue describes.
