@@ -23,6 +23,7 @@ import (
 	"scbake/pkg/templates/compliance"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -688,6 +689,25 @@ func validateManifestFields(m *types.Manifest) error {
 	for i := range m.Projects {
 		if err := validateProject(m.Projects[i]); err != nil {
 			return err
+		}
+	}
+	for i := range m.Templates {
+		if !utf8.ValidString(m.Templates[i].Name) {
+			return fmt.Errorf("template name %q is not valid UTF-8", m.Templates[i].Name)
+		}
+		if !utf8.ValidString(m.Templates[i].Path) {
+			return fmt.Errorf("template path %q is not valid UTF-8", m.Templates[i].Path)
+		}
+	}
+	// Metadata keys and values are persisted verbatim in scbake.toml, which is
+	// required to be UTF-8. A --set value with a raw invalid byte would make the
+	// next load fail, so reject it before any write.
+	for k, v := range m.Metadata {
+		if !utf8.ValidString(k) {
+			return fmt.Errorf("metadata key %q is not valid UTF-8", k)
+		}
+		if !utf8.ValidString(v) {
+			return fmt.Errorf("metadata %q is not valid UTF-8", k)
 		}
 	}
 	if cmd, ok := m.Metadata["test_command"]; ok {
