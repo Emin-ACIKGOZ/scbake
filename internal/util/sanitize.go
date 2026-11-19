@@ -43,6 +43,20 @@ const (
 	bidiIsolateLast   = '\u2069'
 )
 
+// ResolveModuleNameTarget resolves a "." target against the invocation
+// directory, because a real `new` run plans from inside the project it just
+// created. Other spellings are returned unchanged.
+func ResolveModuleNameTarget(path string) (string, error) {
+	if path != "." {
+		return path, nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving target path: %w", err)
+	}
+	return abs, nil
+}
+
 // SanitizeModuleName creates a valid Go module name from a path.
 // It takes the base name, lowercases it, and replaces spaces with hyphens.
 // It returns an error if the resulting name is empty, is a reserved path
