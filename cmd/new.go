@@ -187,7 +187,7 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	// tree needs no identity because the template will be skipped.
 	if containsGitTemplate(newWithFlag) {
 		if err := core.CheckGitPrerequisites(projectName); err != nil {
-			return nil, "", err
+			return nil, "", util.SanitizeError(err)
 		}
 	}
 	return setVars, resolved, nil

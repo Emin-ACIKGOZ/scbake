@@ -42,7 +42,7 @@ or the projects currently managed in this repository's ` + fileutil.ManifestFile
 				AllowAncestorSearch: allowAncestorSearch,
 			})
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error loading %s: %v\n", fileutil.ManifestFileName, err)
+				fmt.Fprintf(os.Stderr, "Error loading %s: %v\n", fileutil.ManifestFileName, util.SanitizeError(err))
 				os.Exit(fileutil.ExitError)
 			}
 			if len(m.Projects) == 0 {

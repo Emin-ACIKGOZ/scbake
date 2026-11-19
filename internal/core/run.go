@@ -753,18 +753,12 @@ func validateProjectName(n string) error {
 	return validateIdentifier(n, "name")
 }
 
-// ValidateProjectName reports whether name is a safe project identifier. The
-// command layer uses it to reject an unsafe name before creating a directory,
-// including for template-only projects that skip language planning.
-func ValidateProjectName(name string) error {
-	return validateProjectName(name)
-}
-
-// ValidateProjectDirectoryName checks a name used only as a project directory
-// (a template-only `new`). Language runs normalize names before identifier
-// validation, but a template-only run has no project record to normalize, so it
-// only needs the directory-safe and terminal-safe rules: spaces and ordinary
-// Unicode are allowed, while control, bidi, and invalid UTF-8 are rejected.
+// ValidateProjectDirectoryName checks the terminal-safety of a name used only
+// as a project directory (a template-only `new`). Language runs normalize names
+// before identifier validation, but a template-only run has no project record to
+// normalize, so it allows spaces and ordinary Unicode while rejecting control,
+// bidi, and invalid UTF-8. Callers must validate path form separately (the
+// command layer uses templateregistry.ValidateName).
 func ValidateProjectDirectoryName(name string) error {
 	if name == "" {
 		return errors.New("name must not be empty")
