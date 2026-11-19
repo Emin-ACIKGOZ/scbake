@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"scbake/internal/core"
+	"scbake/internal/types"
 	"scbake/internal/ui"
 
 	"github.com/spf13/cobra"
@@ -29,6 +30,9 @@ var applyCmd = &cobra.Command{
 	Use:   "apply [--lang <lang>] [--with <template...>] [<path>]",
 	Short: "Apply a language pack or tooling template to a project",
 	Args:  cobra.MaximumNArgs(1),
+	PreRunE: func(*cobra.Command, []string) error {
+		return types.ValidateConflictStrategy(conflictStrategyFlag)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Store the original argument for the manifest, which must be relative.
 		manifestPathArg := "."
@@ -100,7 +104,7 @@ func init() {
 	applyCmd.PersistentFlags().StringVar(&langFlag, "lang", "", "Language pack")
 	applyCmd.PersistentFlags().StringSliceVar(&withFlag, "with", []string{}, "Tooling templates")
 	applyCmd.PersistentFlags().StringArrayVar(&applySetFlag, "set", []string{}, "Set template variable (key=value, can be repeated)")
-	applyCmd.PersistentFlags().StringVar(&conflictStrategyFlag, "conflict-strategy", "fail", "Conflict resolution strategy: fail, overwrite, artifact, keep-local")
+	applyCmd.PersistentFlags().StringVar(&conflictStrategyFlag, "conflict-strategy", "fail", "Conflict resolution strategy: merge, fail, overwrite, artifact, keep-local")
 	applyCmd.PersistentFlags().StringVar(&licenseFlag, "license", "", "SPDX License ID")
 	applyCmd.PersistentFlags().StringVar(&copyrightHolderFlag, "copyright-holder", "", "Copyright holder name")
 }

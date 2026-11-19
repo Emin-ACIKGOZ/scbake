@@ -23,6 +23,7 @@ import (
 	"scbake/pkg/templates/compliance"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -197,10 +198,10 @@ func runApplyWithManifest(
 	}
 	if rc.Update {
 		plan.Tasks = managedWriteTasks(plan.Tasks)
-		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel)
+		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel, rc.Update)
 	} else if !rc.Force {
 		// `apply` skips detached paths unless --force re-manages them.
-		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel)
+		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel, rc.Update)
 	}
 
 	// 4. Build Task Context & Validate Schemas
@@ -363,8 +364,10 @@ func managedWriteTasks(plan []types.Task) []types.Task {
 // does not list a task the real run skips. Tasks without a known managed output
 // path are kept; the write path performs its own execution-level guard.
 // projectRel is the project's slash-separated path relative to the manifest
-// root ("." for the root project).
-func filterUnmanagedTasks(plan []types.Task, m *types.Manifest, projectRel string) []types.Task {
+// root ("." for the root project). update reports that the path stays unmanaged
+// and names the documented apply --force re-manage route, because update never
+// re-manages a detached path, not even with --force.
+func filterUnmanagedTasks(plan []types.Task, m *types.Manifest, projectRel string, update bool) []types.Task {
 	if m == nil || len(m.UnmanagedFiles) == 0 {
 		return plan
 	}
@@ -382,12 +385,25 @@ func filterUnmanagedTasks(plan []types.Task, m *types.Manifest, projectRel strin
 		}
 		key := filepath.ToSlash(filepath.Clean(path.Join(projectRel, w.ManagedOutputPath())))
 		if _, skipped := unmanaged[key]; skipped {
-			fmt.Fprintf(os.Stderr, "⚠️  Skipping unmanaged %s; use --force to manage it again\n", key)
+			fmt.Fprint(os.Stderr, unmanagedSkipMessage(key, update))
 			continue
 		}
 		out = append(out, t)
 	}
 	return out
+}
+
+// unmanagedSkipMessage is the plan-time warning for a detached path.
+// `apply` accepts --force, so it can point at that flag; `update` never
+// re-manages a detached path, so repeating "use --force" there is false advice.
+func unmanagedSkipMessage(key string, update bool) string {
+	if update {
+		return fmt.Sprintf(
+			"⚠️  Skipping unmanaged %s; it remains unmanaged. Re-manage it with 'scbake apply --force' using the same selector.\n",
+			key,
+		)
+	}
+	return fmt.Sprintf("⚠️  Skipping unmanaged %s; use --force to manage it again\n", key)
 }
 
 // prepareRunTransaction initializes the transaction manager for a run. A dry
@@ -708,9 +724,45 @@ func validateManifestFields(m *types.Manifest) error {
 			return err
 		}
 	}
+	if err := validateTemplateFields(m.Templates); err != nil {
+		return err
+	}
+	if err := validateMetadataFields(m.Metadata); err != nil {
+		return err
+	}
 	if cmd, ok := m.Metadata["test_command"]; ok {
 		if err := validateTestCommand(cmd); err != nil {
 			return fmt.Errorf("metadata test_command is invalid: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateTemplateFields rejects template names and paths that cannot be
+// persisted in the UTF-8-only scbake.toml format.
+func validateTemplateFields(templates []types.Template) error {
+	for i := range templates {
+		if !utf8.ValidString(templates[i].Name) {
+			return fmt.Errorf("template name %q is not valid UTF-8", templates[i].Name)
+		}
+		if !utf8.ValidString(templates[i].Path) {
+			return fmt.Errorf("template path %q is not valid UTF-8", templates[i].Path)
+		}
+	}
+	return nil
+}
+
+// validateMetadataFields rejects metadata keys and values that cannot be
+// persisted in the UTF-8-only scbake.toml format. A --set value with a raw
+// invalid byte would make the next load fail, so it is rejected before any
+// write.
+func validateMetadataFields(metadata map[string]string) error {
+	for k, v := range metadata {
+		if !utf8.ValidString(k) {
+			return fmt.Errorf("metadata key %q is not valid UTF-8", k)
+		}
+		if !utf8.ValidString(v) {
+			return fmt.Errorf("metadata %q is not valid UTF-8", k)
 		}
 	}
 	return nil

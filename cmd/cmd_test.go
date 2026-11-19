@@ -36,6 +36,8 @@ func resetFlags() {
 	driftRequireBaseFlag = false
 	driftStrategyFlag = types.ConflictMerge
 	updateConflictStrategyFlag = types.ConflictMerge
+	conflictStrategyFlag = types.ConflictFail
+	newConflictStrategyFlag = types.ConflictFail
 	pullRegistryName = ""
 }
 
