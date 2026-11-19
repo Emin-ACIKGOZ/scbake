@@ -85,6 +85,12 @@ type RunContext struct {
 	// commit, recovery removes the bootstrap project directory as well as the
 	// transaction's tracked files.
 	NewProject bool
+
+	// DryRunWrites optionally receives the canonical managed-file writes a dry
+	// run would perform. It is nil for real runs. Prediction callers supply a
+	// map so a preview can distinguish findings the scoped plan repairs from
+	// findings it leaves behind (for example another project's missing file).
+	DryRunWrites map[string]types.PlannedWrite
 }
 
 // A struct to hold all proposed manifest changes
@@ -476,6 +482,7 @@ func buildTaskContext(
 		RegistryCacheDir: rc.RegistryCacheDir,
 		RegistryNames:    rc.RegistryNames,
 		Tx:               tx,
+		PlannedWrites:    rc.DryRunWrites,
 	}
 
 	return tc, cancel, nil

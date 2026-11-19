@@ -10,6 +10,7 @@ import (
 	"scbake/internal/types"
 	"slices"
 	"sort"
+	"strings"
 )
 
 // Execute runs the plan and reports progress via the provided Reporter.
@@ -70,20 +71,29 @@ func runTask(plan *types.Plan, index int, task types.Task, tc types.TaskContext,
 	}
 
 	desc := task.Description()
+	var err error
 	if tc.DryRun {
 		if sd, ok := task.(types.SourceDescriber); ok {
 			desc = sd.DescriptionWithSource(tc)
 		}
+		// A dry run reports what the real run would decide, without
+		// performing any of it. Validate is the read-only half of a task,
+		// so this path can never write. Running it before TaskStart lets a
+		// task annotate its description with the decision it just made; the
+		// note is recorded by Validate because that is the only place that
+		// holds the shared reconciliation result (see types.DryRunAnnotator).
+		err = task.Validate(tc)
+		if verb := dryRunVerb(task); verb != "" {
+			desc = replaceLeadingWord(desc, verb)
+		}
+		if note := dryRunNote(task); note != "" {
+			desc += " (" + note + ")"
+		}
 	}
 	reporter.TaskStart(desc, index+1, len(plan.Tasks))
 
-	var err error
-	if tc.DryRun {
-		// A dry run reports what the real run would decide, without
-		// performing any of it. Validate is the read-only half of a task,
-		// so this path can never write.
-		err = task.Validate(tc)
-	} else {
+	if !tc.DryRun {
+		// A real run executes; the dry run already ran Validate above.
 		err = task.Execute(tc)
 	}
 
@@ -93,6 +103,36 @@ func runTask(plan *types.Plan, index int, task types.Task, tc types.TaskContext,
 		return fmt.Errorf("task failed (%s): %w", task.Description(), err)
 	}
 	return nil
+}
+
+// dryRunNote returns a task's optional dry-run annotation. Tasks that do not
+// implement types.DryRunAnnotator contribute no note.
+func dryRunNote(task types.Task) string {
+	annotator, ok := task.(types.DryRunAnnotator)
+	if !ok {
+		return ""
+	}
+	return annotator.DryRunNote()
+}
+
+// dryRunVerb returns a task's optional leading-verb override. Tasks that do not
+// implement types.DryRunVerbProvider keep their plain description.
+func dryRunVerb(task types.Task) string {
+	provider, ok := task.(types.DryRunVerbProvider)
+	if !ok {
+		return ""
+	}
+	return provider.DryRunVerb()
+}
+
+// replaceLeadingWord substitutes verb for desc's first space-delimited word,
+// preserving the remainder (and any source suffix). A one-word description
+// becomes just the verb.
+func replaceLeadingWord(desc, verb string) string {
+	if i := strings.IndexByte(desc, ' '); i >= 0 {
+		return verb + desc[i:]
+	}
+	return verb
 }
 
 // carryPlannedPaths records the paths task declared it will create, so a later

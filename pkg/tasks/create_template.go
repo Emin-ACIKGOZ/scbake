@@ -98,6 +98,10 @@ type CreateTemplateTask struct {
 	// threaded to ReadTemplate so registry cache resolution is constrained to
 	// the requested template and never reads a sibling template's file.
 	TemplateName string
+
+	// dryRunNote is the read-only reconciliation note recorded by Validate and
+	// surfaced through DryRunNote. It is empty for an ordinary write.
+	dryRunNote string
 }
 
 // Description implements types.Task.
@@ -682,31 +686,59 @@ func ManagedFileUnchanged(tc types.TaskContext, outputRelPath string) (bool, err
 	return recorded != "" && existingHash == recorded, nil
 }
 
+// managedFileBaseRepair returns the current bytes of outputRelPath and whether
+// its pristine base shadow needs backfilling. The base is repairable only when
+// the working file still matches its recorded hash and the existing base is
+// missing or stale; a working file that no longer matches its recorded hash is
+// never a repair target. It is read-only and is the predicate shared by
+// EnsureManagedFileBase and ManagedFileBaseNeedsRepair.
+func managedFileBaseRepair(tc types.TaskContext, outputRelPath string) ([]byte, bool, error) {
+	if tc.Manifest == nil {
+		return nil, false, nil
+	}
+	existing, err := fileutil.SafeReadFile(tc.TargetPath, outputRelPath)
+	if err != nil {
+		return nil, false, err
+	}
+	absPath, err := fileutil.SafePath(tc.TargetPath, outputRelPath)
+	if err != nil {
+		return nil, false, err
+	}
+	existingHash := HashContent(existing)
+	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
+	recorded := recordedHash(tc.Manifest, ledgerKey, outputRelPath, existingHash)
+	if recorded == "" || existingHash != recorded {
+		return existing, false, nil
+	}
+	if base, ok := readBaseShadow(tc, ledgerKey); ok && BaseMatchesRecordedHash(base, recorded) {
+		return existing, false, nil
+	}
+	return existing, true, nil
+}
+
+// ManagedFileBaseNeedsRepair reports whether EnsureManagedFileBase would write a
+// pristine base shadow for outputRelPath. It is the read-only half of that
+// function, so a dry run can disclose a base-only reconciliation without
+// touching the tree or the manifest.
+func ManagedFileBaseNeedsRepair(tc types.TaskContext, outputRelPath string) (bool, error) {
+	_, needsRepair, err := managedFileBaseRepair(tc, outputRelPath)
+	return needsRepair, err
+}
+
 // EnsureManagedFileBase backfills the pristine base shadow for a managed file
 // that still matches its recorded hash, when the base is missing or does not
 // match. It uses the current file bytes, so it does not need the original
 // source. It reports whether a base write was needed.
 func EnsureManagedFileBase(tc types.TaskContext, outputRelPath string) (bool, error) {
-	if tc.Manifest == nil {
-		return false, nil
-	}
-	existing, err := fileutil.SafeReadFile(tc.TargetPath, outputRelPath)
-	if err != nil {
+	existing, needsRepair, err := managedFileBaseRepair(tc, outputRelPath)
+	if err != nil || !needsRepair {
 		return false, err
 	}
 	absPath, err := fileutil.SafePath(tc.TargetPath, outputRelPath)
 	if err != nil {
 		return false, err
 	}
-	existingHash := HashContent(existing)
 	ledgerKey := managedFilesKey(tc, absPath, outputRelPath)
-	recorded := recordedHash(tc.Manifest, ledgerKey, outputRelPath, existingHash)
-	if recorded == "" || existingHash != recorded {
-		return false, nil
-	}
-	if base, ok := readBaseShadow(tc, ledgerKey); ok && BaseMatchesRecordedHash(base, recorded) {
-		return false, nil
-	}
 	if err := writeBaseShadow(tc, ledgerKey, existing); err != nil {
 		return false, err
 	}
@@ -1347,15 +1379,93 @@ func (t *CreateTemplateTask) render(tc types.TaskContext) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// DryRunNote implements types.DryRunAnnotator. Validate records the note from
+// the same decision WriteManagedFile would use; an ordinary create or update
+// records no note, leaving the executor's description unchanged.
+func (t *CreateTemplateTask) DryRunNote() string { return t.dryRunNote }
+
+// DryRunVerb implements types.DryRunVerbProvider. A reconciliation note that
+// means no canonical write makes the preview say "Skip" instead of "Create"; a
+// diverted write names the artifact it would produce.
+func (t *CreateTemplateTask) DryRunVerb() string { return DryRunVerbForNote(t.dryRunNote) }
+
 // Validate resolves, renders, and reconciles the template without creating
 // directories, tracking, writing, or mutating the ledger. It shares render and
-// ValidateManagedFile with Execute, so the preview reports the real decision.
+// PlanManagedFile with Execute, so the preview reports the real decision. The
+// note is recorded here because this is the only place that holds the shared
+// reconciliation result.
 func (t *CreateTemplateTask) Validate(tc types.TaskContext) error {
+	t.dryRunNote = ""
+
 	content, err := t.render(tc)
 	if err != nil {
 		return err
 	}
-	return ValidateManagedFile(tc, t.OutputPath, content)
+	t.dryRunNote, err = PlanManagedFile(tc, t.OutputPath, content)
+	return err
+}
+
+// PlanManagedFile resolves and reconciles a managed file without writing. It
+// returns the dry-run note for the decision and records a canonical planned
+// write when the decision targets the managed file itself. Tasks outside this
+// package that own a managed path (for example the compliance LICENSE task)
+// call it so their Validate reports and predicts exactly what WriteManagedFile
+// would do.
+func PlanManagedFile(tc types.TaskContext, outputRelPath string, content []byte) (string, error) {
+	absPath, err := resolveTaskPath(tc.TargetPath, outputRelPath, "output")
+	if err != nil {
+		return "", err
+	}
+	decision, err := decideManagedFile(tc, absPath, outputRelPath, content)
+	if err != nil {
+		return "", err
+	}
+
+	// Record only canonical writes. Skip/keep-local/artifact decisions do not
+	// rewrite the managed file, so they cannot clear that path's drift. Clean
+	// means the file ends equal to the pristine render; a merge override that
+	// keeps local edits is a canonical write but leaves content drift.
+	if tc.PlannedWrites != nil && decision.writePath == absPath {
+		tc.PlannedWrites[decision.ledgerKey] = types.PlannedWrite{
+			Key:   decision.ledgerKey,
+			Clean: decision.override == nil || bytes.Equal(decision.override, decision.content),
+		}
+	}
+	return managedFileDryRunNote(absPath, decision), nil
+}
+
+// DryRunVerbForNote maps a managed-file reconciliation note to the dry-run verb
+// that replaces the description's leading word. An empty note means the
+// ordinary create or update path, so the verb is empty too.
+func DryRunVerbForNote(note string) string {
+	switch note {
+	case "no change", "local edits preserved", "unchanged", "base repair only":
+		return "Skip"
+	case "conflict; would write artifact":
+		return "Write artifact for"
+	default:
+		return ""
+	}
+}
+
+// managedFileDryRunNote describes a reconciliation that does not perform a
+// plain create or update. An empty note means the ordinary write path, so a
+// preview only gains text when the real run would skip, preserve, or divert
+// the write.
+func managedFileDryRunNote(absPath string, decision managedFileDecision) string {
+	if decision.writePath == "" {
+		return "no change"
+	}
+	if decision.writePath != absPath {
+		return "conflict; would write artifact"
+	}
+	if decision.override != nil && sameFileContent(absPath, decision.override) {
+		return "local edits preserved"
+	}
+	if sameFileContent(absPath, decision.content) {
+		return "unchanged"
+	}
+	return ""
 }
 
 // Execute performs the template creation task.

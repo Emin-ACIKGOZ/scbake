@@ -624,7 +624,7 @@ func TestUpdateDryRunOmitsUnmanagedTask(t *testing.T) {
 
 	out, err := runCLI("update", "--dry-run")
 	requireAcceptSuccess(t, out, err, "update --dry-run")
-	if !strings.Contains(out, "Create main.go") {
+	if !strings.Contains(out, "Skip main.go") {
 		t.Fatalf("control: managed main.go is missing from the dry-run plan:\n%s", out)
 	}
 
@@ -637,8 +637,16 @@ func TestUpdateDryRunOmitsUnmanagedTask(t *testing.T) {
 	if !strings.Contains(out, "Skipping unmanaged main.go") {
 		t.Errorf("dry-run did not report the skipped unmanaged task:\n%s", out)
 	}
-	if strings.Contains(out, "Create main.go") {
+	// The plan must omit main.go entirely, not merely swap its verb. Assert
+	// every task-line spelling so a regression that re-lists the unmanaged path
+	// under another verb (for example Create) cannot pass.
+	if strings.Contains(out, "Skip main.go") || strings.Contains(out, "Create main.go") {
 		t.Errorf("dry-run still lists the unmanaged task:\n%s", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "[DRY RUN]") && strings.Contains(line, "main.go") {
+			t.Errorf("dry-run plan still carries a main.go task: %q", line)
+		}
 	}
 	assertAcceptTreeFrozen(t, project, frozen)
 }

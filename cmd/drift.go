@@ -262,6 +262,10 @@ func repairDrift(ctx context.Context, absPath, manifestPathArg string) error {
 	}
 
 	cacheDir, registryNames := registryPolicy()
+	var plannedWrites map[string]types.PlannedWrite
+	if dryRun {
+		plannedWrites = make(map[string]types.PlannedWrite)
+	}
 	rc := core.RunContext{
 		TargetPath:          absPath,
 		ManifestPathArg:     manifestPathArg,
@@ -273,9 +277,129 @@ func repairDrift(ctx context.Context, absPath, manifestPathArg string) error {
 		RegistryNames:       registryNames,
 		Ctx:                 ctx,
 		AllowAncestorSearch: allowAncestorSearch,
+		DryRunWrites:        plannedWrites,
 	}
+	// A dry run writes nothing, so a post-run Detect would still see every
+	// pre-repair finding, including changes the plan would restore. Capture the
+	// pre-repair findings instead and predict which of them survive from the
+	// writes the dry-run plan actually selects.
+	var preRepair []drift.Finding
+	if dryRun {
+		var loadErr error
+		_, preRepair, loadErr = loadDriftState(absPath)
+		if loadErr != nil {
+			return loadErr
+		}
+	}
+
 	reporter := ui.NewReporter(runUpdateTotalSteps, dryRun)
-	return core.RunUpdate(rc, reporter)
+	if err := core.RunUpdate(rc, reporter); err != nil {
+		return err
+	}
+	if dryRun {
+		reportPredictedResidual(preRepair, plannedWrites)
+		return nil
+	}
+	return reportResidualDrift(absPath)
+}
+
+// loadDriftState resolves the manifest and its current drift findings without
+// writing anything.
+func loadDriftState(absPath string) (*types.Manifest, []drift.Finding, error) {
+	m, rootPath, err := manifest.LoadWithOptions(absPath, manifest.DiscoveryOptions{
+		AllowAncestorSearch: allowAncestorSearch,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load manifest: %w", err)
+	}
+	findings, err := drift.Detect(m, rootPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to check drift: %w", err)
+	}
+	return m, findings, nil
+}
+
+// reportPredictedResidual prints the blocking findings a dry-run repair would
+// leave behind. A dry run writes nothing, so predicting from the pre-repair scan
+// plus the plan's planned writes is the only way to avoid both listing files the
+// real plan would restore and missing files outside the scoped plan.
+func reportPredictedResidual(findings []drift.Finding, writes map[string]types.PlannedWrite) {
+	residual := predictedResidualFindings(findings, writes)
+	if len(residual) == 0 {
+		return
+	}
+
+	fmt.Printf("Dry run: %d managed file(s) may remain drifted:\n", countFindingPaths(residual))
+	printFindings(residual)
+	if driftStrategyFlag != types.ConflictOverwrite {
+		fmt.Println("Use --conflict-strategy overwrite to force restoration.")
+	}
+}
+
+// predictedResidualFindings maps pre-repair findings to the blocking set that a
+// dry-run repair may leave behind. Planned writes are the source of truth: they
+// already reflect the scoped plan, the conflict strategy, --force, convergence,
+// and merge outcomes. Only a Clean canonical write clears a finding; a missing
+// or modified path with no planned writer (another project outside the target
+// scope, a stale ledger key, an unmanaged path, or a preserved local edit) stays
+// residual. BaseMissing is advisory for drift, so it is never part of the
+// blocking summary.
+func predictedResidualFindings(findings []drift.Finding, writes map[string]types.PlannedWrite) []drift.Finding {
+	residual := make([]drift.Finding, 0, len(findings))
+	for _, f := range findings {
+		if f.Kind == drift.BaseMissing {
+			continue
+		}
+		if write, ok := writes[f.Path]; ok && write.Key == f.Path && write.Clean {
+			continue
+		}
+		residual = append(residual, f)
+	}
+	return residual
+}
+
+// reportResidualDrift re-checks the managed files after a real repair so a run
+// that completed but could not clear everything (for example merge preserving
+// local edits) cannot look like a clean repair. It shares partitionFindings and
+// printFindings with the drift command so advisory classification, #223 path
+// sanitization, and formatting stay in one place.
+//
+// Only blocking findings are reported: a missing committed base is advisory for
+// `drift` and merge does not backfill it, so it must not be called residual
+// drift. Residual findings do not change the exit contract: merge is documented
+// to preserve local edits and still exits 0. Only a failure to perform the
+// read-only re-check fails the command, so detection never reports a false
+// clean.
+func reportResidualDrift(absPath string) error {
+	_, findings, err := loadDriftState(absPath)
+	if err != nil {
+		return fmt.Errorf("re-checking drift after repair: %w", err)
+	}
+
+	// A missing committed base is advisory for `drift` and merge does not
+	// backfill it, so an advisory-only result is not residual drift. Report only
+	// blocking findings; a clean working tree stays quiet.
+	blocking, _ := partitionFindings(findings, false)
+	if len(blocking) == 0 {
+		return nil
+	}
+
+	fmt.Printf("Repair finished; %d managed file(s) still drifted:\n", countFindingPaths(blocking))
+	printFindings(blocking)
+	if driftStrategyFlag != types.ConflictOverwrite {
+		fmt.Println("Use --conflict-strategy overwrite to force restoration.")
+	}
+	return nil
+}
+
+// countFindingPaths counts distinct managed files across findings, so a path
+// with both a working-tree and a base finding is reported once.
+func countFindingPaths(findings []drift.Finding) int {
+	paths := make(map[string]struct{}, len(findings))
+	for _, f := range findings {
+		paths[f.Path] = struct{}{}
+	}
+	return len(paths)
 }
 
 // shortHash abbreviates a SHA-256 for human-readable output; the full hash is
