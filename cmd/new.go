@@ -142,11 +142,8 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	// Validate here, before bootstrapProjectDir creates the directory, so a
 	// missing flag is an argument error rather than a late task failure that
 	// has to clean up a partially written project.
-	if containsTemplate(newWithFlag, "compliance") {
-		license, copyrightHolder := core.ComplianceMetadata(newLicenseFlag, newCopyrightHolderFlag, setVars)
-		if err := core.CheckCompliancePrerequisites(license, copyrightHolder); err != nil {
-			return nil, "", err
-		}
+	if err := validateComplianceSelection(setVars); err != nil {
+		return nil, "", err
 	}
 	// Check the language toolchain before the directory exists, so a missing
 	// binary (e.g. go) does not leave a directory to be cleaned up. A dry run
@@ -171,12 +168,19 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	// nearest existing ancestor until then) rather than "." so validation and
 	// the post-chdir apply share one skip/identity decision. An existing work
 	// tree needs no identity because the template will be skipped.
-	if containsTemplate(newWithFlag, "git") {
-		if err := core.CheckGitPrerequisites(projectName); err != nil {
-			return nil, "", err
-		}
+	if err := validateGitSelection(projectName); err != nil {
+		return nil, "", err
 	}
 	return setVars, resolved, nil
+}
+
+// validateGitSelection checks the git template's prerequisite identity before
+// `new` writes anything, including in a dry run.
+func validateGitSelection(projectName string) error {
+	if !containsTemplate(newWithFlag, "git") {
+		return nil
+	}
+	return core.CheckGitPrerequisites(projectName)
 }
 
 // newTargetPath returns the planning path for a new project. A real run has
@@ -289,6 +293,16 @@ func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporte
 }
 
 const maxKeyValueParts = 2
+
+// validateComplianceSelection checks the compliance template's required
+// metadata before `new` creates the project directory.
+func validateComplianceSelection(setVars map[string]string) error {
+	if !containsTemplate(newWithFlag, "compliance") {
+		return nil
+	}
+	license, copyrightHolder := core.ComplianceMetadata(newLicenseFlag, newCopyrightHolderFlag, setVars)
+	return core.CheckCompliancePrerequisites(license, copyrightHolder)
+}
 
 // containsTemplate reports whether name appears in the template selection.
 func containsTemplate(names []string, name string) bool {

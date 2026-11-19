@@ -112,7 +112,7 @@ func TestIssue268ApplyComplianceReusesRecordedMetadata(t *testing.T) {
 // TestIssue268UpdateFailsBeforeExecutingWhenMetadataMissing covers a hand-edited
 // manifest that still selects compliance but lost the recorded metadata. update
 // must fail before the plan executes rather than mid-LICENSE and roll back.
-func TestIssue268UpdateFailsBeforeExecutingWhenMetadataMissing(t *testing.T) {
+func TestIssue268UpdateFailsBeforeExecutingWhenMetadataMissing(t *testing.T) { //nolint:cyclop // multi-step manifest-corruption regression
 	root := t.TempDir()
 	skipIfAncestorHasMarker(t, root)
 	t.Chdir(root)
@@ -138,7 +138,7 @@ func TestIssue268UpdateFailsBeforeExecutingWhenMetadataMissing(t *testing.T) {
 		}
 		kept = append(kept, line)
 	}
-	if err := os.WriteFile(manifestPath, []byte(strings.Join(kept, "\n")), 0o600); err != nil {
+	if err := os.WriteFile(manifestPath, []byte(strings.Join(kept, "\n")), 0o600); err != nil { //nolint:gosec // test-controlled temp path
 		t.Fatalf("rewrite manifest: %v", err)
 	}
 
