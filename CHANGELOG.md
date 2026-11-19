@@ -4,6 +4,132 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.16.21] - 2026-11-19
+
+### Bug Fixes
+
+- **registry:** Contain LookupPath results to the cache root
+- **registry:** Reject symlinked registries and directories
+- **registry:** Reject symlinked registry entries consistently
+
+### Testing
+
+- **registry:** Document absolute-path contract rows
+- **registry:** Split symlink and directory contract coverage
+- **registry:** Make directory resolver test discriminating
+
+## [0.16.20] - 2026-11-19
+
+### Bug Fixes
+
+- **ui:** Synchronize the spinner lifecycle under the mutex
+- **ui:** Join a superseded spinner before starting
+- **ui:** Serialize spinner lifecycle transitions
+
+### Refactor
+
+- **ui:** Cancel the spinner before joining it
+- **ui:** Share the spinner lifecycle stop helper
+
+### Testing
+
+- **ui:** Prove the join with an in-flight renderer
+- **ui:** Require zero leaked spinner renderers exactly
+- **ui:** Verify supersede waits for an in-flight renderer
+
+## [0.16.19] - 2026-11-19
+
+### Bug Fixes
+
+- **util:** Reject reserved segments in SanitizeModuleName
+- **lang:** Resolve all dot-spelled module targets
+
+### Documentation
+
+- **core:** Correct the project name source comment
+
+### Refactor
+
+- **lang:** Resolve dot module targets through util
+
+## [0.16.18] - 2026-11-19
+
+### Bug Fixes
+
+- **update:** Remove duplicate manifest load and miscount
+
+### Testing
+
+- **core:** Count update manifest loads through a loader seam
+- **drift:** Pin the shared repair progress contract
+
+## [0.16.17] - 2026-11-19
+
+### Bug Fixes
+
+- **manifest:** Reject invalid UTF-8 fields before saving
+- **manifest:** Reject invalid UTF-8 at the save boundary
+
+### Refactor
+
+- **core:** Split manifest field validation helpers
+
+### Testing
+
+- **manifest:** Skip non-UTF-8 names on unrepresentable filesystems
+- **manifest:** Narrow the platform skip and cover fields
+- **manifest:** Probe filesystem capability before skipping
+
+## [0.16.16] - 2026-11-19
+
+### Bug Fixes
+
+- **cli:** Reject unknown conflict-strategy values early
+
+### Documentation
+
+- **cli:** List merge in conflict-strategy references
+
+### Testing
+
+- **cli:** Prove invalid strategies run no command
+
+## [0.16.15] - 2026-11-19
+
+### Bug Fixes
+
+- **core:** Classify the project root for accept and unmanage
+
+### Testing
+
+- **core:** Annotate root-path regressions for lint
+
+## [0.16.14] - 2026-11-19
+
+### Bug Fixes
+
+- **update:** Stop promising --force re-manages paths
+
+### Documentation
+
+- Correct list, set, Spring, and release examples
+- **install:** Stop advertising the curl-to-bash pipe
+- **release:** Verify the installer checksum in notes
+- **release:** Stop execution after a checksum failure
+- **release:** Keep checksum gating inside a subshell
+- Document the residual-drift exit contract and accept
+
+### Testing
+
+- **docs:** Remove a stale unused gosec lint directive
+- **docs:** Pin installer header and drop dead check
+- **docs:** Correct CONTRIBUTING pattern and set example
+- **docs:** Validate installer snippets with the shell
+- **docs:** Silence fixed-path lint in snippet test
+- **docs:** Pin exit values and post-repair drift
+- **docs:** Pin every documented exit-contract table row
+- **docs:** Scope README contract checks to sections
+
 ## [0.16.13] - 2026-11-19
 
 ### Bug Fixes

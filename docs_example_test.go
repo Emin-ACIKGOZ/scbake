@@ -4,7 +4,9 @@
 package main
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -72,6 +74,112 @@ func TestArchitectureManifestExample(t *testing.T) {
 	}
 }
 
+// TestDocsGuidanceExamples pins the copy-paste contract for guidance that has
+// drifted from the binary and release flow: `list` requires a subcommand, the
+// Spring pack is Java, `--set` examples must use a built-in schema key, and the
+// release footer must not pipe the installer into a shell.
+func TestDocsGuidanceExamples(t *testing.T) {
+	for _, tc := range []struct {
+		file   string
+		absent []string
+	}{
+		{"docs/INSTALLING.md", []string{"\nscbake list\n"}},
+		{"install.sh", []string{"| bash"}},
+		{"docs/QUICK_START.md", []string{"Python (Spring"}},
+		{".goreleaser.yaml", []string{"install.sh | bash"}},
+		{"README.md", []string{"--set service_id=srv-abc"}},
+		{"CONTRIBUTING.md", []string{"| `./scbake list` |"}},
+	} {
+		doc, err := os.ReadFile(tc.file)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.file, err)
+		}
+		text := strings.ReplaceAll(string(doc), "\r\n", "\n")
+		for _, bad := range tc.absent {
+			if strings.Contains(text, bad) {
+				t.Errorf("%s contains stale guidance %q", tc.file, bad)
+			}
+		}
+	}
+
+	// Absence alone would also pass if the guidance were deleted; require the
+	// corrected forms to be present.
+	for _, tc := range []struct {
+		file string
+		want string
+	}{
+		{"docs/INSTALLING.md", "scbake list langs"},
+		{"docs/QUICK_START.md", "Java (Spring"},
+		{".goreleaser.yaml", `bash install.sh "{{ .Tag }}"`},
+		{".goreleaser.yaml", "sha256sum -c -"},
+		{".goreleaser.yaml", "( set -e"},
+		{"README.md", "--set module_path=github.com/acme/app"},
+		{"CONTRIBUTING.md", "./scbake list langs"},
+		{"install.sh", "${PAGER:-less} install.sh || true; bash install.sh"},
+	} {
+		doc, err := os.ReadFile(tc.file)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.file, err)
+		}
+		if !strings.Contains(string(doc), tc.want) {
+			t.Errorf("%s does not contain corrected guidance %q", tc.file, tc.want)
+		}
+	}
+}
+
+// TestReadmeResidualDriftContract pins the documented exit contract for the
+// commands that can complete with residual drift. The behavior is unchanged;
+// the README must state that exit 0 means "completed", that drift is the gate,
+// and that accept is how an intentional edit becomes the new baseline.
+func TestReadmeResidualDriftContract(t *testing.T) {
+	doc, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	text := strings.ReplaceAll(string(doc), "\r\n", "\n")
+	section := func(heading string) string {
+		t.Helper()
+		at := strings.Index(text, heading)
+		if at < 0 {
+			t.Fatalf("README.md has no %q section", heading)
+		}
+		rest := text[at+len(heading):]
+		if next := strings.Index(rest, "\n### "); next >= 0 {
+			rest = rest[:next]
+		}
+		return rest
+	}
+
+	updateSection := section("### `update`")
+	for _, want := range []string{
+		"`update` exits 0 when it completes",
+		"| No changes needed, or the tree is clean after the update | 0 |",
+		"| Completed with residual drift (for example, merge preserved local edits) | 0 |",
+		"| Load, plan, write, or commit failure | non-zero |",
+		"Run `scbake drift` as the gate",
+		"[`scbake accept`](#accept-rebaseline-a-managed-file)",
+	} {
+		if !strings.Contains(updateSection, want) {
+			t.Errorf("README update section does not document %q", want)
+		}
+	}
+
+	driftSection := section("### `drift`")
+	for _, want := range []string{
+		"| `modified`, `missing`, `base-invalid` | exit 1 | exit 1 |",
+		"| `base-missing` only | exit 0 (advisory) | exit 1 |",
+		"`--repair` follows the same completion contract as `update`",
+		"| Completed, including residual drift that it reports | 0 |",
+		"| Repair failed (load, render, write, or re-check) | non-zero |",
+		"Repair finished; N managed file(s) still drifted",
+		"[`accept`](#accept-rebaseline-a-managed-file)",
+	} {
+		if !strings.Contains(driftSection, want) {
+			t.Errorf("README drift section does not document %q", want)
+		}
+	}
+}
+
 // exampleRenderData mirrors the additive render-data wrapper supplied by
 // pkg/tasks: embedding *types.Manifest keeps every legacy field available,
 // while Project names the manifest project that owns the template's target.
@@ -131,5 +239,44 @@ func TestRustHandlerExampleTemplates(t *testing.T) {
 				t.Errorf("rendered %s does not contain %q:\n%s", path, tc.want, got)
 			}
 		})
+	}
+}
+
+// TestInstallSnippetsParse validates the quick-install fenced blocks with the
+// shell parser. String assertions cannot catch an unbalanced subshell.
+func TestInstallSnippetsParse(t *testing.T) {
+	for _, file := range []string{"README.md", "docs/INSTALLING.md"} {
+		raw, err := os.ReadFile(file) //nolint:gosec // fixed repository documentation path in a test
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+		var block string
+		for {
+			start := strings.Index(text, "```bash\n")
+			if start < 0 {
+				break
+			}
+			text = text[start+len("```bash\n"):]
+			end := strings.Index(text, "\n```")
+			if end < 0 {
+				break
+			}
+			candidate := text[:end]
+			text = text[end:]
+			if strings.Contains(candidate, "bash install.sh") {
+				block = candidate
+				break
+			}
+		}
+		if block == "" {
+			t.Fatalf("%s: no quick-install bash block found", file)
+		}
+		block = strings.ReplaceAll(block, "TAG=<tag>", "TAG=v0.0.0")
+		cmd := exec.CommandContext(context.Background(), "bash", "-n")
+		cmd.Stdin = strings.NewReader(block)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s install snippet has invalid shell syntax: %v\n%s", file, err, out)
+		}
 	}
 }
