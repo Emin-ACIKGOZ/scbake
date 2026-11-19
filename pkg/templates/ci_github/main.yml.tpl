@@ -25,7 +25,11 @@ jobs:
       - name: Setup Go Environment
         uses: actions/setup-go@v5
         with:
-          go-version: {{ index $root.Metadata "go_version" | default "1.22" | quote }}
+          {{ if index $root.Metadata "go_version" -}}
+          go-version: {{ index $root.Metadata "go_version" | quote }}
+          {{- else -}}
+          go-version-file: {{ if eq .Path "." }}"go.mod"{{ else }}{{ printf "%s/go.mod" .Path | quote }}{{ end }}
+          {{- end }}
             {{ $hasGo = true }}
           {{ end }}
         {{ end }}
@@ -81,9 +85,9 @@ jobs:
             {{ end }}
             
             {{ if eq .Language "spring" }}
-            # Build Spring Project using Maven Wrapper
+            # Build and Test Spring Project using Maven Wrapper
             cd {{ .Path }}
-            ./mvnw clean package -DskipTests
+            ./mvnw clean verify
             cd -
             {{ end }}
           {{ end }}

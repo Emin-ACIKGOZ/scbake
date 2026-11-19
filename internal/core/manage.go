@@ -13,6 +13,7 @@ import (
 	"scbake/internal/filesystem/transaction"
 	"scbake/internal/manifest"
 	"scbake/internal/types"
+	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
 )
@@ -112,7 +113,8 @@ func finishManage(applyErr error, actions []manageAction, accept bool) error {
 		return applyErr
 	}
 	if applyErr != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Transaction committed with warning: %v\n", applyErr)
+		fmt.Fprintf(os.Stderr, "⚠️  Transaction committed with warning: %s\n",
+			util.Sanitize(applyErr.Error()))
 	}
 	reportManageActions(actions, accept, false)
 	reportManageWarnings(actions)
@@ -175,10 +177,10 @@ func applyManage(root string, updated *types.Manifest, actions []manageAction) e
 	// rolls back the base removals, and a failure after it rolls back both.
 	manifestPath := filepath.Join(root, fileutil.ManifestFileName)
 	if err := tx.Track(manifestPath); err != nil {
-		return fmt.Errorf("failed to track manifest file: %w", err)
+		return fmt.Errorf("failed to track manifest file: %w", util.SanitizeError(err))
 	}
 	if err := manifest.Save(updated, root); err != nil {
-		return fmt.Errorf("manifest save failed: %w", err)
+		return fmt.Errorf("manifest save failed: %w", util.SanitizeError(err))
 	}
 	snapshotManifestContent(tx, manifestPath)
 
@@ -186,7 +188,7 @@ func applyManage(root string, updated *types.Manifest, actions []manageAction) e
 		if errors.Is(err, transaction.ErrCommitted) {
 			return err
 		}
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return fmt.Errorf("failed to commit transaction: %w", util.SanitizeError(err))
 	}
 	return nil
 }
@@ -198,15 +200,18 @@ func loadManageManifest(rc RunContext) (*types.Manifest, string, error) {
 		AllowAncestorSearch: rc.AllowAncestorSearch,
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
+		return nil, "", fmt.Errorf("failed to load %s: %w",
+			fileutil.ManifestFileName, util.SanitizeError(err))
 	}
 
 	manifestPath := filepath.Join(root, fileutil.ManifestFileName)
 	if _, err := os.Stat(manifestPath); err != nil {
 		if os.IsNotExist(err) {
-			return nil, "", fmt.Errorf("no %s found at %s", fileutil.ManifestFileName, root)
+			return nil, "", fmt.Errorf("no %s found at %s",
+				fileutil.ManifestFileName, util.Sanitize(root))
 		}
-		return nil, "", fmt.Errorf("failed to inspect %s: %w", manifestPath, err)
+		return nil, "", fmt.Errorf("failed to inspect %s: %w",
+			util.Sanitize(manifestPath), util.SanitizeError(err))
 	}
 	return m, root, nil
 }
@@ -227,16 +232,18 @@ func resolveManagedKey(root, target, arg string) (string, error) {
 
 	rel, err := filepath.Rel(root, abs)
 	if err != nil {
-		return "", fmt.Errorf("cannot make path %q relative to %q: %w", arg, root, err)
+		return "", fmt.Errorf("cannot make path %q relative to %q: %w",
+			arg, root, util.SanitizeError(err))
 	}
 	if rel == "." || rel == ".." || filepath.IsAbs(rel) ||
 		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q is outside the project root %s", arg, root)
+		return "", fmt.Errorf("path %q is outside the project root %s", arg, util.Sanitize(root))
 	}
 
 	key := filepath.ToSlash(filepath.Clean(rel))
 	if _, err := fileutil.SafePath(root, filepath.FromSlash(key)); err != nil {
-		return "", fmt.Errorf("path %q is outside the project root %s: %w", arg, root, err)
+		return "", fmt.Errorf("path %q is outside the project root %s: %w",
+			arg, util.Sanitize(root), util.SanitizeError(err))
 	}
 	return key, nil
 }
@@ -276,7 +283,7 @@ func planAccept(m *types.Manifest, root, key, arg string) (manageAction, error) 
 		if os.IsNotExist(err) {
 			return action, fmt.Errorf("cannot accept %q: file does not exist", arg)
 		}
-		return action, fmt.Errorf("cannot accept %q: %w", arg, err)
+		return action, fmt.Errorf("cannot accept %q: %w", arg, util.SanitizeError(err))
 	}
 	action.hash = tasks.HashContent(data)
 
@@ -290,8 +297,11 @@ func planAccept(m *types.Manifest, root, key, arg string) (manageAction, error) 
 // validateAcceptBase preflights the committed base against the pristine ledger
 // hash. An invalid base fails so accept cannot claim success while drift stays
 // red; a missing base only warns because missing bases are advisory by default.
+// A redirected base tree (symlink or non-directory component) is a hard error,
+// so accept never reads pristine bytes through a link or records a baseline from
+// them.
 func validateAcceptBase(root, key, recorded string, action *manageAction) error {
-	switch base, baseErr := fileutil.SafeReadFile(root, tasks.BaseShadowRelPath(key)); {
+	switch base, baseErr := tasks.ReadBaseShadow(root, key); {
 	case baseErr == nil:
 		if !tasks.BaseMatchesRecordedHash(base, recorded) {
 			return fmt.Errorf("committed base for %q is invalid; restore it before accepting", key)
@@ -299,7 +309,8 @@ func validateAcceptBase(root, key, recorded string, action *manageAction) error 
 	case errors.Is(baseErr, os.ErrNotExist):
 		action.warnMissingBase = true
 	default:
-		return fmt.Errorf("cannot read committed base for %q: %w", key, baseErr)
+		return fmt.Errorf("cannot read committed base for %q: %w",
+			key, util.SanitizeError(baseErr))
 	}
 	return nil
 }
@@ -330,7 +341,9 @@ func recordAcceptState(m *types.Manifest, key, recorded string, action *manageAc
 
 // planUnmanage validates one unmanage argument and records the detach on m. The
 // working file is not read, so a missing or symlinked leaf is allowed as long as
-// the key is lexically contained and any committed base is a regular file.
+// the key is lexically contained and the committed base tree is real and any
+// base file is a regular file. A symlinked base tree fails closed before any
+// state change.
 func planUnmanage(m *types.Manifest, root, key, arg string) (manageAction, error) {
 	action := manageAction{key: key}
 	action.baseRel = filepath.ToSlash(tasks.BaseShadowRelPath(key))
@@ -361,13 +374,19 @@ func planUnmanage(m *types.Manifest, root, key, arg string) (manageAction, error
 }
 
 // inspectUnmanageBase resolves and inspects the committed base for key. It
-// returns the absolute base path and whether it is safe to remove. A non-regular
-// base fails closed because removing it could delete a directory or follow a
-// symlink outside the root.
+// returns the absolute base path and whether it is safe to remove. The committed
+// base tree is validated first: a redirected (symlinked or non-directory) base
+// fails closed before anything is inspected or removed, while a missing base is
+// simply "nothing to remove". A non-regular base also fails closed because
+// removing it could delete a directory or follow a symlink outside the root.
 func inspectUnmanageBase(root, key, baseRel string) (string, bool, error) {
+	if err := tasks.ValidateBaseShadow(root, key); err != nil {
+		return "", false, fmt.Errorf("cannot unmanage %q: %w", key, err)
+	}
 	baseAbs, err := fileutil.SafePath(root, filepath.FromSlash(baseRel))
 	if err != nil {
-		return "", false, fmt.Errorf("invalid base shadow path for %q: %w", key, err)
+		return "", false, fmt.Errorf("invalid base shadow path for %q: %w",
+			key, util.SanitizeError(err))
 	}
 	info, statErr := os.Lstat(baseAbs)
 	if statErr == nil {
@@ -377,7 +396,8 @@ func inspectUnmanageBase(root, key, baseRel string) (string, bool, error) {
 		return baseAbs, true, nil
 	}
 	if !os.IsNotExist(statErr) {
-		return "", false, fmt.Errorf("failed to inspect committed base for %q: %w", key, statErr)
+		return "", false, fmt.Errorf("failed to inspect committed base for %q: %w",
+			key, util.SanitizeError(statErr))
 	}
 	return baseAbs, false, nil
 }
@@ -403,10 +423,12 @@ func removeUnmanagedBases(tx *transaction.Manager, actions []manageAction) error
 		}
 		removed[action.baseAbs] = struct{}{}
 		if err := tx.Track(action.baseAbs); err != nil {
-			return fmt.Errorf("failed to track base shadow %s: %w", action.baseAbs, err)
+			return fmt.Errorf("failed to track base shadow %s: %w",
+				util.Sanitize(action.baseAbs), util.SanitizeError(err))
 		}
 		if err := os.Remove(action.baseAbs); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("failed to remove base shadow %s: %w", action.baseAbs, err)
+			return fmt.Errorf("failed to remove base shadow %s: %w",
+				util.Sanitize(action.baseAbs), util.SanitizeError(err))
 		}
 	}
 	return nil
@@ -427,36 +449,39 @@ func reportManageActions(actions []manageAction, accept, dryRun bool) {
 // describeAcceptAction phrases one accept result. Dry runs phrase the action as
 // a plan, never as a completed mutation.
 func describeAcceptAction(action manageAction, dryRun bool) string {
+	key := util.Sanitize(action.key)
 	switch {
 	case action.alreadyCurrent:
-		return fmt.Sprintf("ℹ️  %s already matches its current baseline", action.key)
+		return fmt.Sprintf("ℹ️  %s already matches its current baseline", key)
 	case dryRun && action.cleared:
-		return fmt.Sprintf("Would clear accepted baseline for %s (file matches its recorded hash)", action.key)
+		return fmt.Sprintf("Would clear accepted baseline for %s (file matches its recorded hash)", key)
 	case dryRun:
-		return fmt.Sprintf("Would accept %s (sha256 %s)", action.key, shortContentHash(action.hash))
+		return fmt.Sprintf("Would accept %s (sha256 %s)", key, shortContentHash(action.hash))
 	case action.cleared:
-		return fmt.Sprintf("✅ Cleared accepted baseline for %s (file matches its recorded hash)", action.key)
+		return fmt.Sprintf("✅ Cleared accepted baseline for %s (file matches its recorded hash)", key)
 	default:
-		return fmt.Sprintf("✅ Accepted %s (sha256 %s)", action.key, shortContentHash(action.hash))
+		return fmt.Sprintf("✅ Accepted %s (sha256 %s)", key, shortContentHash(action.hash))
 	}
 }
 
 // describeUnmanageAction phrases one unmanage result, using plan wording for a
 // dry run.
 func describeUnmanageAction(action manageAction, dryRun bool) string {
+	key := util.Sanitize(action.key)
+	baseRel := util.Sanitize(action.baseRel)
 	switch {
 	case action.alreadyUnmanaged:
-		return fmt.Sprintf("ℹ️  %s is already unmanaged", action.key)
+		return fmt.Sprintf("ℹ️  %s is already unmanaged", key)
 	case dryRun && action.removeBase:
 		return fmt.Sprintf("Would unmanage %s (remove committed base %s; working file kept)",
-			action.key, action.baseRel)
+			key, baseRel)
 	case dryRun:
-		return fmt.Sprintf("Would unmanage %s (working file kept)", action.key)
+		return fmt.Sprintf("Would unmanage %s (working file kept)", key)
 	case action.removeBase:
 		return fmt.Sprintf("✅ Unmanaged %s (removed committed base %s; working file kept)",
-			action.key, action.baseRel)
+			key, baseRel)
 	default:
-		return fmt.Sprintf("✅ Unmanaged %s (working file kept)", action.key)
+		return fmt.Sprintf("✅ Unmanaged %s (working file kept)", key)
 	}
 }
 
@@ -466,16 +491,18 @@ func reportManageWarnings(actions []manageAction) {
 		if action.warnMissingBase {
 			fmt.Fprintf(os.Stderr,
 				"⚠️  No committed base for %s; accepting without base validation (use 'scbake drift --require-base' to make a missing base an error).\n",
-				action.key)
+				util.Sanitize(action.key))
 		}
 	}
 }
 
-// shortContentHash abbreviates a SHA-256 for human-readable output.
+// shortContentHash abbreviates a SHA-256 for human-readable output. The value
+// is sanitized before display because it is retained from untrusted manifest
+// content.
 func shortContentHash(hash string) string {
 	const n = 12
 	if len(hash) > n {
-		return hash[:n]
+		hash = hash[:n]
 	}
-	return hash
+	return util.Sanitize(hash)
 }

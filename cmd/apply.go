@@ -85,6 +85,10 @@ var applyCmd = &cobra.Command{
 		if err := core.RunApply(rc, reporter); err != nil {
 			return err
 		}
+		if dryRun {
+			fmt.Println("✅ Dry run complete; no changes written.")
+			return nil
+		}
 		fmt.Println("✅ Success! 'apply' command finished.")
 		return nil
 	},
