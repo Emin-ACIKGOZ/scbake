@@ -24,65 +24,56 @@ func TestSpinnerReporterSequentialTaskLifecycle(_ *testing.T) {
 	}
 }
 
-// TestSpinnerReporterSupersedeJoinsPrevious covers a start without a prior
-// end: the superseded renderer must be joined before TaskEnd returns.
-func TestSpinnerReporterSupersedeJoinsPrevious(t *testing.T) { //nolint:cyclop // pipe reader/join assertions
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe failed: %v", err)
-	}
-	oldStdout := os.Stdout
-	os.Stdout = writer
-	t.Cleanup(func() {
-		os.Stdout = oldStdout
-		_ = writer.Close()
-		_ = reader.Close()
-	})
-
-	chunks := make(chan []byte, 16)
-	go func() {
-		defer close(chunks)
-		chunk := make([]byte, 256)
-		for {
-			n, readErr := reader.Read(chunk)
-			if n > 0 {
-				out := make([]byte, n)
-				copy(out, chunk[:n])
-				chunks <- out
-			}
-			if readErr != nil {
-				return
-			}
+// TestSpinnerReporterSupersedeWaitsForInFlightRenderer makes the supersede join
+// observable: block the first renderer at a tick and require the second
+// TaskStart not to return before the first renderer is released. Removing the
+// join returns immediately and fails this test.
+func TestSpinnerReporterSupersedeWaitsForInFlightRenderer(t *testing.T) { //nolint:cyclop // deterministic supersede join
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	spinnerTickHook = func() {
+		select {
+		case <-entered:
+		default:
+			close(entered)
 		}
-	}()
+		<-release
+	}
+	t.Cleanup(func() {
+		spinnerTickHook = nil
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 
 	r := NewSpinnerReporter(2)
 	r.TaskStart("first", 1, 2)
-	r.TaskStart("second", 2, 2)
-	r.TaskEnd(nil)
-
-	const finalLine = "[2/2] ✅ second\n"
-	var got strings.Builder
-	deadline := time.After(2 * time.Second)
-	for !strings.HasSuffix(got.String(), finalLine) {
-		select {
-		case chunk, ok := <-chunks:
-			if !ok {
-				t.Fatalf("stdout closed before the final indicator; output = %q", got.String())
-			}
-			got.Write(chunk)
-		case <-deadline:
-			t.Fatalf("timed out waiting for the final indicator; output = %q", got.String())
-		}
-	}
 	select {
-	case chunk, ok := <-chunks:
-		if ok {
-			got.Write(chunk)
-		}
-		t.Fatalf("a superseded spinner wrote after TaskEnd returned; output = %q", got.String())
-	case <-time.After(2 * spinnerDelay):
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first renderer never reached a tick")
 	}
+
+	started := make(chan struct{})
+	go func() {
+		r.TaskStart("second", 2, 2)
+		close(started)
+	}()
+
+	select {
+	case <-started:
+		t.Fatal("superseding TaskStart returned while the old renderer was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("superseding TaskStart did not return after the renderer was released")
+	}
+	r.TaskEnd(nil)
 }
 
 // TestSpinnerReporterConcurrentLifecyclesDoNotOrphan covers concurrent callers:

@@ -22,7 +22,8 @@ const (
 )
 
 // spinnerTickHook is a test seam invoked when a ticker frame is selected,
-// before it takes the output mutex. It is nil in production.
+// before it takes the output mutex. It is nil in production. Tests that set it
+// must remain serial (no t.Parallel) and restore it in t.Cleanup.
 var spinnerTickHook func()
 
 // SpinnerReporter provides an interactive terminal UI with an animated spinner.
