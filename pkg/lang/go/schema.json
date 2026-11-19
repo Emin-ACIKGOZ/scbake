@@ -9,8 +9,7 @@
     "go_version": {
       "type": "string",
       "required": false,
-      "default": "1.22",
-      "description": "Go version for the module's go directive when set with --set. The recorded default is not applied.",
+      "description": "Go version for the module's go directive when set with --set. The value is written to go.mod by the Go pack; when absent, go.mod keeps the host toolchain version and CI reads it from go.mod.",
       "pattern": "^1\\.\\d+(\\.\\d+)?$"
     }
   }

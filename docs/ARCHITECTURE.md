@@ -319,7 +319,7 @@ Tasks execute in bands, ensuring correct ordering:
 ### 2. Manifest as Source of Truth
 
 `scbake.toml` is the **single source of truth** for project state. Running
-`scbake new demo --lang go --with editorconfig` writes:
+`scbake new demo --lang go --with editorconfig --set go_version=1.27.3` writes:
 
 ```toml
 scbake_version = "v0.3.0"
@@ -334,7 +334,7 @@ scbake_version = "v0.3.0"
   path = "."
 
 [metadata]
-  go_version = "1.22"
+  go_version = "1.27.3"
 
 [managed_files]
   ".editorconfig" = "9a59be2b2273da919904dc36048d240a38cfe1e4d528f6c5222fee868360b34d"

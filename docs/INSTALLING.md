@@ -54,6 +54,10 @@ bash install.sh latest --quiet
 bash install.sh vX.Y.Z ~/.local/bin --quiet
 ```
 
+The installer accepts at most a version and an install directory; any extra
+positional argument is rejected with an error. `--quiet` (or `-q`) may appear
+anywhere on the command line.
+
 The installer will:
 - ✅ Detect your OS and architecture (Linux, macOS, Windows × amd64, arm64)
 - ✅ Download the correct binary from GitHub Releases
