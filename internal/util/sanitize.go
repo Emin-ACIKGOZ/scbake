@@ -43,11 +43,33 @@ const (
 	bidiIsolateLast   = '\u2069'
 )
 
+// ResolveModuleNameTarget resolves a "." target against the invocation
+// directory, because a real `new` run plans from inside the project it just
+// created. Other spellings are returned unchanged.
+func ResolveModuleNameTarget(path string) (string, error) {
+	if path == "" || filepath.Clean(path) != "." {
+		return path, nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving target path: %w", err)
+	}
+	return abs, nil
+}
+
 // SanitizeModuleName creates a valid Go module name from a path.
 // It takes the base name, lowercases it, and replaces spaces with hyphens.
-// It returns an error if the resulting name starts with a dash, which
-// `go mod init` would parse as a flag.
+// It returns an error if the resulting name is empty, is a reserved path
+// segment (".", "..", or a separator such as "/"), or starts with a dash,
+// which `go mod init` would parse as a flag.
 func SanitizeModuleName(path string) (string, error) {
+	// An empty path has no base name of its own, and a path that cleans to "."
+	// names the current directory rather than a project, so neither can supply
+	// a module name.
+	if filepath.Clean(path) == "." {
+		return "", fmt.Errorf("invalid module name %q: not a directory name", path)
+	}
+
 	// Get the base name (e.g., "my cool app")
 	name := filepath.Base(path)
 	if name == "." || name == "/" {
@@ -63,6 +85,14 @@ func SanitizeModuleName(path string) (string, error) {
 	name = strings.ReplaceAll(name, " ", "-")
 
 	// Reject rather than normalize, so the name is not silently altered.
+	// A reserved segment would make Go reject or reinterpret the module path.
+	switch name {
+	case "", ".", "..":
+		return "", fmt.Errorf("invalid module name %q: reserved path segment", name)
+	}
+	if strings.ContainsRune(name, filepath.Separator) {
+		return "", fmt.Errorf("invalid module name %q: contains a path separator", name)
+	}
 	if strings.HasPrefix(name, "-") {
 		return "", fmt.Errorf("invalid module name %q: leading dash", name)
 	}

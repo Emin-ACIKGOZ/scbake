@@ -172,7 +172,11 @@ func appendTidyTask(plan []types.Task, seq *types.PrioritySequence, desc string,
 func moduleNameFor(targetPath string, vars map[string]string) (string, error) {
 	explicit := vars["module_path"]
 	if explicit == "" {
-		return util.SanitizeModuleName(targetPath)
+		target, err := util.ResolveModuleNameTarget(targetPath)
+		if err != nil {
+			return "", err
+		}
+		return util.SanitizeModuleName(target)
 	}
 
 	if strings.HasPrefix(explicit, "-") {

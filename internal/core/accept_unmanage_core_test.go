@@ -75,7 +75,7 @@ func TestFilterUnmanagedTasks(t *testing.T) {
 
 	m := &types.Manifest{UnmanagedFiles: []string{"main.go", "services/api/LICENSE"}}
 
-	rootPlan := filterUnmanagedTasks(plan, m, ".")
+	rootPlan := filterUnmanagedTasks(plan, m, ".", false)
 	if len(rootPlan) != 2 {
 		t.Fatalf("root filter kept %d tasks, want 2: %T", len(rootPlan), rootPlan)
 	}
@@ -83,7 +83,7 @@ func TestFilterUnmanagedTasks(t *testing.T) {
 		t.Errorf("root filter kept the wrong tasks: %T, %T", rootPlan[0], rootPlan[1])
 	}
 
-	subPlan := filterUnmanagedTasks(plan, m, "services/api")
+	subPlan := filterUnmanagedTasks(plan, m, "services/api", false)
 	if len(subPlan) != 2 {
 		t.Fatalf("subproject filter kept %d tasks, want 2: %T", len(subPlan), subPlan)
 	}
@@ -92,16 +92,39 @@ func TestFilterUnmanagedTasks(t *testing.T) {
 	}
 
 	// A differently-scoped key is a different path: no cross-project filtering.
-	other := filterUnmanagedTasks([]types.Task{create}, m, "services/other")
+	other := filterUnmanagedTasks([]types.Task{create}, m, "services/other", false)
 	if len(other) != 1 {
 		t.Errorf("filtered a same-basename task in another project")
 	}
 
-	if got := filterUnmanagedTasks(plan, nil, "."); len(got) != len(plan) {
+	if got := filterUnmanagedTasks(plan, nil, ".", false); len(got) != len(plan) {
 		t.Errorf("nil manifest filtered tasks")
 	}
-	if got := filterUnmanagedTasks(plan, &types.Manifest{}, "."); len(got) != len(plan) {
+	if got := filterUnmanagedTasks(plan, &types.Manifest{}, ".", false); len(got) != len(plan) {
 		t.Errorf("empty unmanaged list filtered tasks")
+	}
+}
+
+// TestUnmanagedSkipMessageNamesCommandSpecificRoute pins the wording: update
+// cannot re-manage a detached path, so it must not tell the user to pass a flag
+// it already has; it names the documented apply --force route instead.
+func TestUnmanagedSkipMessageNamesCommandSpecificRoute(t *testing.T) {
+	updateMsg := unmanagedSkipMessage("main.go", true)
+	if strings.Contains(updateMsg, "use --force to manage it again") {
+		t.Errorf("update message repeats the already-supplied flag: %q", updateMsg)
+	}
+	for _, want := range []string{"Skipping unmanaged main.go", "remains unmanaged", "apply --force"} {
+		if !strings.Contains(updateMsg, want) {
+			t.Errorf("update message missing %q: %q", want, updateMsg)
+		}
+	}
+
+	applyMsg := unmanagedSkipMessage("main.go", false)
+	if !strings.Contains(applyMsg, "use --force to manage it again") {
+		t.Errorf("apply message lost its --force hint: %q", applyMsg)
+	}
+	if strings.Contains(applyMsg, "remains unmanaged") {
+		t.Errorf("apply message uses update wording: %q", applyMsg)
 	}
 }
 
@@ -803,6 +826,125 @@ func TestRunUnmanageRootGitignoreRefused(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, tasks.BaseShadowRelPath(".gitignore"))); err != nil {
 		t.Errorf("refused unmanage removed the root .gitignore base: %v", err)
+	}
+}
+
+// TestResolveManagedKeyRootClassification is the #269 regression: the project
+// root (spelled ".", absolutely, or with a trailing separator) is classified as
+// the root rather than an escape, while outside paths and ordinary directories
+// keep their existing meaning.
+func TestResolveManagedKeyRootClassification(t *testing.T) { //nolint:cyclop // table-driven path classification
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o750); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		arg         string
+		wantKey     string
+		wantRoot    bool
+		wantOutside bool
+	}{
+		{name: "dot", arg: ".", wantRoot: true},
+		{name: "dot slash", arg: "." + string(filepath.Separator), wantRoot: true},
+		{name: "absolute root", arg: root, wantRoot: true},
+		{name: "parent", arg: "..", wantOutside: true},
+		{name: "outside absolute directory", arg: outside, wantOutside: true},
+		{name: "inside directory is not root", arg: "nested", wantKey: "nested"},
+		{name: "managed file", arg: "a.txt", wantKey: "a.txt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, err := resolveManagedKey(root, root, tt.arg)
+			if tt.wantRoot {
+				if err == nil {
+					t.Fatalf("resolveManagedKey(%q) = %q, want a root-path error", tt.arg, key)
+				}
+				if !strings.Contains(err.Error(), "managed file path is required") {
+					t.Errorf("root error does not name the required input: %v", err)
+				}
+				if strings.Contains(err.Error(), "outside the project root") {
+					t.Errorf("root classified as outside: %v", err)
+				}
+				return
+			}
+			if tt.wantOutside {
+				if err == nil || !strings.Contains(err.Error(), "outside the project root") {
+					t.Fatalf("resolveManagedKey(%q) error = %v, want outside-root refusal", tt.arg, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveManagedKey(%q) error = %v", tt.arg, err)
+			}
+			if key != tt.wantKey {
+				t.Errorf("resolveManagedKey(%q) = %q, want %q", tt.arg, key, tt.wantKey)
+			}
+		})
+	}
+}
+
+// TestRunAcceptUnmanageRootPathInvariant pins the command-level #269 behavior:
+// both commands reject the project root with the root classification, leave the
+// manifest untouched, still reject an ordinary unmanaged directory, and accept
+// a valid managed file.
+func TestRunAcceptUnmanageRootPathInvariant(t *testing.T) { //nolint:cyclop // multi-step command invariant
+	for _, accept := range []bool{true, false} {
+		name := "unmanage"
+		if accept {
+			name = "accept"
+		}
+		run := func(rc RunContext, paths []string) error {
+			if accept {
+				return RunAccept(rc, paths)
+			}
+			return RunUnmanage(rc, paths)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeManageFixture(t, root, map[string]string{"a.txt": "pristine\n"})
+			if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("edited\n"), 0o600); err != nil {
+				t.Fatalf("write edited a.txt: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Join(root, "nested"), 0o750); err != nil {
+				t.Fatalf("mkdir nested: %v", err)
+			}
+			rc := manageRunContext(root)
+			manifestPath := filepath.Join(root, fileutil.ManifestFileName)
+			before := mustManageRead(t, manifestPath)
+
+			for _, arg := range []string{".", root} {
+				err := run(rc, []string{arg})
+				if err == nil {
+					t.Fatalf("%s %q succeeded, want a root-path refusal", name, arg)
+				}
+				if !strings.Contains(err.Error(), "managed file path is required") {
+					t.Errorf("%s %q error does not name the required input: %v", name, arg, err)
+				}
+				if strings.Contains(err.Error(), "outside the project root") {
+					t.Errorf("%s %q classified the root as outside: %v", name, arg, err)
+				}
+			}
+			if got := mustManageRead(t, manifestPath); got != before {
+				t.Errorf("%s root-path refusal rewrote the manifest", name)
+			}
+
+			err := run(rc, []string{"nested"})
+			if err == nil {
+				t.Fatalf("%s of an ordinary directory succeeded", name)
+			}
+			if strings.Contains(err.Error(), "managed file path is required") {
+				t.Errorf("%s classified a nested directory as the project root: %v", name, err)
+			}
+
+			if err := run(rc, []string{"a.txt"}); err != nil {
+				t.Fatalf("%s of a valid managed file failed: %v", name, err)
+			}
+		})
 	}
 }
 

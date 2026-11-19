@@ -1,0 +1,245 @@
+// Copyright 2025 Emin Salih Açıkgöz
+// SPDX-License-Identifier: Apache-2.0
+
+package ui
+
+import (
+	"errors"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// TestSpinnerReporterSequentialTaskLifecycle is a regression test for #255: a
+// sequential TaskStart/TaskEnd loop must not race the lifecycle fields against
+// the animation goroutine. Run this test with -race to exercise the detector.
+func TestSpinnerReporterSequentialTaskLifecycle(_ *testing.T) {
+	r := NewSpinnerReporter(50)
+	for i := 0; i < 50; i++ {
+		r.TaskStart("step", i+1, 50)
+		r.TaskEnd(nil)
+	}
+}
+
+// TestSpinnerReporterSupersedeWaitsForInFlightRenderer makes the supersede join
+// observable: block the first renderer at a tick and require the second
+// TaskStart not to return before the first renderer is released. Removing the
+// join returns immediately and fails this test.
+func TestSpinnerReporterSupersedeWaitsForInFlightRenderer(t *testing.T) { //nolint:cyclop // deterministic supersede join
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	spinnerTickHook = func() {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+	}
+	t.Cleanup(func() {
+		spinnerTickHook = nil
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	r := NewSpinnerReporter(2)
+	r.TaskStart("first", 1, 2)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first renderer never reached a tick")
+	}
+
+	started := make(chan struct{})
+	go func() {
+		r.TaskStart("second", 2, 2)
+		close(started)
+	}()
+
+	select {
+	case <-started:
+		t.Fatal("superseding TaskStart returned while the old renderer was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("superseding TaskStart did not return after the renderer was released")
+	}
+	r.TaskEnd(nil)
+}
+
+// TestSpinnerReporterConcurrentLifecyclesDoNotOrphan covers concurrent callers:
+// every renderer must be joined or canceled, with no goroutine left behind.
+func TestSpinnerReporterConcurrentLifecyclesDoNotOrphan(t *testing.T) {
+	baseline := runtime.NumGoroutine()
+	r := NewSpinnerReporter(40)
+	var wg sync.WaitGroup
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			r.TaskStart("step", i+1, 40)
+			r.TaskEnd(nil)
+		}(i)
+	}
+	wg.Wait()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > baseline {
+		t.Fatalf("renderers were orphaned: %d goroutines, baseline %d", got, baseline)
+	}
+}
+
+// TestSpinnerReporterTaskEndJoinsInFlightRenderer makes the join observable:
+// block the renderer at the start of a tick and require TaskEnd to wait for it.
+// Removing the join returns immediately and fails this test.
+func TestSpinnerReporterTaskEndJoinsInFlightRenderer(t *testing.T) { //nolint:cyclop // deterministic join seam
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	spinnerTickHook = func() {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+	}
+	t.Cleanup(func() {
+		spinnerTickHook = nil
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	r := NewSpinnerReporter(1)
+	r.TaskStart("step", 1, 1)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("renderer never reached a tick")
+	}
+
+	ended := make(chan struct{})
+	go func() {
+		r.TaskEnd(nil)
+		close(ended)
+	}()
+
+	select {
+	case <-ended:
+		t.Fatal("TaskEnd returned while the renderer was still in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("TaskEnd did not return after the renderer was released")
+	}
+}
+
+// TestSpinnerReporterTaskEndIsIdempotent is a regression test for #255: ending a
+// task twice must be a no-op instead of panicking on a closed channel.
+func TestSpinnerReporterTaskEndIsIdempotent(_ *testing.T) {
+	r := NewSpinnerReporter(1)
+
+	r.TaskStart("step", 1, 1)
+	r.TaskEnd(nil)
+
+	// A duplicated completion, including one carrying an error, is a no-op.
+	r.TaskEnd(errors.New("duplicate completion"))
+
+	// The reporter must remain usable afterwards.
+	r.TaskStart("next", 1, 1)
+	r.TaskEnd(errors.New("boom"))
+	r.TaskEnd(nil)
+}
+
+// TestSpinnerReporterTaskEndBeforeTaskStart documents that ending a task that
+// never started is a no-op rather than a nil-channel panic.
+func TestSpinnerReporterTaskEndBeforeTaskStart(_ *testing.T) {
+	r := NewSpinnerReporter(1)
+	r.TaskEnd(nil)
+}
+
+// TestSpinnerReporterTaskEndJoinsSpinner is a regression test for #255: once
+// TaskEnd returns, the animation goroutine must have exited and no spinner
+// output may arrive afterwards.
+func TestSpinnerReporterTaskEndJoinsSpinner(t *testing.T) { //nolint:cyclop // pipe reader/join assertions
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe failed: %v", err)
+	}
+
+	oldStdout := os.Stdout
+	os.Stdout = writer
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+		_ = writer.Close()
+		_ = reader.Close()
+	})
+
+	chunks := make(chan []byte, 16)
+	go func() {
+		defer close(chunks)
+		chunk := make([]byte, 256)
+		for {
+			n, readErr := reader.Read(chunk)
+			if n > 0 {
+				out := make([]byte, n)
+				copy(out, chunk[:n])
+				chunks <- out
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+
+	r := NewSpinnerReporter(1)
+	r.TaskStart("step", 1, 1)
+	r.TaskEnd(nil)
+
+	const finalLine = "[1/1] ✅ step\n"
+	var got strings.Builder
+	// Wait until the final indicator has reached the pipe. A spinner tick that
+	// happened before TaskEnd may legitimately precede it.
+	deadline := time.After(2 * time.Second)
+	for !strings.HasSuffix(got.String(), finalLine) {
+		select {
+		case chunk, ok := <-chunks:
+			if !ok {
+				t.Fatalf("stdout closed before the final indicator; output = %q", got.String())
+			}
+			got.Write(chunk)
+		case <-deadline:
+			t.Fatalf("timed out waiting for the final indicator; output = %q", got.String())
+		}
+	}
+
+	// TaskEnd joined the animation goroutine, so a short quiet window must
+	// observe no further output. The window only checks for the absence of a
+	// write; it does not wait for one to happen.
+	select {
+	case chunk, ok := <-chunks:
+		if ok {
+			got.Write(chunk)
+		}
+		t.Fatalf("spinner wrote after TaskEnd returned; output = %q", got.String())
+	case <-time.After(2 * spinnerDelay):
+	}
+}
