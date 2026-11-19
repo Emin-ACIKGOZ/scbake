@@ -18,6 +18,9 @@ import (
 // issue #275: a freshly generated Go project, including its committed
 // .scbake-base copies, must end every file with exactly one newline, contain no
 // trailing whitespace, and already be gofmt-clean.
+//
+// The Spring starter's own pom.xml is produced by the upstream generator, not by
+// a scbake template, so its whitespace is outside this contract.
 func TestGeneratedProjectIsWhitespaceClean(t *testing.T) { //nolint:cyclop // end-to-end tree scan with several assertions
 	tmpDir := t.TempDir()
 	originalWd, err := os.Getwd()
