@@ -20,6 +20,10 @@ import (
 //go:embed templates/*.tpl schema.json
 var templates embed.FS
 
+// ErrMissingMetadata is the user-facing error shared by the task and the core
+// preflight so both paths cannot drift.
+var ErrMissingMetadata = errors.New("explicit --license and --copyright-holder are required for the compliance template")
+
 // Handler implements templates.Handler.
 type Handler struct{}
 
@@ -120,7 +124,7 @@ func licenseRender(tc types.TaskContext) (text string, skip bool, err error) {
 	holders := tc.Manifest.Metadata["copyright_holder"]
 
 	if licenseID == "" || holders == "" {
-		return "", false, errors.New("explicit --license and --copyright-holder are required for the compliance template")
+		return "", false, ErrMissingMetadata
 	}
 
 	// During update/repair, a clean managed LICENSE is already reconciled. Skip

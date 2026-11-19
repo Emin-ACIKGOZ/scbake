@@ -1070,7 +1070,7 @@ func CheckCompliancePrerequisites(license, copyrightHolder string) error {
 	if license != "" && copyrightHolder != "" {
 		return nil
 	}
-	return errors.New("explicit --license and --copyright-holder are required for the compliance template")
+	return compliance.ErrMissingMetadata
 }
 
 // preflightCompliance enforces the compliance template's required metadata
