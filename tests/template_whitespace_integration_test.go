@@ -93,6 +93,9 @@ func assertGeneratedTextClean(t *testing.T, name string, data []byte) {
 	if bytes.HasSuffix(data, []byte("\n\n")) {
 		t.Errorf("%s: generated file ends with more than one newline", name)
 	}
+	if bytes.ContainsRune(data, '\r') {
+		t.Errorf("%s: generated file contains CR bytes; embedded templates must be LF", name)
+	}
 	for i, line := range strings.Split(string(data), "\n") {
 		if strings.HasSuffix(line, " ") || strings.HasSuffix(line, "\t") {
 			t.Errorf("%s:%d: trailing whitespace", name, i+1)
