@@ -77,7 +77,7 @@ func TestRootUpdateNamesMonorepoProjects(t *testing.T) {
 	if !ok || exitErr.ExitCode() == 0 {
 		t.Fatalf("root update should exit non-zero, got err=%v\n%s", err, out)
 	}
-	for _, want := range []string{"monorepo root", "scbake update <project>", "--allow-ancestor-search", "services/api", "apps/web"} {
+	for _, want := range []string{"monorepo root", "scbake update <project>", "from the manifest root", "--allow-ancestor-search", `"services/api"`, `"apps/web"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("root update error does not contain %q:\n%s", want, out)
 		}

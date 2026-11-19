@@ -22,6 +22,7 @@ import (
 	"scbake/pkg/templates"
 	"scbake/pkg/templates/compliance"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -239,12 +240,14 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 		if paths := projectPaths(m); relPath == "." && len(paths) > 0 {
 			safePaths := make([]string, 0, len(paths))
 			for _, p := range paths {
-				safePaths = append(safePaths, util.Sanitize(p))
+				// Quote each path so a hand-edited manifest path with spaces stays
+				// copy-pasteable as a single argument.
+				safePaths = append(safePaths, strconv.Quote(p))
 			}
 			return fmt.Errorf(
 				"%s records no templates for %q; this is a monorepo root. "+
-					"Run 'scbake update <project>' (add --allow-ancestor-search "+
-					"outside a Git work tree) for one of: %s",
+					"Run 'scbake update <project>' from the manifest root (add "+
+					"--allow-ancestor-search outside a Git work tree) for one of: %s",
 				fileutil.ManifestFileName, util.Sanitize(rc.ManifestPathArg), strings.Join(safePaths, ", "))
 		}
 		return fmt.Errorf("%s records no templates for %q; nothing to update", fileutil.ManifestFileName, rc.ManifestPathArg)
