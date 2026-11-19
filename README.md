@@ -104,6 +104,7 @@ asset (their `install.sh` URL 404s). Use the **latest** tag from
 <https://github.com/Emin-ACIKGOZ/scbake/releases/latest>:
 
 ```bash
+( set -e
 # Set TAG to a release that ships install.sh. Use the latest release tag
 # (see https://github.com/Emin-ACIKGOZ/scbake/releases/latest) — older tags
 # do not contain the installer asset.

@@ -4,7 +4,9 @@
 package main
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,7 +115,7 @@ func TestDocsGuidanceExamples(t *testing.T) {
 		{".goreleaser.yaml", "( set -e"},
 		{"README.md", "--set module_path=github.com/acme/app"},
 		{"CONTRIBUTING.md", "./scbake list langs"},
-		{"install.sh", "less install.sh && bash install.sh"},
+		{"install.sh", "${PAGER:-less} install.sh || true; bash install.sh"},
 	} {
 		doc, err := os.ReadFile(tc.file)
 		if err != nil {
@@ -184,5 +186,44 @@ func TestRustHandlerExampleTemplates(t *testing.T) {
 				t.Errorf("rendered %s does not contain %q:\n%s", path, tc.want, got)
 			}
 		})
+	}
+}
+
+// TestInstallSnippetsParse validates the quick-install fenced blocks with the
+// shell parser. String assertions cannot catch an unbalanced subshell.
+func TestInstallSnippetsParse(t *testing.T) {
+	for _, file := range []string{"README.md", "docs/INSTALLING.md"} {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+		var block string
+		for {
+			start := strings.Index(text, "```bash\n")
+			if start < 0 {
+				break
+			}
+			text = text[start+len("```bash\n"):]
+			end := strings.Index(text, "\n```")
+			if end < 0 {
+				break
+			}
+			candidate := text[:end]
+			text = text[end:]
+			if strings.Contains(candidate, "bash install.sh") {
+				block = candidate
+				break
+			}
+		}
+		if block == "" {
+			t.Fatalf("%s: no quick-install bash block found", file)
+		}
+		block = strings.ReplaceAll(block, "TAG=<tag>", "TAG=v0.0.0")
+		cmd := exec.CommandContext(context.Background(), "bash", "-n")
+		cmd.Stdin = strings.NewReader(block)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s install snippet has invalid shell syntax: %v\n%s", file, err, out)
+		}
 	}
 }
