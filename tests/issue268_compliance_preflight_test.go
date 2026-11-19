@@ -418,3 +418,24 @@ func TestIssue268NewUnknownTemplatePrecedesCompliance(t *testing.T) {
 		t.Errorf("rejected new left a directory behind (stat err: %v)", statErr)
 	}
 }
+
+// TestIssue268ApplyLoadErrorPrecedesSelection keeps the baseline precedence:
+// a corrupt manifest is reported before an unknown selection.
+func TestIssue268ApplyLoadErrorPrecedesSelection(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	if err := os.WriteFile(filepath.Join(work, "scbake.toml"), []byte("scbake_version = \"v0.3.0\"\n[[projects]\n"), 0o600); err != nil {
+		t.Fatalf("write corrupt manifest: %v", err)
+	}
+	out, err := runCLI("apply", "--lang", "bogus", "--with", "compliance")
+	if err == nil {
+		t.Fatalf("apply with a corrupt manifest succeeded:\n%s", out)
+	}
+	line := dryRunErrorLine(out)
+	if !strings.Contains(line, "load") && !strings.Contains(line, "decode") {
+		t.Errorf("manifest load error did not win:\n%s", out)
+	}
+	if strings.Contains(line, "unknown language") {
+		t.Errorf("selection validation masked the manifest error:\n%s", out)
+	}
+}

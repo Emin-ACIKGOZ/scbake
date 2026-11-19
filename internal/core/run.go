@@ -111,9 +111,6 @@ func RunApply(rc RunContext, reporter types.Reporter) error {
 	if err := preflightGit(rc); err != nil {
 		return err
 	}
-	if err := validateApplySelection(rc); err != nil {
-		return err
-	}
 	if err := preflightCompliance(rc); err != nil {
 		return err
 	}
@@ -1086,6 +1083,9 @@ func preflightCompliance(rc RunContext) error {
 
 	m, root, err := loadManifestForRun(rc)
 	if err != nil {
+		return err
+	}
+	if err := validateApplySelection(rc); err != nil {
 		return err
 	}
 	// A detached LICENSE will be filtered from the plan, so its metadata is not
