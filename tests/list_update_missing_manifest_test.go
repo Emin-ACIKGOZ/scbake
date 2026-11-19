@@ -16,6 +16,7 @@ import (
 func TestListProjectsRequiresManifest(t *testing.T) {
 	t.Run("absent manifest fails", func(t *testing.T) {
 		work := t.TempDir()
+		skipIfAncestorHasMarker(t, work)
 		t.Chdir(work)
 
 		out, err := runCLI("list", "projects")
