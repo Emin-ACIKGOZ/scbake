@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 )
 
@@ -128,7 +129,7 @@ func tryAcquireRootLock(paths rootLockPaths) (lock *RootLock, retry bool, err er
 // directory is not reported as a missing root.
 func classifyRootLockDirError(paths rootLockPaths, err error) (bool, error) {
 	if !errors.Is(err, fs.ErrNotExist) {
-		return false, fmt.Errorf("failed to create lock directory %s: %w", paths.stateDir, err)
+		return false, fmt.Errorf("failed to create lock directory %s: %w", util.Sanitize(paths.stateDir), err)
 	}
 	if paths.createRoot {
 		return true, nil
@@ -136,9 +137,9 @@ func classifyRootLockDirError(paths rootLockPaths, err error) (bool, error) {
 	if _, statErr := os.Stat(paths.root); statErr == nil {
 		return true, nil
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
-		return false, fmt.Errorf("failed to stat project root %s: %w", paths.root, statErr)
+		return false, fmt.Errorf("failed to stat project root %s: %w", util.Sanitize(paths.root), statErr)
 	}
-	return false, fmt.Errorf("project root %s does not exist: %w", paths.root, fs.ErrNotExist)
+	return false, fmt.Errorf("project root %s does not exist: %w", util.Sanitize(paths.root), fs.ErrNotExist)
 }
 
 // ensureRootLockDir creates .scbake. For existing-project commands it uses
