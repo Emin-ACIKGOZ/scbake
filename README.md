@@ -173,7 +173,7 @@ scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spd
 | `--license`          | SPDX License ID (required for `compliance`; embedded, works offline) | `--license MIT`             |
 | `--copyright-holder` | Copyright holder name (required for `compliance`) | `--copyright-holder "Acme Corp"` |
 | `--template-dir`     | Directory with custom template overrides         | `--template-dir ./my-tpls`  |
-| `--set`              | Set template variable (`key=value`, can be repeated) | `--set module_path=github.com/acme/app` |
+| `--set`              | Set template variable (`key=value`, can be repeated) | `--lang go --set module_path=github.com/acme/app` |
 | `--conflict-strategy`| How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` | `--conflict-strategy overwrite` |
 
 **Example:**

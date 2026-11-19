@@ -86,7 +86,7 @@ func TestDocsGuidanceExamples(t *testing.T) {
 		{"docs/QUICK_START.md", []string{"Python (Spring"}},
 		{".goreleaser.yaml", []string{"install.sh | bash"}},
 		{"README.md", []string{"--set service_id=srv-abc"}},
-		{"CONTRIBUTING.md", []string{"| ./scbake list |"}},
+		{"CONTRIBUTING.md", []string{"| `./scbake list` |"}},
 	} {
 		doc, err := os.ReadFile(tc.file)
 		if err != nil {
