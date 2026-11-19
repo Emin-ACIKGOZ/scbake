@@ -104,6 +104,7 @@ asset (their `install.sh` URL 404s). Use the **latest** tag from
 <https://github.com/Emin-ACIKGOZ/scbake/releases/latest>:
 
 ```bash
+( set -e
 # Set TAG to a release that ships install.sh. Use the latest release tag
 # (see https://github.com/Emin-ACIKGOZ/scbake/releases/latest) — older tags
 # do not contain the installer asset.
@@ -118,6 +119,7 @@ grep 'install.sh$' SHA256SUMS | sha256sum -c -
 
 # Run the installer, pinned to the same tag
 bash install.sh "${TAG}"
+)
 ```
 
 The installer detects your OS/architecture and installs that release's binary to
@@ -173,7 +175,7 @@ scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spd
 | `--license`          | SPDX License ID (required for `compliance`; embedded, works offline) | `--license MIT`             |
 | `--copyright-holder` | Copyright holder name (required for `compliance`) | `--copyright-holder "Acme Corp"` |
 | `--template-dir`     | Directory with custom template overrides         | `--template-dir ./my-tpls`  |
-| `--set`              | Set template variable (`key=value`, can be repeated) | `--set service_id=srv-abc` |
+| `--set`              | Set template variable (`key=value`, can be repeated) | `--lang go --set module_path=github.com/acme/app` |
 | `--conflict-strategy`| How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` | `--conflict-strategy overwrite` |
 
 **Example:**

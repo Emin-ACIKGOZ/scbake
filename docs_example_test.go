@@ -4,7 +4,9 @@
 package main
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -68,6 +70,59 @@ func TestArchitectureManifestExample(t *testing.T) {
 	} {
 		if !tc.present {
 			t.Errorf("example should show at least one %s", tc.name)
+		}
+	}
+}
+
+// TestDocsGuidanceExamples pins the copy-paste contract for guidance that has
+// drifted from the binary and release flow: `list` requires a subcommand, the
+// Spring pack is Java, `--set` examples must use a built-in schema key, and the
+// release footer must not pipe the installer into a shell.
+func TestDocsGuidanceExamples(t *testing.T) {
+	for _, tc := range []struct {
+		file   string
+		absent []string
+	}{
+		{"docs/INSTALLING.md", []string{"\nscbake list\n"}},
+		{"install.sh", []string{"| bash"}},
+		{"docs/QUICK_START.md", []string{"Python (Spring"}},
+		{".goreleaser.yaml", []string{"install.sh | bash"}},
+		{"README.md", []string{"--set service_id=srv-abc"}},
+		{"CONTRIBUTING.md", []string{"| `./scbake list` |"}},
+	} {
+		doc, err := os.ReadFile(tc.file)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.file, err)
+		}
+		text := strings.ReplaceAll(string(doc), "\r\n", "\n")
+		for _, bad := range tc.absent {
+			if strings.Contains(text, bad) {
+				t.Errorf("%s contains stale guidance %q", tc.file, bad)
+			}
+		}
+	}
+
+	// Absence alone would also pass if the guidance were deleted; require the
+	// corrected forms to be present.
+	for _, tc := range []struct {
+		file string
+		want string
+	}{
+		{"docs/INSTALLING.md", "scbake list langs"},
+		{"docs/QUICK_START.md", "Java (Spring"},
+		{".goreleaser.yaml", `bash install.sh "{{ .Tag }}"`},
+		{".goreleaser.yaml", "sha256sum -c -"},
+		{".goreleaser.yaml", "( set -e"},
+		{"README.md", "--set module_path=github.com/acme/app"},
+		{"CONTRIBUTING.md", "./scbake list langs"},
+		{"install.sh", "${PAGER:-less} install.sh || true; bash install.sh"},
+	} {
+		doc, err := os.ReadFile(tc.file)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.file, err)
+		}
+		if !strings.Contains(string(doc), tc.want) {
+			t.Errorf("%s does not contain corrected guidance %q", tc.file, tc.want)
 		}
 	}
 }
@@ -184,5 +239,44 @@ func TestRustHandlerExampleTemplates(t *testing.T) {
 				t.Errorf("rendered %s does not contain %q:\n%s", path, tc.want, got)
 			}
 		})
+	}
+}
+
+// TestInstallSnippetsParse validates the quick-install fenced blocks with the
+// shell parser. String assertions cannot catch an unbalanced subshell.
+func TestInstallSnippetsParse(t *testing.T) {
+	for _, file := range []string{"README.md", "docs/INSTALLING.md"} {
+		raw, err := os.ReadFile(file) //nolint:gosec // fixed repository documentation path in a test
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+		var block string
+		for {
+			start := strings.Index(text, "```bash\n")
+			if start < 0 {
+				break
+			}
+			text = text[start+len("```bash\n"):]
+			end := strings.Index(text, "\n```")
+			if end < 0 {
+				break
+			}
+			candidate := text[:end]
+			text = text[end:]
+			if strings.Contains(candidate, "bash install.sh") {
+				block = candidate
+				break
+			}
+		}
+		if block == "" {
+			t.Fatalf("%s: no quick-install bash block found", file)
+		}
+		block = strings.ReplaceAll(block, "TAG=<tag>", "TAG=v0.0.0")
+		cmd := exec.CommandContext(context.Background(), "bash", "-n")
+		cmd.Stdin = strings.NewReader(block)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s install snippet has invalid shell syntax: %v\n%s", file, err, out)
+		}
 	}
 }
