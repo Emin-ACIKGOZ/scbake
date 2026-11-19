@@ -5,6 +5,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -17,7 +18,7 @@ import (
 // issue #275: a freshly generated Go project, including its committed
 // .scbake-base copies, must end every file with exactly one newline, contain no
 // trailing whitespace, and already be gofmt-clean.
-func TestGeneratedProjectIsWhitespaceClean(t *testing.T) {
+func TestGeneratedProjectIsWhitespaceClean(t *testing.T) { //nolint:cyclop // end-to-end tree scan with several assertions
 	tmpDir := t.TempDir()
 	originalWd, err := os.Getwd()
 	if err != nil {
@@ -64,7 +65,7 @@ func TestGeneratedProjectIsWhitespaceClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gofmt is required for this regression test: %v", err)
 	}
-	gofmtOut, err := exec.Command(gofmtPath, "-l", project).CombinedOutput() //nolint:gosec // fixed tool and test temp path
+	gofmtOut, err := exec.CommandContext(context.Background(), gofmtPath, "-l", project).CombinedOutput() //nolint:gosec // fixed tool and test temp path
 	if err != nil {
 		t.Fatalf("gofmt -l failed: %v\n%s", err, gofmtOut)
 	}

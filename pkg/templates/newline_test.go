@@ -30,7 +30,7 @@ type templateRenderCase struct {
 // newline and has no line with trailing spaces or tabs, and rendered Go must
 // already be gofmt-clean. Post-render formatting is deliberately not applied,
 // so a defective template byte is caught here rather than papered over.
-func TestBuiltInTemplatesAreWhitespaceClean(t *testing.T) {
+func TestBuiltInTemplatesAreWhitespaceClean(t *testing.T) { //nolint:cyclop // render matrix over every built-in handler
 	manifest := &types.Manifest{
 		Metadata: map[string]string{"runner_os": "windows-latest"},
 		Projects: []types.Project{
@@ -110,7 +110,7 @@ func TestBuiltInTemplatesAreWhitespaceClean(t *testing.T) {
 func assertGofmtClean(t *testing.T, gofmtPath, path string) {
 	t.Helper()
 
-	out, err := exec.Command(gofmtPath, "-l", path).CombinedOutput() //nolint:gosec // resolved tool and test temp path
+	out, err := exec.CommandContext(context.Background(), gofmtPath, "-l", path).CombinedOutput() //nolint:gosec // resolved tool and test temp path
 	if err != nil {
 		t.Fatalf("gofmt -l %s failed: %v\n%s", path, err, out)
 	}
