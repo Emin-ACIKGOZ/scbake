@@ -332,8 +332,9 @@ func monorepoUpdateHint(m *types.Manifest, targetArg string) error {
 	msg := fmt.Sprintf("%s records no templates for %q; this is a monorepo root",
 		fileutil.ManifestFileName, targetArg)
 	if len(valid) > 0 {
-		msg += fmt.Sprintf(". Run 'scbake update [--allow-ancestor-search] -- <project>' "+
-			"from the manifest root for one of: %s", strings.Join(valid, ", "))
+		msg += fmt.Sprintf(". Run 'scbake update -- <project>' from the manifest root "+
+			"(add --allow-ancestor-search before -- outside a Git work tree) for one of: %s",
+			strings.Join(valid, ", "))
 	}
 	if len(invalid) > 0 {
 		msg += ". Ambiguous or invalid recorded paths are ignored: " + strings.Join(invalid, ", ")

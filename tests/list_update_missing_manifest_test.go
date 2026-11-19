@@ -81,7 +81,7 @@ func TestRootUpdateNamesMonorepoProjects(t *testing.T) {
 	if !ok || exitErr.ExitCode() == 0 {
 		t.Fatalf("root update should exit non-zero, got err=%v\n%s", err, out)
 	}
-	for _, want := range []string{"monorepo root", "scbake update [--allow-ancestor-search] -- <project>", "from the manifest root", "--allow-ancestor-search", `'services/api'`, `'apps/web'`} {
+	for _, want := range []string{"monorepo root", "scbake update -- <project>", "from the manifest root", "--allow-ancestor-search", `'services/api'`, `'apps/web'`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("root update error does not contain %q:\n%s", want, out)
 		}
@@ -232,10 +232,38 @@ func TestRootUpdateHintSeparatesFlagLikePaths(t *testing.T) {
 	if err == nil {
 		t.Fatalf("root update should report the hint:\n%s", out)
 	}
-	if !strings.Contains(out, "scbake update [--allow-ancestor-search] -- <project>") {
+	if !strings.Contains(out, "scbake update -- <project>") {
 		t.Errorf("hint does not separate flags from the path:\n%s", out)
 	}
 	if !strings.Contains(out, "'-x'") {
 		t.Errorf("hint did not show the dash-prefixed path:\n%s", out)
+	}
+}
+
+// TestRootUpdateSuggestsRunnableMarkerlessCommand executes the documented form
+// in a marker-less monorepo: ancestor search before the -- separator.
+func TestRootUpdateSuggestsRunnableMarkerlessCommand(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	body := `scbake_version = "v0.3.0"
+
+[[projects]]
+  name = "api"
+  path = "services/api"
+  language = "go"
+
+[[templates]]
+  name = "makefile"
+  path = "services/api"
+`
+	if err := os.WriteFile(filepath.Join(work, "scbake.toml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(work, "services", "api"), 0o750); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	out, err := runCLI("update", "--allow-ancestor-search", "--dry-run", "--", "services/api")
+	if err != nil {
+		t.Fatalf("documented marker-less invocation failed: %v\n%s", err, out)
 	}
 }
