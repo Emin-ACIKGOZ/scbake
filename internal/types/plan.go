@@ -72,7 +72,7 @@ type TaskContext struct {
 	// Force indicates if we should overwrite existing files.
 	Force bool
 
-	// ConflictStrategy determines how to handle state-aware drift (fail, overwrite, artifact, keep-local)
+	// ConflictStrategy determines how to handle state-aware drift (merge, fail, overwrite, artifact, keep-local)
 	ConflictStrategy string
 
 	// TemplateDir is the path to an external directory containing template overrides.

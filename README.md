@@ -174,7 +174,7 @@ scbake new <project-name> [--lang <lang>] [--with <template...>] [--license <spd
 | `--copyright-holder` | Copyright holder name (required for `compliance`) | `--copyright-holder "Acme Corp"` |
 | `--template-dir`     | Directory with custom template overrides         | `--template-dir ./my-tpls`  |
 | `--set`              | Set template variable (`key=value`, can be repeated) | `--set service_id=srv-abc` |
-| `--conflict-strategy`| How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` | `--conflict-strategy overwrite` |
+| `--conflict-strategy`| How to resolve file drift: `merge`, `fail`, `overwrite`, `artifact`, `keep-local` | `--conflict-strategy overwrite` |
 
 **Example:**
 
@@ -740,7 +740,7 @@ task := &tasks.InsertXMLTask{
 | `--force`             | Override safety checks                               |
 | `--template-dir`      | Directory with custom template overrides (env: `SCBAKE_TEMPLATE_DIR`) |
 | `--allow-ancestor-search` | Allow ancestor `scbake.toml` discovery when no Git root bounds the tree |
-| `--conflict-strategy` | How to resolve file drift: `fail`, `overwrite`, `artifact`, `keep-local` |
+| `--conflict-strategy` | How to resolve file drift: `merge`, `fail`, `overwrite`, `artifact`, `keep-local` |
 | `-v`, `--version`     | Show version                                          |
 | `--set`              | Set template variable (`key=value`, can be repeated)  |
 
