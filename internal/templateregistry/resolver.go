@@ -156,7 +156,7 @@ func resolveInRegistry(cacheDir, registryDir, templateName, cleanPath string) st
 		if ensureStrictlyWithin(tplDir, candidate) != nil {
 			continue
 		}
-		if _, err := os.Stat(candidate); err == nil {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			return candidate
 		}
 	}
@@ -175,9 +175,13 @@ func LookupPath(cacheDir, registryName, tplPath string) string {
 		return ""
 	}
 	registryDir := filepath.Join(cacheDir, registryName)
-	// A symlinked registry directory must not redirect reads outside the cache
-	// root. ResolveCacheEntry skips such entries; the exported helper must apply
-	// the same containment rule.
+	// ResolveCacheEntry enumerates real directories only, so a symlinked
+	// registry is never eligible. Apply the same rule here, even when the link
+	// points inside the cache, and keep the containment check for parent links.
+	info, err := os.Lstat(registryDir)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return ""
+	}
 	if ensureStrictlyWithin(cacheDir, registryDir) != nil {
 		return ""
 	}
@@ -185,7 +189,7 @@ func LookupPath(cacheDir, registryName, tplPath string) string {
 	if ensureStrictlyWithin(registryDir, candidate) != nil {
 		return ""
 	}
-	info, err := os.Stat(candidate)
+	info, err = os.Stat(candidate)
 	if err != nil || info.IsDir() {
 		return ""
 	}

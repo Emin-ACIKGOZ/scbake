@@ -454,7 +454,7 @@ func TestLookupPath_NotFound(t *testing.T) {
 // TestLookupPath_RejectsSymlinkedRegistryAndDirectories closes the remaining
 // containment and file-type gaps: a registry directory symlinked outside the
 // cache must not be followed, and a directory is not a template file.
-func TestLookupPath_RejectsSymlinkedRegistryAndDirectories(t *testing.T) {
+func TestLookupPath_RejectsSymlinkedRegistryAndDirectories(t *testing.T) { //nolint:cyclop // symlink and file-type matrix
 	base := t.TempDir()
 	cacheDir := filepath.Join(base, "cache")
 	outside := filepath.Join(base, "outside")
@@ -475,6 +475,20 @@ func TestLookupPath_RejectsSymlinkedRegistryAndDirectories(t *testing.T) {
 	}
 	if err := os.Remove(link); err != nil {
 		t.Fatalf("remove symlink: %v", err)
+	}
+
+	// An inward-pointing registry symlink is still not an eligible registry
+	// directory: ResolveCacheEntry enumerates real directories only.
+	registryDir := filepath.Join(cacheDir, "acme")
+	if err := os.MkdirAll(registryDir, 0o750); err != nil {
+		t.Fatalf("mkdir registry: %v", err)
+	}
+	writeTestFile(t, filepath.Join(registryDir, "ok.tpl"), "content")
+	if err := os.Symlink(registryDir, filepath.Join(cacheDir, "beta")); err != nil {
+		t.Fatalf("symlink registry: %v", err)
+	}
+	if got := LookupPath(cacheDir, "beta", "ok.tpl"); got != "" {
+		t.Errorf("LookupPath followed an inward registry symlink: %q", got)
 	}
 
 	dir := filepath.Join(cacheDir, "acme", "templates")
