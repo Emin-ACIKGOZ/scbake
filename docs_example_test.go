@@ -82,23 +82,45 @@ func TestReadmeResidualDriftContract(t *testing.T) {
 		t.Fatalf("read README.md: %v", err)
 	}
 	text := strings.ReplaceAll(string(doc), "\r\n", "\n")
+	section := func(heading string) string {
+		t.Helper()
+		at := strings.Index(text, heading)
+		if at < 0 {
+			t.Fatalf("README.md has no %q section", heading)
+		}
+		rest := text[at+len(heading):]
+		if next := strings.Index(rest, "\n### "); next >= 0 {
+			rest = rest[:next]
+		}
+		return rest
+	}
+
+	updateSection := section("### `update`")
 	for _, want := range []string{
 		"`update` exits 0 when it completes",
-		"| Completed with residual drift",
 		"| No changes needed, or the tree is clean after the update | 0 |",
 		"| Completed with residual drift (for example, merge preserved local edits) | 0 |",
 		"| Load, plan, write, or commit failure | non-zero |",
 		"Run `scbake drift` as the gate",
-		"| Completed, including residual drift that it reports | 0 |",
-		"| Repair failed (load, render, write, or re-check) | non-zero |",
+		"[`scbake accept`](#accept-rebaseline-a-managed-file)",
+	} {
+		if !strings.Contains(updateSection, want) {
+			t.Errorf("README update section does not document %q", want)
+		}
+	}
+
+	driftSection := section("### `drift`")
+	for _, want := range []string{
 		"| `modified`, `missing`, `base-invalid` | exit 1 | exit 1 |",
 		"| `base-missing` only | exit 0 (advisory) | exit 1 |",
 		"`--repair` follows the same completion contract as `update`",
+		"| Completed, including residual drift that it reports | 0 |",
+		"| Repair failed (load, render, write, or re-check) | non-zero |",
 		"Repair finished; N managed file(s) still drifted",
-		"[`scbake accept`](#accept-rebaseline-a-managed-file)",
+		"[`accept`](#accept-rebaseline-a-managed-file)",
 	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("README.md does not document %q", want)
+		if !strings.Contains(driftSection, want) {
+			t.Errorf("README drift section does not document %q", want)
 		}
 	}
 }
