@@ -100,10 +100,11 @@ release:
     Install or update with:
 
     ```sh
-    set -e
+    ( set -e
     curl -fsSL -o install.sh https://github.com/Emin-ACIKGOZ/scbake/releases/download/{{ .Tag }}/install.sh
     curl -fsSL -o SHA256SUMS https://github.com/Emin-ACIKGOZ/scbake/releases/download/{{ .Tag }}/SHA256SUMS
     grep 'install.sh$' SHA256SUMS | sha256sum -c -   # macOS: shasum -a 256 -c -
     less install.sh
     bash install.sh "{{ .Tag }}"
+    )
     ```

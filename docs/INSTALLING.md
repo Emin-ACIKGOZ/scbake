@@ -29,6 +29,7 @@ grep 'install.sh$' SHA256SUMS | sha256sum -c -
 
 # Run the installer, pinned to the same tag
 bash install.sh "${TAG}"
+)
 ```
 
 > **Avoid piping a branch URL into `bash`.** The old one-liner

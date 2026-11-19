@@ -118,6 +118,7 @@ grep 'install.sh$' SHA256SUMS | sha256sum -c -
 
 # Run the installer, pinned to the same tag
 bash install.sh "${TAG}"
+)
 ```
 
 The installer detects your OS/architecture and installs that release's binary to
