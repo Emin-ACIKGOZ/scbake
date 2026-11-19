@@ -237,25 +237,12 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 		return fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
 	}
 
-	if err := transaction.CheckPending(rootPath); err != nil {
-		return err
-	}
 	lang, withTemplates, relPath, err := resolveUpdateSelection(m, rootPath, rc.TargetPath)
 	if err != nil {
 		return err
 	}
-	// A manifest that records the compliance template but lost its metadata
-	// must fail before the plan executes, the same invariant apply enforces.
-	// Normally this is unreachable because a successful apply recorded both
-	// values, but a hand-edited or truncated manifest can reach it.
-	licenseKey := path.Join(relPath, "LICENSE")
-	if containsTemplate(withTemplates, complianceTemplateName) && !listsUnmanagedKey(m, licenseKey) {
-		if err := CheckCompliancePrerequisites(m.Metadata["license"], m.Metadata["copyright_holder"]); err != nil {
-			return fmt.Errorf(
-				"compliance is recorded for %q but its metadata is missing; from the affected "+
-					"project directory run 'scbake apply --with compliance --license <id> "+
-					"--copyright-holder <name> --allow-ancestor-search': %w", relPath, err)
-		}
+	if err := checkUpdatePreconditions(m, rootPath, withTemplates, relPath); err != nil {
+		return err
 	}
 	if lang == "" && len(withTemplates) == 0 {
 		return fmt.Errorf("%s records no templates for %q; nothing to update", fileutil.ManifestFileName, rc.ManifestPathArg)
@@ -267,6 +254,25 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 	rc.Update = true
 
 	return runApply(rc, reporter)
+}
+
+// checkUpdatePreconditions reports a pending transaction before checking
+// compliance metadata, so recovery state is never masked by a flag error.
+func checkUpdatePreconditions(m *types.Manifest, rootPath string, withTemplates []string, relPath string) error {
+	if err := transaction.CheckPending(rootPath); err != nil {
+		return err
+	}
+	if !containsTemplate(withTemplates, complianceTemplateName) ||
+		listsUnmanagedKey(m, path.Join(relPath, "LICENSE")) {
+		return nil
+	}
+	if err := CheckCompliancePrerequisites(m.Metadata["license"], m.Metadata["copyright_holder"]); err != nil {
+		return fmt.Errorf(
+			"compliance is recorded for %q but its metadata is missing; from the affected "+
+				"project directory run 'scbake apply --with compliance --license <id> "+
+				"--copyright-holder <name> --allow-ancestor-search': %w", relPath, err)
+	}
+	return nil
 }
 
 // withRootLock serializes mutating runs against the same project root. Only
