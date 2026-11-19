@@ -23,6 +23,7 @@ import (
 	"scbake/pkg/templates/compliance"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -705,9 +706,45 @@ func validateManifestFields(m *types.Manifest) error {
 			return err
 		}
 	}
+	if err := validateTemplateFields(m.Templates); err != nil {
+		return err
+	}
+	if err := validateMetadataFields(m.Metadata); err != nil {
+		return err
+	}
 	if cmd, ok := m.Metadata["test_command"]; ok {
 		if err := validateTestCommand(cmd); err != nil {
 			return fmt.Errorf("metadata test_command is invalid: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateTemplateFields rejects template names and paths that cannot be
+// persisted in the UTF-8-only scbake.toml format.
+func validateTemplateFields(templates []types.Template) error {
+	for i := range templates {
+		if !utf8.ValidString(templates[i].Name) {
+			return fmt.Errorf("template name %q is not valid UTF-8", templates[i].Name)
+		}
+		if !utf8.ValidString(templates[i].Path) {
+			return fmt.Errorf("template path %q is not valid UTF-8", templates[i].Path)
+		}
+	}
+	return nil
+}
+
+// validateMetadataFields rejects metadata keys and values that cannot be
+// persisted in the UTF-8-only scbake.toml format. A --set value with a raw
+// invalid byte would make the next load fail, so it is rejected before any
+// write.
+func validateMetadataFields(metadata map[string]string) error {
+	for k, v := range metadata {
+		if !utf8.ValidString(k) {
+			return fmt.Errorf("metadata key %q is not valid UTF-8", k)
+		}
+		if !utf8.ValidString(v) {
+			return fmt.Errorf("metadata %q is not valid UTF-8", k)
 		}
 	}
 	return nil
