@@ -86,7 +86,7 @@ func TestDocsGuidanceExamples(t *testing.T) {
 		{".goreleaser.yaml", []string{"install.sh | bash"}},
 		{"README.md", []string{"--set service_id=srv-abc"}},
 	} {
-		doc, err := os.ReadFile(tc.file) //nolint:gosec // fixed repository paths in a test
+		doc, err := os.ReadFile(tc.file)
 		if err != nil {
 			t.Fatalf("read %s: %v", tc.file, err)
 		}
