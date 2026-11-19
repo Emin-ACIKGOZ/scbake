@@ -155,3 +155,50 @@ func TestIssue268UpdateFailsBeforeExecutingWhenMetadataMissing(t *testing.T) { /
 		}
 	}
 }
+
+// TestIssue268ExistingDirectoryPrecedence keeps the pre-existing error order:
+// an impossible target is reported before missing compliance flags.
+func TestIssue268ExistingDirectoryPrecedence(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	if err := os.Mkdir(filepath.Join(work, "demo"), 0o750); err != nil {
+		t.Fatalf("mkdir demo: %v", err)
+	}
+
+	out, err := runCLI("new", "demo", "--with", "compliance")
+	if err == nil {
+		t.Fatalf("new on an existing directory succeeded:\n%s", out)
+	}
+	line := dryRunErrorLine(out)
+	if !strings.Contains(line, "already exists") {
+		t.Errorf("expected the existing-directory error, got:\n%s", out)
+	}
+	if strings.Contains(line, "--license") {
+		t.Errorf("compliance preflight masked the existing-directory error:\n%s", out)
+	}
+}
+
+// TestIssue268ExplicitEmptySetOverrideIsHonored restores the pre-fix semantic:
+// an explicit empty --set value is authoritative and fails as missing metadata.
+func TestIssue268ExplicitEmptySetOverrideIsHonored(t *testing.T) {
+	root := t.TempDir()
+	skipIfAncestorHasMarker(t, root)
+	t.Chdir(root)
+	if out, err := runCLI("new", "proj", "--with", "compliance",
+		"--license", "MIT", "--copyright-holder", "Test Corp"); err != nil {
+		t.Fatalf("prepare project: %v\n%s", err, out)
+	}
+	project := filepath.Join(root, "proj")
+	t.Chdir(project)
+
+	out, err := runCLI("apply", "--with", "compliance", "--set", "license=")
+	if err == nil {
+		t.Fatalf("an explicit empty license override was silently ignored:\n%s", out)
+	}
+	if strings.Contains(out, "Executing plan") {
+		t.Errorf("empty override reached plan execution:\n%s", out)
+	}
+	if !strings.Contains(out, "--license") {
+		t.Errorf("error does not name --license:\n%s", out)
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"scbake/internal/templateregistry"
 	"scbake/internal/types"
 	"scbake/internal/ui"
+	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"strings"
 
@@ -124,6 +125,19 @@ func removeFailedProject(projectName string, release func() error) error {
 	return nil
 }
 
+// validateNewTarget preserves the existing-directory precedence: an impossible
+// target is reported before flag-specific preflight errors and before anything
+// is created.
+func validateNewTarget(projectName string) error {
+	if newLangFlag == "" && len(newWithFlag) == 0 {
+		return core.ErrNoSelection
+	}
+	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
+		return fmt.Errorf("directory '%s' already exists", util.Sanitize(projectName))
+	}
+	return nil
+}
+
 // validateNewSelection performs every flag and override-directory check that
 // must fail before `new` mutates the filesystem (SCB-012). It returns the
 // parsed --set values and the resolved template override directory.
@@ -135,8 +149,8 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	if err := core.ValidateSetKeys(newWithFlag, newLangFlag, setVars); err != nil {
 		return nil, "", err
 	}
-	if newLangFlag == "" && len(newWithFlag) == 0 {
-		return nil, "", core.ErrNoSelection
+	if err := validateNewTarget(projectName); err != nil {
+		return nil, "", err
 	}
 	// The compliance template cannot generate LICENSE without both values.
 	// Validate here, before bootstrapProjectDir creates the directory, so a

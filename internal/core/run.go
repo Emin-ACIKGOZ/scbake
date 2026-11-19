@@ -449,12 +449,19 @@ func applyContextMetadata(m *types.Manifest, rc RunContext) {
 		m.Metadata = make(map[string]string)
 	}
 	license, holder := ComplianceMetadata(rc.License, rc.CopyrightHolder, rc.SetVars)
-	if license != "" {
-		m.Metadata["license"] = license
+	// An explicit --set value, including an empty one, is authoritative; without
+	// this the empty override would silently keep the recorded value.
+	setMetadata := func(key, value, flag string) {
+		if flag != "" {
+			m.Metadata[key] = value
+			return
+		}
+		if _, ok := rc.SetVars[key]; ok {
+			m.Metadata[key] = value
+		}
 	}
-	if holder != "" {
-		m.Metadata["copyright_holder"] = holder
-	}
+	setMetadata("license", license, rc.License)
+	setMetadata("copyright_holder", holder, rc.CopyrightHolder)
 	for k, v := range rc.SetVars {
 		if k == "license" || k == "copyright_holder" {
 			continue
@@ -1056,22 +1063,37 @@ func preflightCompliance(rc RunContext) error {
 	if rc.Update || !containsTemplate(rc.WithFlag, complianceTemplateName) {
 		return nil
 	}
-	license, copyrightHolder := ComplianceMetadata(rc.License, rc.CopyrightHolder, rc.SetVars)
-	if license == "" || copyrightHolder == "" {
-		m, _, err := loadManifestForRun(rc)
-		if err != nil {
-			return err
-		}
-		if m.Metadata != nil {
-			if license == "" {
-				license = m.Metadata["license"]
-			}
-			if copyrightHolder == "" {
-				copyrightHolder = m.Metadata["copyright_holder"]
-			}
-		}
+	license, copyrightHolder, err := withRecordedCompliance(rc)
+	if err != nil {
+		return err
 	}
 	return CheckCompliancePrerequisites(license, copyrightHolder)
+}
+
+// withRecordedCompliance fills missing values from the manifest, except when the
+// user supplied an explicit --set (including an empty one).
+func withRecordedCompliance(rc RunContext) (string, string, error) {
+	license, holder := ComplianceMetadata(rc.License, rc.CopyrightHolder, rc.SetVars)
+	_, setLicense := rc.SetVars["license"]
+	_, setHolder := rc.SetVars["copyright_holder"]
+	if (license != "" || setLicense) && (holder != "" || setHolder) {
+		return license, holder, nil
+	}
+	m, _, err := loadManifestForRun(rc)
+	if err != nil {
+		return "", "", err
+	}
+	return recordedOr(license, setLicense, m.Metadata, "license"),
+		recordedOr(holder, setHolder, m.Metadata, "copyright_holder"), nil
+}
+
+// recordedOr falls back to recorded metadata unless the user explicitly set the
+// key (even to an empty value).
+func recordedOr(value string, explicitlySet bool, metadata map[string]string, key string) string {
+	if value == "" && !explicitlySet {
+		return metadata[key]
+	}
+	return value
 }
 
 // containsTemplate reports whether name appears in the template selection.
