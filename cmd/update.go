@@ -13,9 +13,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// runUpdateTotalSteps mirrors the milestones of an update run: load manifest,
-// plan, execute, persist manifest, commit.
-const runUpdateTotalSteps = 5
+// runUpdateTotalSteps is the number of milestones an update run emits: load
+// manifest, plan, execute, persist manifest, commit. Update reports the load
+// step itself and then runs the shared apply phases without repeating it, so
+// the total matches the apply run (#271).
+const runUpdateTotalSteps = runApplyTotalSteps
 
 var updateConflictStrategyFlag string
 
