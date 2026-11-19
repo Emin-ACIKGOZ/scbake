@@ -1,0 +1,4 @@
+# Embedded templates are compiled with go:embed and rendered byte-for-byte.
+# Keep LF on every checkout so generated files are identical across platforms
+# and gofmt-clean (a CRLF Go file is reported by `gofmt -l`).
+*.tpl text eol=lf
