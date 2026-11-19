@@ -910,6 +910,11 @@ func insertXMLElement(fileContent, elementPath, xmlToInsert string) (string, err
 	// Splice the new content before the closing tag of the target element.
 	before := fileContent[:insertAt]
 	after := fileContent[insertAt:]
+	// The original indent before the closing tag becomes trailing whitespace on
+	// the last inserted line if it is left in place. Preserve it as the closing
+	// tag's indent instead, so the result has no whitespace-only line.
+	closingIndent := before[len(strings.TrimRight(before, " \t")):]
+	before = strings.TrimRight(before, " \t")
 
 	// Add proper indentation to the inserted content
 	insertedLines := strings.Split(strings.TrimSpace(xmlToInsert), "\n")
@@ -923,6 +928,7 @@ func insertXMLElement(fileContent, elementPath, xmlToInsert string) (string, err
 		}
 	}
 	result.WriteString("\n")
+	result.WriteString(closingIndent)
 	result.WriteString(after)
 
 	output := result.String()

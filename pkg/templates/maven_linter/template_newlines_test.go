@@ -5,7 +5,6 @@ package mavenlinter
 
 import (
 	"bytes"
-	"os"
 	"testing"
 )
 
@@ -14,7 +13,7 @@ import (
 // the generic render matrix cannot see its bytes.
 func TestEmbeddedTemplatesEndWithNewline(t *testing.T) {
 	for _, path := range []string{"checkstyle.xml.tpl", "pom_snippet.xml.tpl"} {
-		data, err := os.ReadFile(path) //nolint:gosec // fixed embedded test fixture
+		data, err := templates.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
