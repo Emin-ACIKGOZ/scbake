@@ -294,7 +294,7 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 
 	var lang string
 	for _, p := range m.Projects {
-		if canonicalProjectRel(p.Path) == rel {
+		if p.Path == rel {
 			lang = p.Language
 			break
 		}
@@ -302,7 +302,7 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 
 	var with []string
 	for _, t := range m.Templates {
-		if canonicalProjectRel(t.Path) == rel && t.Name != legacyRootTemplate {
+		if t.Path == rel && t.Name != legacyRootTemplate {
 			with = append(with, t.Name)
 		}
 	}
@@ -320,7 +320,10 @@ func monorepoUpdateHint(m *types.Manifest, targetArg string) error {
 	}
 	var valid, invalid []string
 	for _, p := range paths {
-		if err := validateProjectPath(p); err != nil {
+		// Only suggest entries the selection logic can match exactly. Non-clean
+		// relative paths are deliberately inert legacy entries; cleaning them
+		// for a suggestion would point at a directory the manifest does not name.
+		if canonicalProjectRel(p) != p || validateProjectPath(p) != nil {
 			invalid = append(invalid, shellQuote(util.Sanitize(p)))
 			continue
 		}
@@ -334,7 +337,7 @@ func monorepoUpdateHint(m *types.Manifest, targetArg string) error {
 			strings.Join(valid, ", "))
 	}
 	if len(invalid) > 0 {
-		msg += ". Invalid recorded paths are ignored: " + strings.Join(invalid, ", ")
+		msg += ". Ambiguous or invalid recorded paths are ignored: " + strings.Join(invalid, ", ")
 	}
 	return errors.New(msg)
 }
@@ -365,14 +368,14 @@ func projectPaths(m *types.Manifest) []string {
 	paths := make([]string, 0, len(m.Projects))
 	for _, p := range m.Projects {
 		clean := canonicalProjectRel(p.Path)
-		if clean == "" || clean == "." {
+		if p.Path == "" || clean == "." {
 			continue
 		}
-		if _, ok := seen[clean]; ok {
+		if _, ok := seen[p.Path]; ok {
 			continue
 		}
-		seen[clean] = struct{}{}
-		paths = append(paths, clean)
+		seen[p.Path] = struct{}{}
+		paths = append(paths, p.Path)
 	}
 	sort.Strings(paths)
 	return paths

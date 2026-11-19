@@ -175,9 +175,10 @@ func TestRootUpdateDoesNotSuggestShellMetacharacterPaths(t *testing.T) {
 	}
 }
 
-// TestRootUpdateNormalizesRecordedPaths keeps the hint and selection consistent
-// for hand-edited non-clean relative paths.
-func TestRootUpdateNormalizesRecordedPaths(t *testing.T) {
+// TestRootUpdateIgnoresNonCleanRecordedPaths keeps legacy non-clean relative
+// entries inert: they are reported as ambiguous, not suggested as cleaned
+// targets that the update selection would never match.
+func TestRootUpdateIgnoresNonCleanRecordedPaths(t *testing.T) {
 	work := t.TempDir()
 	t.Chdir(work)
 	body := `scbake_version = "v0.3.0"
@@ -199,13 +200,15 @@ func TestRootUpdateNormalizesRecordedPaths(t *testing.T) {
 	}
 	out, err := runCLI("update")
 	if err == nil {
-		t.Fatalf("root update should report the monorepo hint, got success:\n%s", out)
+		t.Fatalf("root update should report the hint:\n%s", out)
 	}
-	if !strings.Contains(out, `'services/api'`) {
-		t.Errorf("hint did not use the cleaned path:\n%s", out)
+	if !strings.Contains(out, "Ambiguous or invalid recorded paths are ignored") {
+		t.Errorf("hint did not mark the non-clean path ambiguous:\n%s", out)
 	}
-	dry, err := runCLI("update", "services/api", "--allow-ancestor-search", "--dry-run")
-	if err != nil {
-		t.Fatalf("suggested cleaned target did not select the project: %v\n%s", err, dry)
+	if !strings.Contains(out, `'./services/api'`) {
+		t.Errorf("hint did not show the recorded path as ignored:\n%s", out)
+	}
+	if strings.Contains(out, "for one of: 'services/api'") {
+		t.Errorf("hint suggested a cleaned path the selection cannot match:\n%s", out)
 	}
 }
