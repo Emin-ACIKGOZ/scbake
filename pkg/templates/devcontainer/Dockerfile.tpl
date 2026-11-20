@@ -2,5 +2,5 @@
 # This is a lightweight, pre-optimized image that works well with Features.
 FROM mcr.microsoft.com/devcontainers/base:debian-12
 
-# Language toolchains (Go, Node, Java) are installed via "features" 
+# Language toolchains (Go, Node, Java) are installed via "features"
 # in devcontainer.json. This keeps this Dockerfile clean and fast to build.

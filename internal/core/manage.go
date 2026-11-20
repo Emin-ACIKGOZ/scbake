@@ -205,13 +205,14 @@ func loadManageManifest(rc RunContext) (*types.Manifest, string, error) {
 	}
 
 	manifestPath := filepath.Join(root, fileutil.ManifestFileName)
-	if _, err := os.Stat(manifestPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil, "", fmt.Errorf("no %s found at %s",
-				fileutil.ManifestFileName, util.Sanitize(root))
-		}
+	exists, statErr := manifest.Exists(root)
+	if statErr != nil {
 		return nil, "", fmt.Errorf("failed to inspect %s: %w",
-			util.Sanitize(manifestPath), util.SanitizeError(err))
+			util.Sanitize(manifestPath), util.SanitizeError(statErr))
+	}
+	if !exists {
+		return nil, "", fmt.Errorf("no %s found at %s",
+			fileutil.ManifestFileName, util.Sanitize(root))
 	}
 	return m, root, nil
 }
@@ -235,7 +236,14 @@ func resolveManagedKey(root, target, arg string) (string, error) {
 		return "", fmt.Errorf("cannot make path %q relative to %q: %w",
 			arg, root, util.SanitizeError(err))
 	}
-	if rel == "." || rel == ".." || filepath.IsAbs(rel) ||
+	// The project root is contained, not an escape, but it is also not a
+	// managed file: classify it explicitly so accept/unmanage do not report a
+	// misleading "outside the project root" error and never gain bulk meaning.
+	if rel == "." {
+		return "", fmt.Errorf("path %q is the project root %s; a managed file path is required",
+			arg, util.Sanitize(root))
+	}
+	if rel == ".." || filepath.IsAbs(rel) ||
 		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q is outside the project root %s", arg, util.Sanitize(root))
 	}

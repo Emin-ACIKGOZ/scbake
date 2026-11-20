@@ -132,6 +132,23 @@ func gitBoundedRoot(gitRoot, manifestRoot string) string {
 	return gitRoot
 }
 
+// Exists reports whether rootPath contains a scbake.toml. LoadWithOptions
+// cannot distinguish an absent file from a present empty manifest, so callers
+// that need that distinction use this check at the discovered root.
+func Exists(rootPath string) (bool, error) {
+	manifestPath, err := fileutil.SafePath(rootPath, fileutil.ManifestFileName)
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(manifestPath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // Load reads scbake.toml from the project root discovered from startPath.
 // If not found, it returns a new, empty manifest.
 // It returns the Manifest and the discovered Root Path.
@@ -281,7 +298,15 @@ func checkManifestConflict(manifestPath string) error {
 // Save atomically writes the manifest to scbake.toml in the specified root path.
 // It writes to a temporary file first, syncs, then renames to ensure data integrity.
 // Implements optimistic locking: detects if file was modified by another process.
-func Save(m *types.Manifest, rootPath string) (err error) {
+func Save(m *types.Manifest, rootPath string) error {
+	if err := validateManifestUTF8(m); err != nil {
+		return fmt.Errorf("refusing to save manifest: %w", err)
+	}
+	return saveManifest(m, rootPath)
+}
+
+// saveManifest performs the atomic write after the manifest has been validated.
+func saveManifest(m *types.Manifest, rootPath string) (err error) {
 	finalPath, err := fileutil.SafePath(rootPath, fileutil.ManifestFileName)
 	if err != nil {
 		return fmt.Errorf("invalid manifest path: %w", err)

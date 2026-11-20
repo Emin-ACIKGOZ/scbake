@@ -15,6 +15,7 @@ includes this installer change; earlier tags do not contain the asset and their
 <https://github.com/Emin-ACIKGOZ/scbake/releases/latest>:
 
 ```bash
+( set -e
 # Set TAG to a release that ships install.sh. Use the latest release tag
 # (see https://github.com/Emin-ACIKGOZ/scbake/releases/latest) — older tags
 # do not contain the installer asset.
@@ -29,6 +30,7 @@ grep 'install.sh$' SHA256SUMS | sha256sum -c -
 
 # Run the installer, pinned to the same tag
 bash install.sh "${TAG}"
+)
 ```
 
 > **Avoid piping a branch URL into `bash`.** The old one-liner
@@ -224,7 +226,8 @@ After installation:
 
 ```bash
 # View available languages and templates
-scbake list
+scbake list langs
+scbake list templates
 
 # Create your first project
 scbake new my-app --lang go

@@ -6,10 +6,79 @@ package core
 import (
 	"path/filepath"
 	"reflect"
+	"scbake/internal/manifest"
 	"scbake/internal/types"
+	"scbake/internal/util/fileutil"
 	"scbake/pkg/tasks"
+	"strings"
 	"testing"
 )
+
+// stepRecordingReporter records high-level steps so a test can assert a run's
+// exact progress sequence without depending on the concrete UI reporter.
+type stepRecordingReporter struct {
+	steps []string
+}
+
+func (r *stepRecordingReporter) Step(_, message string) { r.steps = append(r.steps, message) }
+
+func (r *stepRecordingReporter) SetTotalSteps(int) {}
+
+func (r *stepRecordingReporter) TaskStart(string, int, int) {}
+
+func (r *stepRecordingReporter) TaskEnd(error) {}
+
+// TestRunUpdateEmitsManifestLoadOnce is a regression guard for #271: update
+// loaded the manifest twice and emitted six steps for a five-step denominator.
+func TestRunUpdateEmitsManifestLoadOnce(t *testing.T) {
+	root := t.TempDir()
+	m := &types.Manifest{
+		SbakeVersion: manifest.DefaultSbakeVersion,
+		Templates:    []types.Template{{Name: "editorconfig", Path: "."}},
+	}
+	if err := manifest.Save(m, root); err != nil {
+		t.Fatalf("write fixture manifest: %v", err)
+	}
+
+	reporter := &stepRecordingReporter{}
+	rc := RunContext{
+		TargetPath:       root,
+		ManifestPathArg:  ".",
+		ConflictStrategy: types.ConflictMerge,
+	}
+	loadCalls := 0
+	load := func(rc RunContext) (*types.Manifest, string, error) {
+		loadCalls++
+		return loadManifestForRun(rc)
+	}
+	if err := runUpdateWith(rc, reporter, load); err != nil {
+		t.Fatalf("runUpdateWith failed: %v", err)
+	}
+	if loadCalls != 1 {
+		t.Fatalf("manifest loaded %d times, want exactly 1", loadCalls)
+	}
+
+	want := []string{
+		"Loading manifest (" + fileutil.ManifestFileName + ")...",
+		"Building execution plan...",
+		"Executing plan...",
+		"Updating manifest...",
+		"Committing transaction...",
+	}
+	if !reflect.DeepEqual(reporter.steps, want) {
+		t.Fatalf("steps = %#v, want %#v", reporter.steps, want)
+	}
+
+	loads := 0
+	for _, step := range reporter.steps {
+		if strings.Contains(step, "Loading manifest") {
+			loads++
+		}
+	}
+	if loads != 1 {
+		t.Errorf("RunUpdate emitted %d manifest-load steps, want 1", loads)
+	}
+}
 
 // TestResolveUpdateSelection verifies I6: the manifest reproduces exactly the
 // selection that `update` re-applies, scoped by normalized path so monorepo

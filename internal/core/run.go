@@ -21,8 +21,10 @@ import (
 	"scbake/pkg/tasks"
 	"scbake/pkg/templates"
 	"scbake/pkg/templates/compliance"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -144,8 +146,8 @@ func loadManifestForRun(rc RunContext) (*types.Manifest, string, error) {
 	return m, root, nil
 }
 
-// runApply is RunApply without the root lock so RunUpdate can share one lock
-// around the initial manifest load and the apply run.
+// runApply is RunApply without the root lock, so callers that already hold the
+// lock can run the apply pipeline.
 func runApply(rc RunContext, reporter types.Reporter) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
@@ -154,7 +156,18 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 	if err != nil {
 		return err
 	}
+	return runApplyWithManifest(rc, reporter, m, rootPath)
+}
 
+// runApplyWithManifest continues the apply pipeline with a manifest the caller
+// already loaded and reported. It emits no load step, so a caller that shares
+// this pipeline (update) reports the load phase exactly once (#271).
+func runApplyWithManifest(
+	rc RunContext,
+	reporter types.Reporter,
+	m *types.Manifest,
+	rootPath string,
+) error {
 	// Compute the canonical root-relative path of the target once from
 	// TargetPath, resolving it against the process working directory when it is
 	// relative. Both the project and template entries use this value, so every
@@ -196,10 +209,10 @@ func runApply(rc RunContext, reporter types.Reporter) error {
 	}
 	if rc.Update {
 		plan.Tasks = managedWriteTasks(plan.Tasks)
-		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel)
+		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel, rc.Update)
 	} else if !rc.Force {
 		// `apply` skips detached paths unless --force re-manages them.
-		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel)
+		plan.Tasks = filterUnmanagedTasks(plan.Tasks, m, projectRel, rc.Update)
 	}
 
 	// 4. Build Task Context & Validate Schemas
@@ -225,16 +238,23 @@ func RunUpdate(rc RunContext, reporter types.Reporter) error {
 	})
 }
 
-// runUpdate is RunUpdate without the root lock; it calls runApply so the
-// update's initial manifest load and the apply run under the same lock.
+// manifestLoader loads the manifest for an update. It is a seam so a test can
+// assert the update path performs exactly one load.
+type manifestLoader func(RunContext) (*types.Manifest, string, error)
+
+// runUpdate is RunUpdate without the root lock. It loads the manifest once,
+// reports that phase itself, and hands the loaded manifest to the shared apply
+// pipeline so the run reads and prints the load step exactly once (#271).
 func runUpdate(rc RunContext, reporter types.Reporter) error {
+	return runUpdateWith(rc, reporter, loadManifestForRun)
+}
+
+func runUpdateWith(rc RunContext, reporter types.Reporter, load manifestLoader) error {
 	reporter.Step("📖", "Loading manifest ("+fileutil.ManifestFileName+")...")
 
-	m, rootPath, err := manifest.LoadWithOptions(rc.TargetPath, manifest.DiscoveryOptions{
-		AllowAncestorSearch: rc.AllowAncestorSearch,
-	})
+	m, rootPath, err := load(rc)
 	if err != nil {
-		return fmt.Errorf("failed to load %s: %w", fileutil.ManifestFileName, err)
+		return err
 	}
 
 	lang, withTemplates, relPath, err := resolveUpdateSelection(m, rootPath, rc.TargetPath)
@@ -245,6 +265,11 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 		return err
 	}
 	if lang == "" && len(withTemplates) == 0 {
+		if relPath == "." {
+			if err := monorepoUpdateHint(m, rc.ManifestPathArg); err != nil {
+				return err
+			}
+		}
 		return fmt.Errorf("%s records no templates for %q; nothing to update", fileutil.ManifestFileName, rc.ManifestPathArg)
 	}
 
@@ -253,7 +278,7 @@ func runUpdate(rc RunContext, reporter types.Reporter) error {
 	rc.ManifestPathArg = relPath
 	rc.Update = true
 
-	return runApply(rc, reporter)
+	return runApplyWithManifest(rc, reporter, m, rootPath)
 }
 
 // checkUpdatePreconditions reports a pending transaction before checking
@@ -341,6 +366,80 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 	return lang, deduplicateTemplates(with), rel, nil
 }
 
+// monorepoUpdateHint reports the recorded subprojects when a root update has no
+// root templates. Only validated paths are placed in the suggested command;
+// invalid recorded paths are listed as ignored so manifest data cannot inject a
+// shell command.
+func monorepoUpdateHint(m *types.Manifest, targetArg string) error {
+	paths := projectPaths(m)
+	if len(paths) == 0 {
+		return nil
+	}
+	var valid, invalid []string
+	for _, p := range paths {
+		// Only suggest entries the selection logic can match exactly. Non-clean
+		// relative paths are deliberately inert legacy entries; cleaning them
+		// for a suggestion would point at a directory the manifest does not name.
+		if canonicalProjectRel(p) != p || validateProjectPath(p) != nil {
+			invalid = append(invalid, shellQuote(util.Sanitize(p)))
+			continue
+		}
+		valid = append(valid, shellQuote(p))
+	}
+	msg := fmt.Sprintf("%s records no templates for %q; this is a monorepo root",
+		fileutil.ManifestFileName, targetArg)
+	if len(valid) > 0 {
+		msg += fmt.Sprintf(". Run 'scbake update -- <project>' from the manifest root "+
+			"(add --allow-ancestor-search before -- outside a Git work tree) for one of: %s",
+			strings.Join(valid, ", "))
+	}
+	if len(invalid) > 0 {
+		msg += ". Ambiguous or invalid recorded paths are ignored: " + strings.Join(invalid, ", ")
+	}
+	return errors.New(msg)
+}
+
+// canonicalProjectRel returns the cleaned, slash-separated project path, or ""
+// for an empty entry. It is used for hint classification and output only;
+// update selection deliberately remains exact-match so legacy relative entries
+// stay inert.
+func canonicalProjectRel(p string) string {
+	if p == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(p))
+}
+
+// shellQuote renders path as one POSIX single-quoted shell word. Validated
+// project paths cannot contain a quote, but escaping keeps the helper safe if a
+// caller changes.
+func shellQuote(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+}
+
+// projectPaths returns the distinct, sorted project paths recorded in the
+// manifest. It names the subprojects a root-level update cannot select.
+func projectPaths(m *types.Manifest) []string {
+	if m == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(m.Projects))
+	paths := make([]string, 0, len(m.Projects))
+	for _, p := range m.Projects {
+		clean := canonicalProjectRel(p.Path)
+		if p.Path == "" || clean == "." {
+			continue
+		}
+		if _, ok := seen[p.Path]; ok {
+			continue
+		}
+		seen[p.Path] = struct{}{}
+		paths = append(paths, p.Path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 // managedFileWriter marks a task that reconciles a file tracked in the
 // managed_files ledger. `update` and `drift --repair` replay only these tasks;
 // tasks without the marker are either side-effecting or write files outside the
@@ -383,8 +482,10 @@ func managedWriteTasks(plan []types.Task) []types.Task {
 // does not list a task the real run skips. Tasks without a known managed output
 // path are kept; the write path performs its own execution-level guard.
 // projectRel is the project's slash-separated path relative to the manifest
-// root ("." for the root project).
-func filterUnmanagedTasks(plan []types.Task, m *types.Manifest, projectRel string) []types.Task {
+// root ("." for the root project). update reports that the path stays unmanaged
+// and names the documented apply --force re-manage route, because update never
+// re-manages a detached path, not even with --force.
+func filterUnmanagedTasks(plan []types.Task, m *types.Manifest, projectRel string, update bool) []types.Task {
 	if m == nil || len(m.UnmanagedFiles) == 0 {
 		return plan
 	}
@@ -402,12 +503,25 @@ func filterUnmanagedTasks(plan []types.Task, m *types.Manifest, projectRel strin
 		}
 		key := filepath.ToSlash(filepath.Clean(path.Join(projectRel, w.ManagedOutputPath())))
 		if _, skipped := unmanaged[key]; skipped {
-			fmt.Fprintf(os.Stderr, "⚠️  Skipping unmanaged %s; use --force to manage it again\n", key)
+			fmt.Fprint(os.Stderr, unmanagedSkipMessage(key, update))
 			continue
 		}
 		out = append(out, t)
 	}
 	return out
+}
+
+// unmanagedSkipMessage is the plan-time warning for a detached path.
+// `apply` accepts --force, so it can point at that flag; `update` never
+// re-manages a detached path, so repeating "use --force" there is false advice.
+func unmanagedSkipMessage(key string, update bool) string {
+	if update {
+		return fmt.Sprintf(
+			"⚠️  Skipping unmanaged %s; it remains unmanaged. Re-manage it with 'scbake apply --force' using the same selector.\n",
+			key,
+		)
+	}
+	return fmt.Sprintf("⚠️  Skipping unmanaged %s; use --force to manage it again\n", key)
 }
 
 // prepareRunTransaction initializes the transaction manager for a run. A dry
@@ -745,9 +859,45 @@ func validateManifestFields(m *types.Manifest) error {
 			return err
 		}
 	}
+	if err := validateTemplateFields(m.Templates); err != nil {
+		return err
+	}
+	if err := validateMetadataFields(m.Metadata); err != nil {
+		return err
+	}
 	if cmd, ok := m.Metadata["test_command"]; ok {
 		if err := validateTestCommand(cmd); err != nil {
 			return fmt.Errorf("metadata test_command is invalid: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateTemplateFields rejects template names and paths that cannot be
+// persisted in the UTF-8-only scbake.toml format.
+func validateTemplateFields(templates []types.Template) error {
+	for i := range templates {
+		if !utf8.ValidString(templates[i].Name) {
+			return fmt.Errorf("template name %q is not valid UTF-8", templates[i].Name)
+		}
+		if !utf8.ValidString(templates[i].Path) {
+			return fmt.Errorf("template path %q is not valid UTF-8", templates[i].Path)
+		}
+	}
+	return nil
+}
+
+// validateMetadataFields rejects metadata keys and values that cannot be
+// persisted in the UTF-8-only scbake.toml format. A --set value with a raw
+// invalid byte would make the next load fail, so it is rejected before any
+// write.
+func validateMetadataFields(metadata map[string]string) error {
+	for k, v := range metadata {
+		if !utf8.ValidString(k) {
+			return fmt.Errorf("metadata key %q is not valid UTF-8", k)
+		}
+		if !utf8.ValidString(v) {
+			return fmt.Errorf("metadata %q is not valid UTF-8", k)
 		}
 	}
 	return nil
@@ -806,6 +956,22 @@ func validateProjectName(n string) error {
 		return errors.New("name must not be empty")
 	}
 	return validateIdentifier(n, "name")
+}
+
+// ValidateProjectDirectoryName checks the terminal-safety of a name used only
+// as a project directory (a template-only `new`). Language runs normalize names
+// before identifier validation, but a template-only run has no project record to
+// normalize, so it allows spaces and ordinary Unicode while rejecting control,
+// bidi, and invalid UTF-8. Callers must validate path form separately (the
+// command layer uses templateregistry.ValidateName).
+func ValidateProjectDirectoryName(name string) error {
+	if name == "" {
+		return errors.New("name must not be empty")
+	}
+	if util.Sanitize(name) != name {
+		return errors.New("name contains terminal control, format, or invalid UTF-8 characters")
+	}
+	return nil
 }
 
 // validateProjectLanguage enforces a safe identifier for the language field,
@@ -1176,13 +1342,15 @@ func containsTemplate(names []string, name string) bool {
 
 // projectNameSource returns the value a generated manifest's project name is
 // derived from. For `new`, the manifest path stays "." while the directory
-// being created supplies the name; a real run has changed into it, and a dry
-// run plans against the relative project name. Otherwise the name comes from
-// the resolved target, so a spelling such as "..", "./svc", or an absolute
-// path yields the target directory's base name instead of the literal argument.
+// being created supplies the name; rootPath is that directory's resolved
+// absolute path for both a real run and a dry run, so a reserved TargetPath
+// such as "." is never passed to the name sanitizer. Otherwise the name comes
+// from the resolved target, so a spelling such as "..", "./svc", or an
+// absolute path yields the target directory's base name instead of the literal
+// argument.
 func projectNameSource(rc RunContext, rootPath, projectPath string) string {
 	if rc.NewProject {
-		return rc.TargetPath
+		return rootPath
 	}
 	if projectPath == "." {
 		return rootPath
@@ -1261,11 +1429,10 @@ func handleLangFlag(rc RunContext, rootPath, projectPath string, plan *types.Pla
 
 	// For `new`, the manifest's project path stays "." (it is relative to the
 	// project root), but the project name must come from the directory being
-	// created. A real run has changed into that directory, so its TargetPath is
-	// "."; a dry run passes the relative project name instead. Otherwise the
-	// name comes from the resolved target path. Deriving the name from the
-	// resolved target in both cases keeps the preview and the generated manifest
-	// in agreement and avoids recording a spelling such as "..".
+	// created. projectNameSource uses rootPath for both a real run and a dry
+	// run, so the preview and the generated manifest agree and neither records a
+	// spelling such as "." or "..". Otherwise the name comes from the resolved
+	// target path.
 	projectName, err := util.SanitizeModuleName(projectNameSource(rc, rootPath, projectPath))
 	if err != nil {
 		return "", fmt.Errorf("could not determine project name: %w", err)

@@ -42,6 +42,9 @@ var newCmd = &cobra.Command{
 	Short: "Create a new standalone project",
 	Long:  `Creates a new directory and applies the specified language pack and templates.`,
 	Args:  cobra.ExactArgs(1),
+	PreRunE: func(*cobra.Command, []string) error {
+		return types.ValidateConflictStrategy(newConflictStrategyFlag)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		projectName := args[0]
 		dirCreated := false
@@ -60,7 +63,7 @@ var newCmd = &cobra.Command{
 			fmt.Println("✅ Dry run complete; no changes written.")
 			return nil
 		}
-		fmt.Printf("✅ Success! New project '%s' created.\n", projectName)
+		fmt.Printf("✅ Success! New project '%s' created.\n", util.Sanitize(projectName))
 		return nil
 	},
 }
@@ -70,27 +73,30 @@ var newCmd = &cobra.Command{
 // another scbake process has started using. If locking is unavailable for a
 // reason other than busy, cleanup proceeds as before.
 func cleanupFailedProject(projectName string) {
+	// The project name comes from the command line and may carry terminal
+	// controls, so escape it once for every message printed below.
+	displayName := util.Sanitize(projectName)
 	lock, err := transaction.AcquireRootLock(projectName, false)
 	if err == nil {
 		defer func() { _ = lock.Release() }()
-		fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
+		fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", displayName)
 		if err := removeFailedProject(projectName, lock.Release); err != nil {
-			fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", projectName, err)
+			fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", displayName, util.SanitizeError(err))
 		}
 		return
 	}
 	if errors.Is(err, transaction.ErrBusy) {
-		fmt.Fprintf(os.Stderr, "Not removing '%s': another scbake process is using it.\n", projectName)
+		fmt.Fprintf(os.Stderr, "Not removing '%s': another scbake process is using it.\n", displayName)
 		return
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "Locking '%s' for cleanup failed: %v\n", projectName, err)
-	fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
+	fmt.Fprintf(os.Stderr, "Locking '%s' for cleanup failed: %v\n", displayName, util.SanitizeError(err))
+	fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", displayName)
 	if removeErr := removeFailedProject(projectName, nil); removeErr != nil {
-		fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", projectName, removeErr)
+		fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", displayName, util.SanitizeError(removeErr))
 	}
 }
 
@@ -139,7 +145,7 @@ func validatePostGitSelection(projectName string, setVars map[string]string) err
 	if err := validateTargetAvailable(projectName); err != nil {
 		return err
 	}
-	if err := validateSelectionNames(); err != nil {
+	if err := validateSelectionNames(projectName); err != nil {
 		return err
 	}
 	return validateComplianceSelection(setVars)
@@ -147,9 +153,18 @@ func validatePostGitSelection(projectName string, setVars map[string]string) err
 
 // validateSelectionNames rejects an unknown language or template before the
 // compliance preflight can mask it.
-func validateSelectionNames() error {
+func validateSelectionNames(projectName string) error {
 	if err := core.ValidateLanguageName(newLangFlag); err != nil {
 		return err
+	}
+	// A template-only selection never reaches language planning, so validate
+	// the name here. Language runs keep the existing plan-time ordering and
+	// its cleanup-path output coverage.
+	if newLangFlag == "" {
+		if err := core.ValidateProjectDirectoryName(projectName); err != nil {
+			return fmt.Errorf("invalid project name %s: %v",
+				util.Sanitize(projectName), util.SanitizeError(err))
+		}
 	}
 	return core.ValidateTemplateNames(newWithFlag)
 }
@@ -217,7 +232,7 @@ func validateGitSelection(projectName string) error {
 	if !containsTemplate(newWithFlag, "git") {
 		return nil
 	}
-	return core.CheckGitPrerequisites(projectName)
+	return util.SanitizeError(core.CheckGitPrerequisites(projectName))
 }
 
 // newTargetPath returns the planning path for a new project. A real run has
@@ -303,22 +318,22 @@ func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporte
 	restoreWD := func() { _ = os.Chdir(cwd) }
 
 	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
-		return nil, fmt.Errorf("directory '%s' already exists", projectName)
+		return nil, fmt.Errorf("directory '%s' already exists", util.Sanitize(projectName))
 	}
 
-	step := "Creating directory: " + projectName
+	step := "Creating directory: " + util.Sanitize(projectName)
 	if dryRun {
-		step = "Would create directory: " + projectName
+		step = "Would create directory: " + util.Sanitize(projectName)
 	}
 	reporter.Step("📁", step)
 	if !dryRun {
 		if err := os.Mkdir(projectName, fileutil.DirPerms); err != nil {
-			return nil, err
+			return nil, util.SanitizeError(err)
 		}
 		*dirCreated = true
 
 		if err := os.Chdir(projectName); err != nil {
-			return nil, err
+			return nil, util.SanitizeError(err)
 		}
 
 		if err := os.WriteFile(fileutil.ManifestFileName, []byte(""), fileutil.PrivateFilePerms); err != nil {
@@ -369,7 +384,7 @@ func init() {
 	newCmd.Flags().StringVar(&newLangFlag, "lang", "", "Language project pack to apply")
 	newCmd.Flags().StringSliceVar(&newWithFlag, "with", []string{}, "Tooling template(s) to apply")
 	newCmd.Flags().StringArrayVar(&newSetFlag, "set", []string{}, "Set template variable (key=value, can be repeated)")
-	newCmd.Flags().StringVar(&newConflictStrategyFlag, "conflict-strategy", "fail", "Conflict resolution strategy: fail, overwrite, artifact, keep-local")
+	newCmd.Flags().StringVar(&newConflictStrategyFlag, "conflict-strategy", "fail", "Conflict resolution strategy: merge, fail, overwrite, artifact, keep-local")
 	newCmd.Flags().StringVar(&newLicenseFlag, "license", "", "SPDX License ID (required for compliance)")
 	newCmd.Flags().StringVar(&newCopyrightHolderFlag, "copyright-holder", "", "Copyright holder name (required for compliance)")
 }
