@@ -4,6 +4,23 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.16.24] - 2026-11-20
+
+### Bug Fixes
+
+- **cli:** Escape untrusted arguments at output boundaries
+- **cli:** Validate template-only project names early
+- **cli:** Escape registry name errors and cover C1
+- **cli:** Sanitize project-root lock error messages
+- **cli:** Preserve template-only names and escape lock errors
+- **cli:** Sanitize remaining preflight and list errors
+- **core:** Name invalid UTF-8 in project name errors
+
+### Testing
+
+- **cli:** Annotate the stream contract test for lint
+- **cli:** Make double-escape assertions effective
+
 ## [0.16.23] - 2026-11-19
 
 ### Bug Fixes
