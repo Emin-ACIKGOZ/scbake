@@ -14,6 +14,7 @@ import (
 	"scbake/internal/templateregistry"
 	"scbake/internal/types"
 	"scbake/internal/ui"
+	"scbake/internal/util"
 	"scbake/internal/util/fileutil"
 	"strings"
 
@@ -62,7 +63,7 @@ var newCmd = &cobra.Command{
 			fmt.Println("✅ Dry run complete; no changes written.")
 			return nil
 		}
-		fmt.Printf("✅ Success! New project '%s' created.\n", projectName)
+		fmt.Printf("✅ Success! New project '%s' created.\n", util.Sanitize(projectName))
 		return nil
 	},
 }
@@ -72,27 +73,30 @@ var newCmd = &cobra.Command{
 // another scbake process has started using. If locking is unavailable for a
 // reason other than busy, cleanup proceeds as before.
 func cleanupFailedProject(projectName string) {
+	// The project name comes from the command line and may carry terminal
+	// controls, so escape it once for every message printed below.
+	displayName := util.Sanitize(projectName)
 	lock, err := transaction.AcquireRootLock(projectName, false)
 	if err == nil {
 		defer func() { _ = lock.Release() }()
-		fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
+		fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", displayName)
 		if err := removeFailedProject(projectName, lock.Release); err != nil {
-			fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", projectName, err)
+			fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", displayName, util.SanitizeError(err))
 		}
 		return
 	}
 	if errors.Is(err, transaction.ErrBusy) {
-		fmt.Fprintf(os.Stderr, "Not removing '%s': another scbake process is using it.\n", projectName)
+		fmt.Fprintf(os.Stderr, "Not removing '%s': another scbake process is using it.\n", displayName)
 		return
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "Locking '%s' for cleanup failed: %v\n", projectName, err)
-	fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", projectName)
+	fmt.Fprintf(os.Stderr, "Locking '%s' for cleanup failed: %v\n", displayName, util.SanitizeError(err))
+	fmt.Fprintf(os.Stderr, "Cleaning up failed project directory '%s'...\n", displayName)
 	if removeErr := removeFailedProject(projectName, nil); removeErr != nil {
-		fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", projectName, removeErr)
+		fmt.Fprintf(os.Stderr, "Cleanup failed for '%s': %v\n", displayName, util.SanitizeError(removeErr))
 	}
 }
 
@@ -127,6 +131,26 @@ func removeFailedProject(projectName string, release func() error) error {
 	return nil
 }
 
+// validateNewTarget checks the selection and the project name before `new`
+// mutates the filesystem. Language runs already rejected an unsafe name in the
+// planner, but a template-only selection skipped that validation and could
+// create a directory with control or bidi characters.
+func validateNewTarget(projectName string) error {
+	if newLangFlag == "" && len(newWithFlag) == 0 {
+		return core.ErrNoSelection
+	}
+	// A template-only selection never reaches language planning, so validate
+	// the name here. Language runs keep the existing plan-time ordering and
+	// its cleanup-path output coverage.
+	if newLangFlag == "" {
+		if err := core.ValidateProjectDirectoryName(projectName); err != nil {
+			return fmt.Errorf("invalid project name %s: %v",
+				util.Sanitize(projectName), util.SanitizeError(err))
+		}
+	}
+	return nil
+}
+
 // validateNewSelection performs every flag and override-directory check that
 // must fail before `new` mutates the filesystem (SCB-012). It returns the
 // parsed --set values and the resolved template override directory.
@@ -138,8 +162,8 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	if err := core.ValidateSetKeys(newWithFlag, newLangFlag, setVars); err != nil {
 		return nil, "", err
 	}
-	if newLangFlag == "" && len(newWithFlag) == 0 {
-		return nil, "", core.ErrNoSelection
+	if err := validateNewTarget(projectName); err != nil {
+		return nil, "", err
 	}
 	// Check the language toolchain before the directory exists, so a missing
 	// binary (e.g. go) does not leave a directory to be cleaned up. A dry run
@@ -166,7 +190,7 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	// tree needs no identity because the template will be skipped.
 	if containsGitTemplate(newWithFlag) {
 		if err := core.CheckGitPrerequisites(projectName); err != nil {
-			return nil, "", err
+			return nil, "", util.SanitizeError(err)
 		}
 	}
 	return setVars, resolved, nil
@@ -255,22 +279,22 @@ func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporte
 	restoreWD := func() { _ = os.Chdir(cwd) }
 
 	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
-		return nil, fmt.Errorf("directory '%s' already exists", projectName)
+		return nil, fmt.Errorf("directory '%s' already exists", util.Sanitize(projectName))
 	}
 
-	step := "Creating directory: " + projectName
+	step := "Creating directory: " + util.Sanitize(projectName)
 	if dryRun {
-		step = "Would create directory: " + projectName
+		step = "Would create directory: " + util.Sanitize(projectName)
 	}
 	reporter.Step("📁", step)
 	if !dryRun {
 		if err := os.Mkdir(projectName, fileutil.DirPerms); err != nil {
-			return nil, err
+			return nil, util.SanitizeError(err)
 		}
 		*dirCreated = true
 
 		if err := os.Chdir(projectName); err != nil {
-			return nil, err
+			return nil, util.SanitizeError(err)
 		}
 
 		if err := os.WriteFile(fileutil.ManifestFileName, []byte(""), fileutil.PrivateFilePerms); err != nil {

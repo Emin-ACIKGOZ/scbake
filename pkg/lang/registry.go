@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"scbake/internal/types"
+	"scbake/internal/util"
 	golang "scbake/pkg/lang/go"
 	"scbake/pkg/lang/spring"
 	"scbake/pkg/lang/svelte"
@@ -58,7 +59,7 @@ func GetHandler(langName string) (Handler, error) {
 	defer handlersLock.RUnlock()
 	handler, ok := handlers[langName]
 	if !ok {
-		return nil, fmt.Errorf("unknown language: %s", langName)
+		return nil, fmt.Errorf("unknown language: %s", util.Sanitize(langName))
 	}
 	return handler, nil
 }
@@ -72,7 +73,7 @@ func GetSchema(langName string) (*embed.FS, string, error) {
 
 	h, ok := handlers[langName]
 	if !ok {
-		return nil, "", fmt.Errorf("unknown language: %s", langName)
+		return nil, "", fmt.Errorf("unknown language: %s", util.Sanitize(langName))
 	}
 
 	sp, ok := h.(SchemaProvider)

@@ -593,3 +593,100 @@ func assertUnmanageRepeatSanitized(t *testing.T, out string) {
 	}
 	assertSanitizedManageOutput(t, "repeat unmanage", out)
 }
+
+// unsafeProjectNameVector is a command-line project name that passes
+// templateregistry.ValidateName (a path-segment check) but is rejected later by
+// core's identifier validation, after `new` has printed progress and started
+// cleanup. unsafe is the rune that must never reach a stream raw.
+type unsafeProjectNameVector struct {
+	name    string
+	raw     string
+	escaped string
+	unsafe  rune
+}
+
+var unsafeProjectNameVectors = []unsafeProjectNameVector{
+	{name: "right-to-left override", raw: "demo\u202eevil", escaped: `demo\u202eevil`, unsafe: '\u202e'},
+	{name: "line separator", raw: "demo\u2028evil", escaped: `demo\u2028evil`, unsafe: '\u2028'},
+	{name: "bidi isolate", raw: "demo\u2066evil", escaped: `demo\u2066evil`, unsafe: '\u2066'},
+	{name: "C1 control", raw: "demo\u009bevil", escaped: `demo\x9bevil`, unsafe: '\u009b'},
+}
+
+// assertUnsafeNameEscapedOnce rejects a raw format control or a double-escaped
+// rendering (two backslashes before the escape). The latter would mean the
+// value passed through Sanitize more than once.
+func assertUnsafeNameEscapedOnce(t *testing.T, label, text string, tc unsafeProjectNameVector) {
+	t.Helper()
+	if strings.ContainsRune(text, tc.unsafe) {
+		t.Errorf("%s emitted raw %U; output:\n%q", label, tc.unsafe, text)
+	}
+	escapedAt := strings.IndexByte(tc.escaped, '\\')
+	if escapedAt < 0 {
+		t.Fatalf("test vector %q has no escape", tc.escaped)
+	}
+	if strings.Contains(text, "\\"+tc.escaped[escapedAt:]) {
+		t.Errorf("%s double-escaped the project name; output:\n%q", label, text)
+	}
+}
+
+// TestNewEscapesUnsafeProjectName is the regression test for #260: a project
+// name with a bidi/line format control used to be printed raw in the progress
+// line and the cleanup message before plan-time validation rejected it.
+func TestNewEscapesUnsafeProjectName(t *testing.T) {
+	for _, tc := range unsafeProjectNameVectors {
+		t.Run(tc.name, func(t *testing.T) {
+			resetFlags()
+			t.Cleanup(resetFlags)
+
+			root := t.TempDir()
+			t.Chdir(root)
+
+			var runErr error
+			stdout, stderr := runWithCapturedOutput(t, func() {
+				runErr = executeCLI("new", tc.raw, "--lang", "go")
+			})
+			if runErr == nil {
+				t.Fatalf("new %q = nil, want the plan-time name rejection", tc.raw)
+			}
+			if !strings.Contains(stdout, "Creating directory: "+tc.escaped) {
+				t.Errorf("progress line did not escape the project name; stdout:\n%q", stdout)
+			}
+			if !strings.Contains(stderr, "Cleaning up failed project directory '"+tc.escaped+"'...") {
+				t.Errorf("cleanup line did not escape the project name; stderr:\n%q", stderr)
+			}
+			assertUnsafeNameEscapedOnce(t, "stdout", stdout, tc)
+			assertUnsafeNameEscapedOnce(t, "stderr", stderr, tc)
+			if _, err := os.Stat(filepath.Join(root, tc.raw)); !os.IsNotExist(err) {
+				t.Errorf("failed new left the project directory behind (stat err: %v)", err)
+			}
+		})
+	}
+}
+
+// TestNewExistingDirectoryEscapesProjectName covers the early error path: a
+// directory that already exists is named in an error printed by the command
+// layer, so the CLI-provided name must be escaped there too.
+func TestNewExistingDirectoryEscapesProjectName(t *testing.T) {
+	tc := unsafeProjectNameVectors[0]
+	resetFlags()
+	t.Cleanup(resetFlags)
+
+	root := t.TempDir()
+	t.Chdir(root)
+	if err := os.Mkdir(filepath.Join(root, tc.raw), fileutil.DirPerms); err != nil {
+		t.Fatalf("creating existing directory: %v", err)
+	}
+
+	var runErr error
+	stdout, stderr := runWithCapturedOutput(t, func() {
+		runErr = executeCLI("new", tc.raw, "--lang", "go")
+	})
+	if runErr == nil {
+		t.Fatalf("new %q on an existing directory = nil, want an error", tc.raw)
+	}
+	if !strings.Contains(stderr, "directory '"+tc.escaped+"' already exists") {
+		t.Errorf("existing-directory error did not escape the project name; stderr:\n%q", stderr)
+	}
+	assertUnsafeNameEscapedOnce(t, "stdout", stdout, tc)
+	assertUnsafeNameEscapedOnce(t, "stderr", stderr, tc)
+}

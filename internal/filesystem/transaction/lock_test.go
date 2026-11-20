@@ -717,3 +717,35 @@ func TestRemoveBootstrappedRootReleasesBeforeRename(t *testing.T) {
 		}
 	}
 }
+
+// TestAcquireRootLock_ErrorsEscapeControlPaths forces a lock-directory failure
+// on a project path containing a bidi control and requires the displayed error
+// to escape it, including text from the wrapped *os.PathError.
+func TestAcquireRootLock_ErrorsEscapeControlPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permissions are required")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced for root")
+	}
+	parent := t.TempDir()
+	root := filepath.Join(parent, "proj\u202eevil")
+	if err := os.Mkdir(root, 0o750); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	if err := os.Chmod(root, 0o500); err != nil { //nolint:gosec // deliberately remove write permission
+		t.Fatalf("chmod root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o750) }) //nolint:gosec // restore test directory permissions
+
+	_, err := AcquireRootLock(root, false)
+	if err == nil {
+		t.Fatal("AcquireRootLock succeeded on a read-only project root")
+	}
+	if strings.ContainsRune(err.Error(), '\u202e') {
+		t.Errorf("lock error leaked a raw bidi control: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), `\u202e`) {
+		t.Errorf("lock error did not contain the escaped path: %q", err.Error())
+	}
+}
