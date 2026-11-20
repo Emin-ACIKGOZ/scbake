@@ -4,6 +4,28 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.16.25] - 2026-11-20
+
+### Bug Fixes
+
+- **cli:** Fail list projects when no manifest exists
+- **cli:** Keep the monorepo hint root-accurate
+- **cli:** Quote paths and scope the monorepo update hint
+- **cli:** Clean root-equivalent hint paths and quoting
+- **cli:** Prevent shell injection in monorepo hint
+- **cli:** Keep legacy relative update entries inert
+- **cli:** Separate the hint command from flag-like paths
+- **cli:** State the ancestor-search condition in the hint
+
+### Refactor
+
+- **manifest:** Share the manifest existence check
+
+### Testing
+
+- **cli:** Cover control characters in the monorepo hint
+- **cli:** Isolate absent-manifest fixture from ancestors
+
 ## [0.16.24] - 2026-11-20
 
 ### Bug Fixes
