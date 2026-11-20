@@ -46,6 +46,10 @@ const legacyRootTemplate = "root-templates"
 // initial commit.
 const gitTemplateName = "git"
 
+// complianceTemplateName is the tooling template whose LICENSE task needs
+// explicit license metadata.
+const complianceTemplateName = "compliance"
+
 // RunContext holds the flags and arguments for a single execution run.
 type RunContext struct {
 	LangFlag   string
@@ -103,13 +107,19 @@ type manifestChanges struct {
 
 // RunApply orchestrates the template application process.
 func RunApply(rc RunContext, reporter types.Reporter) error {
-	// Git prerequisites are checked before the root lock so a missing identity
-	// or a skip decision fails before lock acquisition creates .scbake. The
-	// check is read-only and needs only the target path.
+	// The Git preflight is read-only and runs before the lock so a missing
+	// identity or skip decision fails without creating .scbake. Compliance
+	// metadata is decided inside the lock so a busy run keeps ErrBusy
+	// precedence and the metadata read cannot race a writer.
 	if err := preflightGit(rc); err != nil {
 		return err
 	}
 	return withRootLock(rc, func() error {
+		// Decide compliance metadata under the root lock so a busy run keeps
+		// ErrBusy precedence and the metadata read cannot race a writer.
+		if err := preflightCompliance(rc); err != nil {
+			return err
+		}
 		return runApply(rc, reporter)
 	})
 }
@@ -251,6 +261,9 @@ func runUpdateWith(rc RunContext, reporter types.Reporter, load manifestLoader) 
 	if err != nil {
 		return err
 	}
+	if err := checkUpdatePreconditions(m, rootPath, lang, withTemplates, relPath); err != nil {
+		return err
+	}
 	if lang == "" && len(withTemplates) == 0 {
 		if relPath == "." {
 			if err := monorepoUpdateHint(m, rc.ManifestPathArg); err != nil {
@@ -266,6 +279,31 @@ func runUpdateWith(rc RunContext, reporter types.Reporter, load manifestLoader) 
 	rc.Update = true
 
 	return runApplyWithManifest(rc, reporter, m, rootPath)
+}
+
+// checkUpdatePreconditions reports a pending transaction before checking
+// compliance metadata, so recovery state is never masked by a flag error.
+func checkUpdatePreconditions(m *types.Manifest, rootPath, lang string, withTemplates []string, relPath string) error {
+	if err := transaction.CheckPending(rootPath); err != nil {
+		return err
+	}
+	if err := ValidateLanguageName(lang); err != nil {
+		return err
+	}
+	if err := ValidateTemplateNames(withTemplates); err != nil {
+		return err
+	}
+	if !containsTemplate(withTemplates, complianceTemplateName) ||
+		listsUnmanagedKey(m, path.Join(relPath, "LICENSE")) {
+		return nil
+	}
+	if err := CheckCompliancePrerequisites(m.Metadata["license"], m.Metadata["copyright_holder"]); err != nil {
+		return fmt.Errorf(
+			"compliance is recorded for %q but its metadata is missing; from the affected "+
+				"project directory run 'scbake apply --with compliance --license <id> "+
+				"--copyright-holder <name> --allow-ancestor-search': %w", relPath, err)
+	}
+	return nil
 }
 
 // withRootLock serializes mutating runs against the same project root. Only
@@ -537,6 +575,37 @@ func taskContextWithTimeout(rc RunContext) (context.Context, context.CancelFunc)
 	return context.WithTimeout(parent, defaultTimeout)
 }
 
+// applyContextMetadata merges the flags and --set values into the future
+// manifest with one precedence rule shared with preflight.
+func applyContextMetadata(m *types.Manifest, rc RunContext) {
+	if rc.License == "" && rc.CopyrightHolder == "" && len(rc.SetVars) == 0 {
+		return
+	}
+	if m.Metadata == nil {
+		m.Metadata = make(map[string]string)
+	}
+	license, holder := ComplianceMetadata(rc.License, rc.CopyrightHolder, rc.SetVars)
+	// An explicit --set value, including an empty one, is authoritative; without
+	// this the empty override would silently keep the recorded value.
+	setMetadata := func(key, value, flag string) {
+		if flag != "" {
+			m.Metadata[key] = value
+			return
+		}
+		if _, ok := rc.SetVars[key]; ok {
+			m.Metadata[key] = value
+		}
+	}
+	setMetadata("license", license, rc.License)
+	setMetadata("copyright_holder", holder, rc.CopyrightHolder)
+	for k, v := range rc.SetVars {
+		if k == "license" || k == "copyright_holder" {
+			continue
+		}
+		m.Metadata[k] = v
+	}
+}
+
 // buildTaskContext constructs future manifest state and validates template schemas against metadata.
 func buildTaskContext(
 	rc RunContext,
@@ -548,21 +617,7 @@ func buildTaskContext(
 	// Deep copy manifest to ensure modifications don't affect original until finalization
 	futureManifest := m.DeepCopy()
 
-	// Update metadata from context if provided
-	if rc.License != "" || rc.CopyrightHolder != "" || len(rc.SetVars) > 0 {
-		if futureManifest.Metadata == nil {
-			futureManifest.Metadata = make(map[string]string)
-		}
-		if rc.License != "" {
-			futureManifest.Metadata["license"] = rc.License
-		}
-		if rc.CopyrightHolder != "" {
-			futureManifest.Metadata["copyright_holder"] = rc.CopyrightHolder
-		}
-		for k, v := range rc.SetVars {
-			futureManifest.Metadata[k] = v
-		}
-	}
+	applyContextMetadata(futureManifest, rc)
 
 	applyManifestChanges(futureManifest, changes)
 
@@ -1124,7 +1179,17 @@ func buildPlan(rc RunContext, rootPath, projectPath string) (*types.Plan, string
 	return plan, commitMessage, changes, nil
 }
 
-// CheckLangPrerequisites validates that required binaries are available for the language.
+// ValidateLanguageName rejects an unknown language pack before other
+// flag-specific preflight checks, keeping diagnostics predictable.
+func ValidateLanguageName(name string) error {
+	if name == "" {
+		return nil
+	}
+	_, err := lang.GetHandler(name)
+	return err
+}
+
+// CheckLangPrerequisites validates the required binaries for a language pack.
 func CheckLangPrerequisites(langFlag string) error {
 	switch langFlag {
 	case "go":
@@ -1161,6 +1226,108 @@ func preflightGit(rc RunContext) error {
 	}
 	// One shared skip/identity decision with `new` validation and the handler.
 	return CheckGitPrerequisites(rc.TargetPath)
+}
+
+// ComplianceMetadata returns the license and copyright holder a compliance run
+// will record. --set values override the dedicated flags, matching the merge
+// buildTaskContext performs.
+func ComplianceMetadata(license, copyrightHolder string, setVars map[string]string) (string, string) {
+	if value, ok := setVars["license"]; ok {
+		license = value
+	}
+	if value, ok := setVars["copyright_holder"]; ok {
+		copyrightHolder = value
+	}
+	return license, copyrightHolder
+}
+
+// CheckCompliancePrerequisites verifies the metadata the compliance template
+// needs before the caller mutates the filesystem. The error names the CLI flags
+// rather than the manifest fields so the fix is actionable.
+func CheckCompliancePrerequisites(license, copyrightHolder string) error {
+	if license != "" && copyrightHolder != "" {
+		return nil
+	}
+	return compliance.ErrMissingMetadata
+}
+
+// preflightCompliance enforces the compliance template's required metadata
+// inside the root lock, before any plan or task write. `apply` may reuse
+// metadata recorded by an earlier compliance run; the manifest is read here only
+// to decide that, while runApply performs the authoritative load under the same
+// lock. `update` reads recorded metadata and never takes these flags, so it is
+// exempt.
+func preflightCompliance(rc RunContext) error {
+	if rc.Update || !containsTemplate(rc.WithFlag, complianceTemplateName) {
+		return nil
+	}
+	license, holder := ComplianceMetadata(rc.License, rc.CopyrightHolder, rc.SetVars)
+	_, setLicense := rc.SetVars["license"]
+	_, setHolder := rc.SetVars["copyright_holder"]
+
+	m, root, err := loadManifestForRun(rc)
+	if err != nil {
+		return err
+	}
+	// A dead journal is an urgent recovery state and must not be masked by an
+	// ordinary flag/toolchain/metadata error.
+	if err := transaction.CheckPending(root); err != nil {
+		return err
+	}
+	if !rc.DryRun {
+		if err := CheckLangPrerequisites(rc.LangFlag); err != nil {
+			return err
+		}
+	}
+	if err := validateApplySelection(rc); err != nil {
+		return err
+	}
+	// A detached LICENSE will be filtered from the plan, so its metadata is not
+	// required. --force re-manages the file, so keep the requirement then.
+	if !rc.Force && hasUnmanagedLicense(m, root, rc.TargetPath) {
+		return nil
+	}
+	license = recordedOr(license, setLicense, m.Metadata, "license")
+	holder = recordedOr(holder, setHolder, m.Metadata, "copyright_holder")
+	return CheckCompliancePrerequisites(license, holder)
+}
+
+// hasUnmanagedLicense reports whether the target project's LICENSE is detached.
+func hasUnmanagedLicense(m *types.Manifest, root, target string) bool {
+	rel, err := repoRelativeProjectPath(root, target)
+	if err != nil {
+		return false
+	}
+	return listsUnmanagedKey(m, path.Join(rel, "LICENSE"))
+}
+
+// ValidateTemplateNames rejects unknown template selections. It is shared by
+// new and apply so a compliance preflight cannot mask a more fundamental error.
+func ValidateTemplateNames(names []string) error {
+	for _, name := range names {
+		if _, err := templates.GetHandler(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateApplySelection rejects an unknown language or template before the
+// compliance preflight can mask a more fundamental input error.
+func validateApplySelection(rc RunContext) error {
+	if err := ValidateLanguageName(rc.LangFlag); err != nil {
+		return err
+	}
+	return ValidateTemplateNames(rc.WithFlag)
+}
+
+// recordedOr falls back to recorded metadata unless the user explicitly set the
+// key (even to an empty value).
+func recordedOr(value string, explicitlySet bool, metadata map[string]string, key string) string {
+	if value == "" && !explicitlySet {
+		return metadata[key]
+	}
+	return value
 }
 
 // containsTemplate reports whether name appears in the template selection.

@@ -131,13 +131,31 @@ func removeFailedProject(projectName string, release func() error) error {
 	return nil
 }
 
-// validateNewTarget checks the selection and the project name before `new`
-// mutates the filesystem. Language runs already rejected an unsafe name in the
-// planner, but a template-only selection skipped that validation and could
-// create a directory with control or bidi characters.
-func validateNewTarget(projectName string) error {
+// requireNewSelection rejects a new run with neither a language nor a template.
+func requireNewSelection() error {
 	if newLangFlag == "" && len(newWithFlag) == 0 {
 		return core.ErrNoSelection
+	}
+	return nil
+}
+
+// validatePostGitSelection keeps the baseline ordering for an impossible
+// target, then validates the selection and compliance metadata before bootstrap.
+func validatePostGitSelection(projectName string, setVars map[string]string) error {
+	if err := validateTargetAvailable(projectName); err != nil {
+		return err
+	}
+	if err := validateSelectionNames(projectName); err != nil {
+		return err
+	}
+	return validateComplianceSelection(setVars)
+}
+
+// validateSelectionNames rejects an unknown language or template before the
+// compliance preflight can mask it.
+func validateSelectionNames(projectName string) error {
+	if err := core.ValidateLanguageName(newLangFlag); err != nil {
+		return err
 	}
 	// A template-only selection never reaches language planning, so validate
 	// the name here. Language runs keep the existing plan-time ordering and
@@ -147,6 +165,15 @@ func validateNewTarget(projectName string) error {
 			return fmt.Errorf("invalid project name %s: %v",
 				util.Sanitize(projectName), util.SanitizeError(err))
 		}
+	}
+	return core.ValidateTemplateNames(newWithFlag)
+}
+
+// validateTargetAvailable rejects an existing target, preserving the baseline
+// error precedence for an impossible project.
+func validateTargetAvailable(projectName string) error {
+	if _, err := os.Stat(projectName); !os.IsNotExist(err) {
+		return fmt.Errorf("directory '%s' already exists", util.Sanitize(projectName))
 	}
 	return nil
 }
@@ -162,7 +189,7 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	if err := core.ValidateSetKeys(newWithFlag, newLangFlag, setVars); err != nil {
 		return nil, "", err
 	}
-	if err := validateNewTarget(projectName); err != nil {
+	if err := requireNewSelection(); err != nil {
 		return nil, "", err
 	}
 	// Check the language toolchain before the directory exists, so a missing
@@ -188,12 +215,24 @@ func validateNewSelection(projectName string) (map[string]string, string, error)
 	// nearest existing ancestor until then) rather than "." so validation and
 	// the post-chdir apply share one skip/identity decision. An existing work
 	// tree needs no identity because the template will be skipped.
-	if containsGitTemplate(newWithFlag) {
-		if err := core.CheckGitPrerequisites(projectName); err != nil {
-			return nil, "", util.SanitizeError(err)
-		}
+	if err := validateGitSelection(projectName); err != nil {
+		return nil, "", err
+	}
+	// Preserve the baseline existing-directory precedence: this check used to
+	// run in bootstrap after the toolchain, template-dir, and Git preflights.
+	if err := validatePostGitSelection(projectName, setVars); err != nil {
+		return nil, "", err
 	}
 	return setVars, resolved, nil
+}
+
+// validateGitSelection checks the git template's prerequisite identity before
+// `new` writes anything, including in a dry run.
+func validateGitSelection(projectName string) error {
+	if !containsTemplate(newWithFlag, "git") {
+		return nil
+	}
+	return util.SanitizeError(core.CheckGitPrerequisites(projectName))
 }
 
 // newTargetPath returns the planning path for a new project. A real run has
@@ -307,10 +346,20 @@ func bootstrapProjectDir(projectName string, dryRun bool, reporter types.Reporte
 
 const maxKeyValueParts = 2
 
-// containsGitTemplate reports whether the selection includes the git template.
-func containsGitTemplate(names []string) bool {
-	for _, name := range names {
-		if name == "git" {
+// validateComplianceSelection checks the compliance template's required
+// metadata before `new` creates the project directory.
+func validateComplianceSelection(setVars map[string]string) error {
+	if !containsTemplate(newWithFlag, "compliance") {
+		return nil
+	}
+	license, copyrightHolder := core.ComplianceMetadata(newLicenseFlag, newCopyrightHolderFlag, setVars)
+	return core.CheckCompliancePrerequisites(license, copyrightHolder)
+}
+
+// containsTemplate reports whether name appears in the template selection.
+func containsTemplate(names []string, name string) bool {
+	for _, candidate := range names {
+		if candidate == name {
 			return true
 		}
 	}

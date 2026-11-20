@@ -200,9 +200,11 @@ func TestDryRunParityComplianceMissingMetadata(t *testing.T) {
 	realDir := t.TempDir()
 	realOut, realErr := dryRunRunIn(t, realDir, realArgs...)
 
-	dryRunAssertSameFailure(t, dryOut, dryErr, realOut, realErr, "Generate LICENSE file")
-	if !strings.Contains(dryRunErrorLine(dryOut), "copyright_holder") {
-		t.Errorf("dry-run error = %q, want the compliance metadata error", dryRunErrorLine(dryOut))
+	dryRunAssertSameFailure(t, dryOut, dryErr, realOut, realErr, "")
+	for _, flag := range []string{"--license", "--copyright-holder"} {
+		if !strings.Contains(dryRunErrorLine(dryOut), flag) {
+			t.Errorf("dry-run error = %q, want it to name %s", dryRunErrorLine(dryOut), flag)
+		}
 	}
 }
 
@@ -623,7 +625,7 @@ func TestDryRunNewFailureClassParity(t *testing.T) {
 		realDir := t.TempDir()
 		realOut, realErr := dryRunRunIn(t, realDir, "new", "p", "--with", "compliance", "--copyright-holder", "Test Corp")
 
-		dryRunAssertSameFailure(t, dryOut, dryErr, realOut, realErr, "Generate LICENSE file")
+		dryRunAssertSameFailure(t, dryOut, dryErr, realOut, realErr, "")
 		if _, err := os.Stat(filepath.Join(realDir, "p")); !os.IsNotExist(err) {
 			t.Errorf("real failed run left the project directory behind (stat err: %v)", err)
 		}
@@ -687,7 +689,10 @@ func TestDryRunApplySuccessParity(t *testing.T) {
 // modes keeps the same description and cause. maven_linter and compliance are
 // both selected; the Maven injection task runs first.
 func TestDryRunSameFirstFailingTask(t *testing.T) {
-	args := []string{"apply", "--with", "maven_linter,compliance", "--conflict-strategy=fail"}
+	args := []string{
+		"apply", "--with", "maven_linter,compliance", "--conflict-strategy=fail",
+		"--license", "MIT", "--copyright-holder", "Test Corp",
+	}
 	dryDir := t.TempDir()
 	dryOut, dryErr := dryRunRunIn(t, dryDir, append(append([]string{}, args...), "--dry-run")...)
 
