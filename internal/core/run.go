@@ -21,6 +21,7 @@ import (
 	"scbake/pkg/tasks"
 	"scbake/pkg/templates"
 	"scbake/pkg/templates/compliance"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -251,6 +252,11 @@ func runUpdateWith(rc RunContext, reporter types.Reporter, load manifestLoader) 
 		return err
 	}
 	if lang == "" && len(withTemplates) == 0 {
+		if relPath == "." {
+			if err := monorepoUpdateHint(m, rc.ManifestPathArg); err != nil {
+				return err
+			}
+		}
 		return fmt.Errorf("%s records no templates for %q; nothing to update", fileutil.ManifestFileName, rc.ManifestPathArg)
 	}
 
@@ -320,6 +326,80 @@ func resolveUpdateSelection(m *types.Manifest, rootPath, targetPath string) (str
 		}
 	}
 	return lang, deduplicateTemplates(with), rel, nil
+}
+
+// monorepoUpdateHint reports the recorded subprojects when a root update has no
+// root templates. Only validated paths are placed in the suggested command;
+// invalid recorded paths are listed as ignored so manifest data cannot inject a
+// shell command.
+func monorepoUpdateHint(m *types.Manifest, targetArg string) error {
+	paths := projectPaths(m)
+	if len(paths) == 0 {
+		return nil
+	}
+	var valid, invalid []string
+	for _, p := range paths {
+		// Only suggest entries the selection logic can match exactly. Non-clean
+		// relative paths are deliberately inert legacy entries; cleaning them
+		// for a suggestion would point at a directory the manifest does not name.
+		if canonicalProjectRel(p) != p || validateProjectPath(p) != nil {
+			invalid = append(invalid, shellQuote(util.Sanitize(p)))
+			continue
+		}
+		valid = append(valid, shellQuote(p))
+	}
+	msg := fmt.Sprintf("%s records no templates for %q; this is a monorepo root",
+		fileutil.ManifestFileName, targetArg)
+	if len(valid) > 0 {
+		msg += fmt.Sprintf(". Run 'scbake update -- <project>' from the manifest root "+
+			"(add --allow-ancestor-search before -- outside a Git work tree) for one of: %s",
+			strings.Join(valid, ", "))
+	}
+	if len(invalid) > 0 {
+		msg += ". Ambiguous or invalid recorded paths are ignored: " + strings.Join(invalid, ", ")
+	}
+	return errors.New(msg)
+}
+
+// canonicalProjectRel returns the cleaned, slash-separated project path, or ""
+// for an empty entry. It is used for hint classification and output only;
+// update selection deliberately remains exact-match so legacy relative entries
+// stay inert.
+func canonicalProjectRel(p string) string {
+	if p == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(p))
+}
+
+// shellQuote renders path as one POSIX single-quoted shell word. Validated
+// project paths cannot contain a quote, but escaping keeps the helper safe if a
+// caller changes.
+func shellQuote(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+}
+
+// projectPaths returns the distinct, sorted project paths recorded in the
+// manifest. It names the subprojects a root-level update cannot select.
+func projectPaths(m *types.Manifest) []string {
+	if m == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(m.Projects))
+	paths := make([]string, 0, len(m.Projects))
+	for _, p := range m.Projects {
+		clean := canonicalProjectRel(p.Path)
+		if p.Path == "" || clean == "." {
+			continue
+		}
+		if _, ok := seen[p.Path]; ok {
+			continue
+		}
+		seen[p.Path] = struct{}{}
+		paths = append(paths, p.Path)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // managedFileWriter marks a task that reconciles a file tracked in the

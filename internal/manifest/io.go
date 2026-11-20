@@ -132,6 +132,23 @@ func gitBoundedRoot(gitRoot, manifestRoot string) string {
 	return gitRoot
 }
 
+// Exists reports whether rootPath contains a scbake.toml. LoadWithOptions
+// cannot distinguish an absent file from a present empty manifest, so callers
+// that need that distinction use this check at the discovered root.
+func Exists(rootPath string) (bool, error) {
+	manifestPath, err := fileutil.SafePath(rootPath, fileutil.ManifestFileName)
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(manifestPath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // Load reads scbake.toml from the project root discovered from startPath.
 // If not found, it returns a new, empty manifest.
 // It returns the Manifest and the discovered Root Path.
