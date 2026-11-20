@@ -4,6 +4,33 @@ All notable changes to scbake are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.16.26] - 2026-11-20
+
+### Bug Fixes
+
+- **core:** Preflight compliance metadata before writes
+- **core:** Preserve error order and empty set overrides
+- **cli:** Reject unknown language before compliance
+- **core:** Point update compliance errors at apply
+- **core:** Scope compliance remediation to the project
+- **core:** Keep update viable after unmanaging LICENSE
+- **core:** Use the project-scoped LICENSE key in update
+- **core:** Mirror unmanaged LICENSE handling in apply
+- **core:** Keep unmanaged LICENSE skip under empty overrides
+- **core:** Load manifest before apply selection checks
+- **core:** Keep compliance checks under the root lock
+- **core:** Order apply toolchain check before compliance
+- **core:** Load manifest before the apply toolchain check
+- **core:** Report pending transactions before compliance
+- **core:** Validate recorded update selections early
+
+### Refactor
+
+- **cmd:** Extract new preflight selection helpers
+- **core:** Share metadata precedence with preflight
+- **core:** Share the compliance metadata error
+- **core:** Extract update preconditions for lint
+
 ## [0.16.25] - 2026-11-20
 
 ### Bug Fixes
