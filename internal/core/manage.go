@@ -236,7 +236,14 @@ func resolveManagedKey(root, target, arg string) (string, error) {
 		return "", fmt.Errorf("cannot make path %q relative to %q: %w",
 			arg, root, util.SanitizeError(err))
 	}
-	if rel == "." || rel == ".." || filepath.IsAbs(rel) ||
+	// The project root is contained, not an escape, but it is also not a
+	// managed file: classify it explicitly so accept/unmanage do not report a
+	// misleading "outside the project root" error and never gain bulk meaning.
+	if rel == "." {
+		return "", fmt.Errorf("path %q is the project root %s; a managed file path is required",
+			arg, util.Sanitize(root))
+	}
+	if rel == ".." || filepath.IsAbs(rel) ||
 		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q is outside the project root %s", arg, util.Sanitize(root))
 	}

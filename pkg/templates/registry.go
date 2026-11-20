@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"scbake/internal/types"
+	"scbake/internal/util"
 	cighub "scbake/pkg/templates/ci_github"
 	"scbake/pkg/templates/community"
 	"scbake/pkg/templates/compliance"
@@ -75,7 +76,7 @@ func GetHandler(tmplName string) (Handler, error) {
 	defer handlersLock.RUnlock()
 	handler, ok := handlers[tmplName]
 	if !ok {
-		return nil, fmt.Errorf("unknown template: %s", tmplName)
+		return nil, fmt.Errorf("unknown template: %s", util.Sanitize(tmplName))
 	}
 	return handler, nil
 }
@@ -89,7 +90,7 @@ func GetSchema(tmplName string) (*embed.FS, string, error) {
 
 	h, ok := handlers[tmplName]
 	if !ok {
-		return nil, "", fmt.Errorf("unknown template: %s", tmplName)
+		return nil, "", fmt.Errorf("unknown template: %s", util.Sanitize(tmplName))
 	}
 
 	sp, ok := h.(SchemaProvider)

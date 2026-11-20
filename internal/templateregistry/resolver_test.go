@@ -451,11 +451,129 @@ func TestLookupPath_NotFound(t *testing.T) {
 	}
 }
 
+// TestLookupPath_RejectsSymlinkedRegistry closes the symlink gap: neither an
+// outward- nor an inward-pointing registry symlink is an eligible registry.
+func TestLookupPath_RejectsSymlinkedRegistry(t *testing.T) {
+	base := t.TempDir()
+	cacheDir := filepath.Join(base, "cache")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(filepath.Join(outside, "tmpl"), 0o750); err != nil {
+		t.Fatalf("mkdir outside: %v", err)
+	}
+	writeTestFile(t, filepath.Join(outside, "tmpl", "main.tpl"), "secret")
+
+	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
+		t.Fatalf("mkdir cache: %v", err)
+	}
+	link := filepath.Join(cacheDir, "acme")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if got := LookupPath(cacheDir, "acme", "tmpl/main.tpl"); got != "" {
+		t.Errorf("LookupPath followed a registry symlink outside the cache: %q", got)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("remove symlink: %v", err)
+	}
+
+	// An inward-pointing registry symlink is still not an eligible registry
+	// directory: ResolveCacheEntry enumerates real directories only.
+	registryDir := filepath.Join(cacheDir, "acme")
+	if err := os.MkdirAll(registryDir, 0o750); err != nil {
+		t.Fatalf("mkdir registry: %v", err)
+	}
+	writeTestFile(t, filepath.Join(registryDir, "ok.tpl"), "content")
+	if err := os.Symlink(registryDir, filepath.Join(cacheDir, "beta")); err != nil {
+		t.Fatalf("symlink registry: %v", err)
+	}
+	if got := LookupPath(cacheDir, "beta", "ok.tpl"); got != "" {
+		t.Errorf("LookupPath followed an inward registry symlink: %q", got)
+	}
+}
+
+// TestLookupPath_RejectsDirectoryCandidate keeps the file-type contract
+// independent of symlink support.
+func TestLookupPath_RejectsDirectoryCandidate(t *testing.T) {
+	cacheDir := t.TempDir()
+	dir := filepath.Join(cacheDir, "acme", "templates")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("mkdir registry: %v", err)
+	}
+	if got := LookupPath(cacheDir, "acme", "templates"); got != "" {
+		t.Errorf("LookupPath returned a directory as a template file: %q", got)
+	}
+}
+
+// TestResolveCacheEntryRejectsDirectoryCandidate pins the same file-type
+// contract on the production resolver.
+func TestResolveCacheEntryRejectsDirectoryCandidate(t *testing.T) {
+	cacheDir := t.TempDir()
+	tplDir := filepath.Join(cacheDir, "acme", "tmpl")
+	if err := os.MkdirAll(filepath.Join(tplDir, "nested"), 0o750); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	// A valid manifest and a regular sibling are required to reach candidate
+	// resolution; otherwise the resolver returns before the file-type check.
+	writeTestFile(t, filepath.Join(tplDir, "ok.tpl"), "content")
+	writeValidManifest(t, tplDir, "tmpl")
+
+	if got, reg := ResolveCacheEntry(cacheDir, "tmpl", "nested", []string{"acme"}); got != "" || reg != "" {
+		t.Errorf("ResolveCacheEntry returned a directory: (%q, %q)", got, reg)
+	}
+}
+
 func TestLookupPath_EmptyArgs(t *testing.T) {
 	if result := LookupPath("", "reg", "file"); result != "" {
 		t.Errorf("expected empty for empty cacheDir, got %q", result)
 	}
 	if result := LookupPath("/cache", "", "file"); result != "" {
 		t.Errorf("expected empty for empty registryName, got %q", result)
+	}
+}
+
+// TestLookupPath_RejectsEscapingPaths is a regression test for #262: LookupPath
+// must confine tplPath to <cacheDir>/<registryName> and reject absolute inputs.
+// Before the fix it joined ../ segments and returned paths outside the cache.
+func TestLookupPath_RejectsEscapingPaths(t *testing.T) {
+	base := t.TempDir()
+	cacheDir := filepath.Join(base, "cache")
+	registryDir := filepath.Join(cacheDir, "acme")
+
+	// Files planted outside the registry directory, both inside and outside the
+	// cache root, must never be returned.
+	writeTestFile(t, filepath.Join(cacheDir, "outside-registry.tpl"), "secret")
+	writeTestFile(t, filepath.Join(base, "outside-cache.tpl"), "secret")
+
+	nested := filepath.Join(registryDir, "templates", "main.go.tpl")
+	writeTestFile(t, nested, "content")
+
+	tests := []struct {
+		name         string
+		registryName string
+		tplPath      string
+		want         string
+	}{
+		{name: "parent segment", registryName: "acme", tplPath: ".."},
+		{name: "escape to cache root", registryName: "acme", tplPath: "../outside-registry.tpl"},
+		{name: "escape out of cache", registryName: "acme", tplPath: "../../outside-cache.tpl"},
+		{name: "escape after cleaning", registryName: "acme", tplPath: "templates/../../outside-registry.tpl"},
+		// Absolute inputs already failed on the baseline because filepath.Join
+		// appends the later absolute element as nested components after cleaning
+		// (it does not reset to the absolute path); these rows pin the explicit
+		// filepath.IsAbs contract rather than a pre-fix escape.
+		{name: "absolute path", registryName: "acme", tplPath: filepath.Join(base, "outside-cache.tpl")},
+		{name: "absolute root path", registryName: "acme", tplPath: "/etc/passwd"},
+		{name: "current directory", registryName: "acme", tplPath: "."},
+		{name: "escape via registry name", registryName: "..", tplPath: "outside-cache.tpl"},
+		{name: "valid nested path", registryName: "acme", tplPath: "templates/main.go.tpl", want: nested},
+		{name: "valid nested dot path", registryName: "acme", tplPath: "templates/./main.go.tpl", want: nested},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LookupPath(cacheDir, tt.registryName, tt.tplPath)
+			if got != tt.want {
+				t.Errorf("LookupPath(%q, %q, %q) = %q, want %q", cacheDir, tt.registryName, tt.tplPath, got, tt.want)
+			}
+		})
 	}
 }

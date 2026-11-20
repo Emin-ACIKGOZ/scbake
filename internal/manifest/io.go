@@ -298,7 +298,15 @@ func checkManifestConflict(manifestPath string) error {
 // Save atomically writes the manifest to scbake.toml in the specified root path.
 // It writes to a temporary file first, syncs, then renames to ensure data integrity.
 // Implements optimistic locking: detects if file was modified by another process.
-func Save(m *types.Manifest, rootPath string) (err error) {
+func Save(m *types.Manifest, rootPath string) error {
+	if err := validateManifestUTF8(m); err != nil {
+		return fmt.Errorf("refusing to save manifest: %w", err)
+	}
+	return saveManifest(m, rootPath)
+}
+
+// saveManifest performs the atomic write after the manifest has been validated.
+func saveManifest(m *types.Manifest, rootPath string) (err error) {
 	finalPath, err := fileutil.SafePath(rootPath, fileutil.ManifestFileName)
 	if err != nil {
 		return fmt.Errorf("invalid manifest path: %w", err)

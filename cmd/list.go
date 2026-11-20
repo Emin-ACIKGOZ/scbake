@@ -42,7 +42,7 @@ or the projects currently managed in this repository's ` + fileutil.ManifestFile
 				AllowAncestorSearch: allowAncestorSearch,
 			})
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error loading %s: %v\n", fileutil.ManifestFileName, err)
+				fmt.Fprintf(os.Stderr, "Error loading %s: %v\n", fileutil.ManifestFileName, util.SanitizeError(err))
 				os.Exit(fileutil.ExitError)
 			}
 			manifestPath := filepath.Join(rootPath, fileutil.ManifestFileName)
@@ -69,8 +69,8 @@ or the projects currently managed in this repository's ` + fileutil.ManifestFile
 			}
 
 		default:
-			fmt.Fprintf(os.Stderr, "Error: Unknown resource type '%s'.\n", args[0])
-			fmt.Println("Must be one of: langs, templates, projects")
+			fmt.Fprintf(os.Stderr, "Error: Unknown resource type '%s'.\n", util.Sanitize(args[0]))
+			fmt.Fprintln(os.Stderr, "Must be one of: langs, templates, projects")
 			os.Exit(fileutil.ExitError)
 		}
 	},
